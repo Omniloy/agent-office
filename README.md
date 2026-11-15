@@ -18,7 +18,7 @@ answers to the questions they ask you.
   (infrastructure). They plan, build, review and verify work through cards, with strict guardrails: no merge,
   deploy or production change without you.
 - **A Business floor** (port 4318): Irene (coordinator, triages your inbox), Pablo (clients), Elena (partners and
-  proposals). They prepare drafts in your voice and never send anything.
+  proposals). Irene runs an email round on a schedule (every 2 hours by default); they prepare drafts in your voice and never send anything.
 - **Zeus**, a superadmin agent above the building who changes the office system itself when you ask: new floors,
   new people, how things look and work.
 - **Chat with every agent**, with markdown, tables, links to PRs and tickets, image attachments and dictation.

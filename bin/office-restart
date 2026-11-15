@@ -27,7 +27,10 @@ def restart(port):
     env = {**os.environ, 'PORT': port}
     if tok: env['OFFICE_TOKEN'] = tok
     if team: env['TEAM_DIR'] = team
-    subprocess.Popen([node(), os.path.join(cwd, 'server.mjs')], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    logdir = H('~/.omniloy-team/logs'); os.makedirs(logdir, exist_ok=True)
+    log = open(os.path.join(logdir, f'office-{port}.log'), 'ab')  # why a floor died: its last errors are here
+    log.write(f'\n--- started {time.strftime("%Y-%m-%d %H:%M:%S")}\n'.encode()); log.flush()
+    subprocess.Popen([node(), os.path.join(cwd, 'server.mjs')], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, start_new_session=True)
     for i in range(60):
         time.sleep(0.5)
         if up(port): print(f'{name} ({port}): back after {(i + 1) / 2:.1f}s'); return True

@@ -15,7 +15,7 @@
       "runtime": "claude",
       "herdrName": "irene",
       "tabName": "Irene · Coordinator",
-      "kickoff": "Start your shift: read ~/.omniloy-biz/PROTOCOL.md, team.json and your memory file. Then set up your recurring email round with the loop skill: /loop 2h run the email-triaje skill on __OWNER__'s inbox following your role file, then check team-ask ls --to irene. Do the first round now. Never send email: drafts only."
+      "kickoff": "Start your shift: read ~/.omniloy-biz/PROTOCOL.md, team.json and your memory file. Do the first email round now with the email-triaje skill on __OWNER__'s inbox following your role file, then check team-ask ls --to irene. Later rounds: you are told when each one is due (`team-mail-round --status` shows the schedule); do not set up your own timer. Never send email: drafts only."
     },
     {
       "slug": "pablo-clients",

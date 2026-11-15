@@ -101,6 +101,7 @@ class Run:
                 if c.get("jira") and c["jira"].get("site"): t["jira"] = {"keychainService": "herdr-jira", **c["jira"]}
                 if kind == "dev" and c.get("projects"): t["projects"] = c["projects"]
                 if kind == "biz": t["gmailAccount"] = c.get("gmailAccount") or ""
+                if kind == "biz" and c.get("mailRound"): t["mailRound"] = c["mailRound"]
                 for p in t["personas"]:
                     want = (c.get("assign") or {}).get(p["herdrName"]) or ("claude" if "claude" in have else have[0])
                     p["runtime"] = want if want in have else have[0]
@@ -153,8 +154,10 @@ class Run:
                     f'<key>EnvironmentVariables</key><dict><key>PATH</key><string>{path}</string></dict>\n</dict></plist>\n')
         jobs = [("com.omniloy.artifacts", [nd, f"{APPS}/artifacts/server.mjs"], f"{APPS}/artifacts", f"{TEAMS['dev']}/artifacts/.server.log", True),
                 ("com.omniloy.offices", ["/usr/bin/python3", f"{BIN}/office-restart", "all"], HOME, f"{APPS}/offices-start.log", False)]
+        if self.cfg.get("mailRound"): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{TEAMS['biz']}/mail-round.log", False))
         for label, args, cwd, log, keep in jobs:
             f = f"{LA}/{label}.plist"; body = plist(label, args, cwd, log, keep)
+            if label == "com.omniloy.mail-round": body = body.replace("<key>RunAtLoad</key><true/>", "<key>RunAtLoad</key><true/><key>StartInterval</key><integer>600</integer>")
             if not self.dry:
                 os.makedirs(LA, exist_ok=True); os.makedirs(os.path.dirname(log), exist_ok=True)
                 open(f, "w").write(body)
@@ -193,6 +196,7 @@ def check():
     line(up(4340, "/"), "artifacts server answers on 4340")
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
+    opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
     opt(os.path.exists(f"{TEAMS['dev']}/remote.json"), "phone door remote.json (optional)")
     try:
         t = json.load(open(f"{TEAMS['dev']}/team.json")); j = t.get("jira") or {}

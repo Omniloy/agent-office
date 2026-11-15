@@ -8,11 +8,14 @@ sentences, and only about what they need to decide or do.
 
 1. **Ask, do not assume.** Every item marked **ASK** is the user's decision. Ask the open ones together, early, so
    they are not interrupted ten times. Recommend an option when you have a reason.
-2. **Say before you install.** Before installing a program (Homebrew, Node, Herdr, an agent CLI, Tailscale, voice
-   models), say what it is and wait for a yes. Downloads over 1 GB (voice) always get their own question.
-3. **Secrets are the user's hands only.** Tokens and passwords are typed by the user in their own terminal (in
-   Claude Code they can type `! <command>` in the prompt). You never ask them to paste a secret in the chat, and
-   you never print, log or write one to a file.
+2. **Do the work yourself.** The user asked you to set this up: install the programs it needs (Node, Herdr, the
+   agent CLIs, Tailscale) and run the sign-in commands yourself, saying in one line what you are installing as you
+   go. Hand something to the user only when you cannot do it: a command that needs their Mac password, a sign-in
+   that needs their browser or a code on their phone, or a secret. Then give them the exact command to paste in
+   their terminal (in Claude Code they can type `! <command>` in the prompt) and continue when they say it is done.
+   Downloads over 1 GB (voice) still get a question first.
+3. **Secrets are the user's hands only.** Tokens and passwords are typed by the user in their own terminal. You
+   never ask them to paste a secret in the chat, and you never print, log or write one to a file.
 4. **Do not start the team's agents without a go-ahead.** Each person on a floor is an agent session that spends
    the user's subscription.
 5. **Verify each step** with the command given, and tell the user what you verified and what you could not.
@@ -47,7 +50,7 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 | 2 | Which agent CLI the team runs on: Claude Code, Codex, or both | Offer only what makes sense from step 1. See "Claude Code, Codex or both" below. |
 | 3 | Which floors they want people on from day one: Dev, Business, or both | Both floors are always installed; this only decides who you start in step 8. |
 | 4 | Do they use Jira for the dev work? | If yes: site URL, their Atlassian email, and for each project a name, the Jira project key and the GitHub repos (`org/repo`). If no: cards live locally and Jira steps are skipped. |
-| 5 | Business floor: which Gmail account should it triage? | Only if they want the Business floor now. It needs the Gmail connector in their agent CLI. Skip otherwise. |
+| 5 | Business floor: which Gmail account should it triage, and how often? | Only if they want the Business floor now. It needs the Gmail connector in their agent CLI. Default rounds: every 2 hours, 08:00 to 20:00, Monday to Friday. Goes in `gmailAccount` and `mailRound` in the config. No rounds wanted: leave `mailRound` out. |
 | 6 | Do they want the office on their phone? | Needs Tailscale (free for personal use; a company network needs an invite from its admin). |
 | 7 | Do they want to talk to the office by voice? | Local transcription. On Apple Silicon with 16 GB it downloads about 2 GB. |
 | 8 | Is there another computer (a server, a second Mac) whose terminals they want inside Herdr? | Needs ssh access to it already working. |
@@ -55,29 +58,33 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 ### Claude Code, Codex or both
 
 - **Only Claude Code installed or wanted**: everyone runs on `claude`.
-- **Only Codex**: everyone runs on `codex`. Tell the user two differences: the office chat shows a Codex agent's
-  screen text instead of its message log, and the built-in recurring-task skill used by Irene (`/loop`) is a
-  Claude Code feature, so with Codex they nudge Irene themselves for each email round.
+- **Only Codex**: everyone runs on `codex`. Tell the user one difference: the office chat shows a Codex agent's
+  screen text instead of its message log. Email rounds work the same on both (step 8).
 - **Both**: recommend Claude Code for Lucía, Daniel, Marta, Irene, Pablo, Elena and Zeus, and Codex for Kenji, then
   ask if they want a different split. Put the exceptions in `assign` in the config.
 - **Neither installed**: ask which they have a subscription for, and install it in step 3.
 - If the user has the Claude in Chrome extension, after the install add `"--chrome"` right after `"claude"` in
   `runtimes.claude.argv` of each `team.json`: Marta verifies in the browser with it.
 
-## Step 3. Install what is missing (each with a yes from the user)
+## Step 3. Install what is missing
 
-Do them in this order and verify each.
+Install these yourself, in this order, and verify each. Only stop for the user where a line says so.
 
 1. **Homebrew** (only if you need it for Node or Tailscale and it is missing): the official command from
-   https://brew.sh. It asks for the Mac password: the user runs it themselves.
+   https://brew.sh. It asks for the Mac password, which you cannot type: give the user the command to paste.
+   If they would rather not install Homebrew, install Node from the official installer package or with nvm instead.
 2. **Node 20 or newer**: `brew install node`. Verify: `node --version`.
 3. **Herdr**: `curl -fsSL https://releases.herdr.dev/app/install.sh | sh`, then open it once (`open -a Herdr`) so
    it writes `~/.config/herdr-app` and installs its core. Verify: `hc ls` answers (if `hc` is not found, the
    installer in step 4 links it; rerun this check after).
 4. **Agent CLI(s)** chosen in ASK 2, if missing. Use the vendor's current official instructions; at the time of
    writing: Claude Code `curl -fsSL https://claude.ai/install.sh | bash`, Codex `npm install -g @openai/codex`.
-   **Signing in is the user's job**: they run `claude` (then `/login`) or `codex login` in their own terminal.
-   Verify: `claude --version` / `codex --version`, and ask the user to confirm they are signed in.
+   **Sign in**: check first whether it is already signed in (`claude auth status` or a quick
+   `claude -p "say ok"`; `codex login status`). If not, start the sign-in yourself (`claude auth login`,
+   `codex login`): it opens the browser and the user only has to approve there. If your environment cannot open
+   a browser or the command needs an interactive screen you do not have, give the user the one command to paste
+   in their terminal. The same goes for `gh auth login` if the dev floor will work with GitHub and `gh auth status`
+   says it is not signed in. Verify each sign-in with its status command before moving on.
 5. Make sure `~/.local/bin` is on PATH for new shells: if `echo $PATH` lacks it, add
    `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (tell the user you did).
 
@@ -140,9 +147,22 @@ Verify: `omniloy-team ls` shows them running, Herdr shows the new spaces, and th
 within a few seconds. Each agent reads its protocol and reports a short status; nobody changes code or tickets
 until the user gives a task.
 
-**Business floor needs connectors.** Before starting it, check with the user that their agent CLI has Gmail
-connected (and optionally Calendar and Slack). Without Gmail there is nothing to triage: say so and leave the
-floor installed but not started. Drafting in the user's voice needs a voice profile built from their sent mail
+**Business floor needs connectors.** Before starting it, check that the agent CLI has Gmail connected (and
+optionally Calendar and Slack): for Claude Code, `claude mcp list` or the connectors the user enabled in their
+Claude account. If Gmail is missing, connect it if you can, otherwise tell the user where to enable it. Without
+Gmail there is nothing to triage: say so and leave the floor installed but not started.
+
+**Email rounds.** With `mailRound` in the config, the installer added a background job (`com.omniloy.mail-round`)
+that tells Irene when a round is due: every N hours, inside the working hours, only while she is running and not
+in the middle of something. It works the same on Claude Code and Codex. After starting the Business floor:
+
+    team-mail-round --status      # the schedule and when the next round is due
+    team-mail-round --now         # optional: ask for a round right now to see it work
+
+Irene does the first round herself when she starts. Each round triages unread mail, marks as read only what needs
+nothing from the user, and leaves drafts for what needs an answer; it never sends. Tell the user where the results
+appear: "For you" in the office for questions, and the Drafts panel for prepared answers. To change the schedule
+later, edit `mailRound` in `~/.omniloy-biz/team.json` (no restart needed); remove it to stop the rounds. Drafting in the user's voice needs a voice profile built from their sent mail
 (the `email-voice-profile` skill): Irene asks for that consent herself. `~/.omniloy-biz/signature.json` holds the
 signature the drafts end with: fill name, title and links with the user.
 
