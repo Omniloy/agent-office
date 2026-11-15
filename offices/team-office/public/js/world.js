@@ -842,6 +842,25 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     }
   }
 
+  // Name tags never sit on top of each other: the ones behind move up.
+  let tidyN = 0;
+  function tidyLabels() {
+    if (++tidyN % 3) return;
+    const placed = [];
+    const tags = [];
+    for (const el of labelsEl.querySelectorAll('.tag')) {
+      const chip = el.querySelector('.chip'); if (!chip) continue;
+      const r = chip.getBoundingClientRect(); if (!r.width) continue;
+      const off = el._dy || 0; tags.push({ el, l: r.left, r: r.right, t: r.top - off, b: r.bottom - off });
+    }
+    tags.sort((a, b) => b.b - a.b || a.l - b.l); // the ones lowest on the screen keep their place; the ones behind move up
+    for (const g of tags) {
+      let dy = 0;
+      for (let k = 0; k < 8; k++) { const hit = placed.find((p) => g.l < p.r - 2 && g.r > p.l + 2 && g.t + dy < p.b + 3 && g.b + dy > p.t - 3); if (!hit) break; dy = hit.t - 3 - g.b; }
+      placed.push({ l: g.l, r: g.r, t: g.t + dy, b: g.b + dy });
+      if (Math.abs(dy - (g.el._dy || 0)) > 1.5) { g.el._dy = dy; g.el.style.translate = dy ? `0 ${Math.round(dy)}px` : ''; }
+    }
+  }
   function showBubble(st, text, ms, who, cls) {
     st.bubble.className = `bubble show ${cls || ''}`;
     st.bubble.innerHTML = (who ? `<small>${escText(who)}</small>` : '') + fmt(text.length > 220 ? `${text.slice(0, 218)}…` : text);
@@ -849,33 +868,40 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     st.bubbleTimer = setTimeout(() => { st.bubble.className = 'bubble'; }, ms);
   }
 
+  // Where talker number `n` stands to speak to `to`, right now: in front of their desk while they sit at it,
+  // around them anywhere else (the board, the whiteboard, someone else's desk, on their way somewhere).
+  const DESK_ROW = [0, -0.9, 0.9, -1.8, 1.8], RING = [[0.95, 0], [-0.95, 0], [0.7, 0.65], [-0.7, 0.65], [0, 1.1], [1.8, 0.1], [-1.8, 0.1], [1.5, 0.9], [-1.5, 0.9]];
+  const seatedAt = (to) => { const p = to.ch.root.position; return Math.abs(p.z - (SEAT_Z + (to.z || 0))) < 0.5 && Math.abs(p.x - to.x) < 0.5; };
+  function talkSpot(to, n) {
+    if (seatedAt(to)) return new THREE.Vector3(to.x + DESK_ROW[n % 5], 0, AISLE_Z + (to.z || 0) - 0.35 + (n >= 5 ? 0.8 : 0));
+    const p = to.ch.root.position, o = RING[n % RING.length];
+    return new THREE.Vector3(Math.max(LEFT_X + 0.9, p.x + o[0]), 0, p.z + o[1]);
+  }
   function startConversation(from, to, text) {
     const dur = Math.min(11, Math.max(5, 3 + text.length * 0.045));
     const toName = to.agent.name.split(' ')[0];
     linkDesks(from, to, dur + 5);
-    const beside = from.row < to.row, dest = beside ? to.row - 1 : to.row;
-    const spot = beside ? V(to.x + plan.side, SEAT_Z + to.z + 0.25) : V(to.x, zA(to.row) - 0.35);
-    // Go to where they are, or are heading: their desk, the board or the whiteboard. They stay there until it is said.
-    const last = [...to.steps].reverse().find((s) => s.type === 'arrive'), at = last ? last.at : to.at, away = at !== 'desk';
-    const now = performance.now() / 1000;
-    to.holdUntil = now + 45;
-    if (to.steps.length) { to.steps = to.steps.filter((s) => s.pose !== 'coffee'); to.hurry = true; }
-    const ps = away ? placeSpot(to, at) : null, py = away ? placeYaw(at) : 0;
-    const near = away ? new THREE.Vector3(ps.x - Math.sin(py) * 0.95, 0, ps.z - Math.cos(py) * 0.95) : null; // one step behind them
-    const ready = { type: 'wait', dur: 20, pose: '', yaw: away ? py : null, until: () => !to.steps.length }; // they may still be on their way back
-    const say = (yaw) => ({ type: 'wait', dur, pose: 'talk', yaw,
-      onStart: () => { showBubble(from, text, dur * 1000, `to ${toName}`); to.listenUntil = performance.now() / 1000 + dur; from.talkingUntil = to.talkingUntil = performance.now() / 1000 + dur; },
-      onEnd: () => { to.holdUntil = 0; } });
-    const yaw = beside ? -Math.PI / 2 : Math.PI;
-    ready.yaw = away ? py : yaw;
-    from.steps = away
-      ? [...leave(from, placeAisle(at)), walk(near), ready, say(py), ...homeSteps(from, nearAisle(near.z), near.x)]
-      : [...leave(from, dest), ...(beside ? [walk(V(spot.x, zA(dest)))] : []), walk(spot), ready, say(yaw), ...homeSteps(from, dest, spot.x)];
+    // Nobody waits for anybody: you walk to wherever they are and say it. Each talker takes a free place in the
+    // group around them, so several messages arriving at once show as a crowd instead of one pile.
+    const t0 = performance.now() / 1000;
+    to.crowd = to.crowd || new Map();
+    for (const [f, c] of to.crowd) if (f.talkTo !== to || !f.steps.length || c.until < t0) to.crowd.delete(f);
+    const used = new Set([...to.crowd.values()].map((c) => c.n)); let n = 0; while (used.has(n)) n++;
+    to.crowd.set(from, { n, until: t0 + 90 }); from.talkTo = to;
+    const spot = () => talkSpot(to, n);
+    const face = () => { const a = from.ch.root.position, b = to.ch.root.position; return Math.atan2(b.x - a.x, b.z - a.z); };
+    const route = (p, g) => { const a = nearAisle(p.z), b = nearAisle(g.z); return a !== b ? [walk(V(p.x, zA(a))), ...cross(p.x, a, b)] : null; };
+    const out = leave(from, nearAisle(spot().z));
+    const say = { type: 'wait', dur, pose: 'talk', yaw: face,
+      onStart: () => { const t = performance.now() / 1000; showBubble(from, text, dur * 1000, `to ${toName}`); to.listenUntil = t + dur; from.talkingUntil = to.talkingUntil = t + dur; to.holdUntil = Math.max(to.holdUntil || 0, t + dur); },
+      onEnd: () => { if (from.talkTo === to) from.talkTo = null; to.crowd.delete(from); } };
+    from.steps = [...out, { type: 'chase', to: spot, who: to, max: 30, tries: 0, route }, say, { type: 'plan', make: () => homeSteps(from) }];
   }
 
   function tickCharacter(st, dt, t) {
     const ch = st.ch, root = ch.root;
     ch.body.visible = st.online;
+    if (st.trip) { if (!st.online) endTrip(st); else if (st.trip.hold) { ch.body.visible = !st.trip.gone; return; } } // teleported to another room (travel)
     if (!st.online) { st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; root.position.copy(seatOf(st)); root.rotation.y = 0; return; }
     const needs = st.status === 'blocked' || st.askReq > 0;
     // Where the work happens. A new kind has to hold for a few seconds, and nobody moves more than once every 20s.
@@ -896,7 +922,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     }
     if (st.status !== 'idle' && st.steps.some((s) => s.pose === 'coffee')) { st.steps = st.steps.filter((s) => s.pose !== 'coffee'); st.hurry = true; }
 
-    while (st.steps[0] && st.steps[0].type === 'arrive') st.at = st.steps.shift().at;
+    for (let k = 0; k < 4 && st.steps[0] && (st.steps[0].type === 'arrive' || st.steps[0].type === 'plan'); k++) { const s0 = st.steps.shift(); if (s0.type === 'arrive') st.at = s0.at; else st.steps.unshift(...s0.make()); } // 'plan': a route worked out when its turn comes
     const step = st.steps[0];
     let yawTarget = 0;
     if (!step) {
@@ -910,8 +936,19 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       yawTarget = Math.atan2(d.x, d.z);
       if (dist <= sp) { root.position.copy(step.to); st.steps.shift(); } else root.position.addScaledVector(d.normalize(), sp);
       st.phase += dt * (st.hurry ? 21 : 15);
+    } else if (step.type === 'chase') { // after someone who may be moving: the place to stand is worked out again every frame
+      st.mode = 'walk';
+      const goal = step.to(), d = goal.clone().sub(root.position), dist = d.length(), sp = 8.5 * dt;
+      const more = step.route && step.tries < 3 && dist > 2.4 ? step.route(root.position, goal) : null;
+      if (more) { step.tries++; st.steps.unshift(...more); yawTarget = root.rotation.y; }
+      else {
+        if (dist < 5 && step.who) step.who.holdUntil = Math.max(step.who.holdUntil || 0, t + 1.5); // they do not wander off as you reach them
+        yawTarget = dist > 0.01 ? Math.atan2(d.x, d.z) : root.rotation.y; step.max -= dt;
+        if (dist <= sp || step.max <= 0) { if (dist <= sp) root.position.copy(goal); st.steps.shift(); } else root.position.addScaledVector(d.normalize(), sp);
+        st.phase += dt * 21;
+      }
     } else {
-      st.mode = 'stand'; st.pose = step.pose; yawTarget = step.yaw;
+      st.mode = 'stand'; st.pose = step.pose; yawTarget = typeof step.yaw === 'function' ? step.yaw() : step.yaw;
       if (!step.started) { step.started = true; step.onStart && step.onStart(); }
       step.dur -= dt;
       if (step.until && step.until()) step.dur = 0;
@@ -1204,6 +1241,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       }
     }
     tickLinks(dt);
+    tickTravel(dt, t);
     robot.position.x += Math.sin(robotDir) * dt * 0.9; robot.position.z += Math.cos(robotDir) * dt * 0.9;
     const rz = Math.min(5, zA(lastAisle()) + 1.5);
     if (robot.position.x < -5.5 || robot.position.x > 7 || robot.position.z < rz || robot.position.z > 7.2) {
@@ -1225,6 +1263,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     controls.update();
     renderer.render(scene, camera);
     labels.render(scene, camera);
+    tidyLabels();
   };
   renderer.setAnimationLoop(frame);
 
@@ -1232,6 +1271,259 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   const byName = (name) => [...stations.values()].find((s) => s.agent.herdrName === name);
   let boardHash = '', needsMap = {};
   const applyNeeds = (st) => { const n = needsMap[st.agent.herdrName] || {}; st.askReq = n.req || 0; st.askNote = n.note || 0; st.askDraft = n.draft || 0; };
+  // ---------------------------------------------------------------- travel: teleporting to and from other rooms
+  // teleportOut: someone here goes to see a person on another floor or in another building, and a sign over
+  // their desk says where they are. visitor: someone from elsewhere beams in beside the person they came to see.
+  // (travel.js polls /api/visits and calls these.) This block is the same in both offices.
+  const trips = [], visitors = new Map(), fxs = [], FX_DUR = 1.7, FX_GONE = 0.6, BEAM = 0x38d6ff;
+  let kit = null; // textures and geometries shared by every effect: made on first use, kept for the life of the page
+  function travelKit() {
+    if (kit) return kit;
+    const css = document.createElement('style');
+    css.textContent = `
+.holo { position: relative; overflow: hidden; max-width: 230px; padding: 5px 12px 6px; border-radius: 9px; text-align: center; pointer-events: none;
+  font: 600 12px/1.25 system-ui, sans-serif; color: #e2fbff; text-shadow: 0 0 8px rgba(56, 214, 255, .8);
+  background: linear-gradient(180deg, rgba(6, 38, 58, .8), rgba(10, 24, 50, .72)); border: 1px solid rgba(94, 234, 255, .75);
+  box-shadow: 0 0 16px rgba(56, 214, 255, .5), inset 0 0 12px rgba(56, 214, 255, .22); animation: holo-in .45s ease-out, holo-pulse 2.6s ease-in-out .45s infinite; }
+.holo small { display: block; font-size: 9px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: #7de8ff; }
+.holo b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.holo::before { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, rgba(125, 232, 255, .13) 0 1px, transparent 1px 3px); }
+.holo::after { content: ''; position: absolute; left: 0; right: 0; top: -40%; height: 40%; background: linear-gradient(180deg, transparent, rgba(160, 240, 255, .38), transparent); animation: holo-scan 2.6s linear infinite; }
+@keyframes holo-in { from { opacity: 0; transform: scaleY(.1); } }
+@keyframes holo-pulse { 50% { opacity: .8; box-shadow: 0 0 26px rgba(56, 214, 255, .75), inset 0 0 14px rgba(56, 214, 255, .3); } }
+@keyframes holo-scan { to { top: 110%; } }
+.tag.visitor .chip { border: 1px dashed rgba(94, 234, 255, .85); box-shadow: 0 0 12px rgba(56, 214, 255, .45); }
+.tag.visitor .vfrom { margin-top: -2px; padding: 1px 8px; border-radius: 99px; background: rgba(8, 30, 50, .78); color: #a5f0ff; font-size: 10px; font-weight: 600; letter-spacing: .03em; white-space: nowrap; }
+html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
+@media (prefers-reduced-motion: reduce) { .holo, .holo::after { animation: none; } }`;
+    document.head.appendChild(css);
+    const col = surface(8, 128), g = col.ctx; // the light column: solid at the floor, fading out towards the top, with faint bands
+    for (let y = 0; y < 128; y++) { const a = Math.pow(y / 127, 1.35) * (y % 9 < 2 ? 1 : 0.72); g.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`; g.fillRect(0, y, 8, 1); }
+    const dot = surface(64, 64), gr = dot.ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.35, 'rgba(255,255,255,.7)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    dot.ctx.fillStyle = gr; dot.ctx.fillRect(0, 0, 64, 64);
+    kit = {
+      colTex: col.tex, dotTex: dot.tex,
+      col: new THREE.CylinderGeometry(0.62, 0.62, 3.6, 28, 1, true).translate(0, 1.8, 0),
+      ring: new THREE.TorusGeometry(1, 0.035, 8, 56).rotateX(Math.PI / 2),
+      disc: new THREE.CircleGeometry(1, 32).rotateX(-Math.PI / 2),
+    };
+    return kit;
+  }
+  const glowMat = (color, o) => new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, depthWrite: false, toneMapped: false, ...o });
+
+  // One transporter effect at a point on the floor. dir 'out' takes `body` away, 'in' brings it: the same timeline run
+  // backwards. onFlip fires at the instant the body goes (or shows up), onDone when the last light has faded.
+  function teleportFx(pos, color, dir, body, onFlip, onDone) {
+    const k = travelKit(), N = 40, group = new THREE.Group();
+    const mats = [glowMat(BEAM, { map: k.colTex, side: THREE.DoubleSide }), glowMat(0xd6f8ff, { map: k.colTex, side: THREE.DoubleSide }),
+      glowMat(color), glowMat(BEAM), glowMat(BEAM), glowMat(BEAM, { map: k.dotTex })];
+    const column = new THREE.Mesh(k.col, mats[0]), core = new THREE.Mesh(k.col, mats[1]), floor = new THREE.Mesh(k.ring, mats[2]);
+    const up = [new THREE.Mesh(k.ring, mats[3]), new THREE.Mesh(k.ring, mats[4])], disc = new THREE.Mesh(k.disc, mats[5]);
+    floor.position.y = 0.05; disc.position.y = 0.035; disc.scale.setScalar(1.7);
+    up[0].scale.setScalar(0.66); up[1].scale.setScalar(0.66);
+    const geo = new THREE.BufferGeometry(), arr = new Float32Array(N * 3), seed = new Float32Array(N * 4);
+    for (let i = 0; i < N; i++) { seed[i * 4] = Math.random() * 6.283; seed[i * 4 + 1] = 0.12 + Math.random() * 0.5; seed[i * 4 + 2] = 0.55 + Math.random() * 0.7; seed[i * 4 + 3] = Math.random(); }
+    geo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    const pm = new THREE.PointsMaterial({ color: 0x8ff0ff, map: k.dotTex, size: 0.26, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+    const points = new THREE.Points(geo, pm); points.frustumCulled = false;
+    const fm = new THREE.SpriteMaterial({ color: 0xe6fbff, map: k.dotTex, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+    const flash = new THREE.Sprite(fm); flash.position.y = 1.15;
+    group.add(disc, floor, column, core, up[0], up[1], points, flash);
+    group.position.set(pos.x, 0, pos.z);
+    scene.add(group);
+    const fx = { group, mats, pm, fm, geo, arr, seed, N, column, core, floor, up, flash, points, dir, body, onFlip, onDone, age: 0, flipped: false };
+    fxs.push(fx);
+    return fx;
+  }
+  function tickFx(dt) {
+    for (let i = fxs.length - 1; i >= 0; i--) {
+      const f = fxs[i]; f.age += dt;
+      const u = Math.min(1, f.age / FX_DUR), w = f.dir === 'out' ? u : 1 - u, G = FX_GONE, a = f.age;
+      const env = Math.min(smooth(0, 0.16, w), 1 - smooth(0.8, 1, w)), thin = 1 - 0.9 * smooth(G, 1, w), bump = Math.max(0, 1 - Math.abs(w - G) / 0.14);
+      f.column.scale.set(thin, 1, thin); f.mats[0].opacity = env * 0.72;
+      const cs = thin * (0.3 + bump * 0.45); f.core.scale.set(cs, 1 + bump * 0.08, cs); f.mats[1].opacity = env * (0.7 + 0.25 * Math.sin(a * 34));
+      f.floor.scale.setScalar(w < G ? 2.4 - 1.8 * smooth(0, G, w) : 0.6 + 2.2 * smooth(G, 1, w));
+      f.mats[2].opacity = (w < G ? smooth(0, 0.12, w) : 1 - smooth(G, 1, w)) * 0.95;
+      f.floor.rotation.y = a * 2;
+      for (let j = 0; j < 2; j++) { const ph = (a * 1.15 + j * 0.5) % 1; f.up[j].position.y = 0.1 + ph * 2.9; f.mats[3 + j].opacity = env * 0.85 * (1 - ph) * thin; f.up[j].scale.setScalar(0.66 * thin); }
+      f.mats[5].opacity = env * 0.6;
+      f.flash.scale.setScalar(0.4 + bump * 3.2); f.fm.opacity = bump * bump * 0.95;
+      const arr = f.arr, sd = f.seed;
+      for (let j = 0; j < f.N; j++) {
+        const ph = (sd[j * 4 + 3] + a * sd[j * 4 + 2]) % 1, r = sd[j * 4 + 1] * (1 - ph * 0.55) * (0.35 + 0.65 * thin), an = sd[j * 4] + a * 2.4;
+        arr[j * 3] = Math.cos(an) * r; arr[j * 3 + 1] = ph * 3.3; arr[j * 3 + 2] = Math.sin(an) * r;
+      }
+      f.geo.attributes.position.needsUpdate = true; f.pm.opacity = env * 0.95;
+      if (f.body) { // stretched thin and lifted into the light
+        const kb = smooth(G - 0.32, G, w);
+        f.body.scale.set(1 - 0.9 * kb, 1 + 0.75 * kb, 1 - 0.9 * kb); f.body.position.y = kb * 0.45;
+      }
+      if (!f.flipped && u >= (f.dir === 'out' ? G : 1 - G)) { f.flipped = true; if (f.onFlip) try { f.onFlip(); } catch {} }
+      if (u >= 1) {
+        fxs.splice(i, 1); scene.remove(f.group);
+        for (const m of f.mats) m.dispose();
+        f.pm.dispose(); f.fm.dispose(); f.geo.dispose();
+        if (f.body) { f.body.scale.set(1, 1, 1); f.body.position.y = 0; }
+        if (f.onDone) try { f.onDone(); } catch {}
+      }
+    }
+  }
+
+  // ---- a person of this room, away
+  function tripSign(st, label) {
+    const tr = st.trip, text = String(label || 'Away').slice(0, 80);
+    if (!tr.sign) {
+      const el = document.createElement('div'); // CSS2DRenderer owns this element's transform; the look lives one level in
+      el.innerHTML = '<div class="holo"><small>teleported</small><b></b></div>';
+      tr.sign = new CSS2DObject(el); tr.sign.visible = false;
+      if (PHONE) { tr.sign.center.set(0.5, 0); tr.sign.position.set(0, 1.0, DESK_Z + 0.75); } // small screen: hang it under the desk edge, clear of their name
+      else { tr.sign.center.set(0.5, 1); tr.sign.position.set(0, 1.5, DESK_Z + 0.6); }
+      st.group.add(tr.sign);
+    }
+    tr.label = text; tr.sign.element.querySelector('b').textContent = text;
+  }
+  function endTrip(st) {
+    const tr = st.trip; if (!tr) return;
+    st.trip = null;
+    const i = trips.indexOf(st); if (i >= 0) trips.splice(i, 1);
+    if (tr.sign) { st.group.remove(tr.sign); tr.sign.element.remove(); }
+    if (tr.beam) { st.group.remove(tr.beam, tr.pad); tr.beam.material.dispose(); tr.pad.material.dispose(); }
+    st.ch.body.scale.set(1, 1, 1); st.ch.body.position.y = 0;
+    st.cur = {}; st.mode = 'seat'; st.hurry = false;
+  }
+  function tripLeave(st) {
+    const tr = st.trip;
+    tr.phase = 'out'; tr.hold = true;
+    teleportFx(st.ch.root.position, st.agent.color, 'out', st.ch.body, () => {
+      if (st.trip !== tr) return;
+      tr.gone = true; tr.phase = 'away';
+      // the tag moves to their chair and stays readable; whatever they were on the way to is dropped
+      st.steps = []; st.at = 'desk'; st.carry = false; st.hurry = false; st.mode = 'away';
+      st.ch.root.position.copy(seatOf(st)); st.ch.root.rotation.y = 0;
+      const c = st.ch; // sitting, hands down, for when they come back
+      c.hips.position.y = SEAT_Y; c.legL.rotation.x = c.legR.rotation.x = -1.5; c.armL.rotation.set(-0.4, 0, 0.1); c.armR.rotation.set(-0.4, 0, -0.1);
+      c.upper.rotation.x = 0; c.head.rotation.set(0, 0, 0); c.mug.visible = c.phone.visible = c.card.visible = false;
+      clearTimeout(st.bubbleTimer); st.bubble.className = 'bubble';
+      const k = travelKit();
+      tr.beam = new THREE.Mesh(k.col, glowMat(BEAM, { map: k.colTex, side: THREE.DoubleSide }));
+      tr.beam.scale.set(0.5, 0.62, 0.5); tr.beam.position.set(0, 0, SEAT_Z);
+      tr.pad = new THREE.Mesh(k.ring, glowMat(st.agent.color));
+      tr.pad.scale.setScalar(0.5); tr.pad.position.set(0, 0.05, SEAT_Z);
+      st.group.add(tr.beam, tr.pad);
+      tr.sign.visible = true;
+    });
+  }
+  function tripOut(st, o) {
+    if (!st || !st.online) return false;
+    const dur = Number(o.dur) > 0 ? Number(o.dur) : 12, now = performance.now() / 1000;
+    if (st.trip) { // already away, or on the way out or back: stay longer, say the new place
+      const tr = st.trip;
+      if (tr.phase === 'in') { tr.next = { label: o.label, dur }; return true; }
+      tr.until = now + dur + (tr.gone ? 0 : FX_DUR); tripSign(st, o.label);
+      return true;
+    }
+    const tr = st.trip = { phase: 'say', hold: false, gone: false, at: now, until: now + dur + FX_DUR, sign: null, beam: null, pad: null, label: '', next: null };
+    trips.push(st);
+    tripSign(st, o.label);
+    if (o.text) { showBubble(st, String(o.text), 2600); tr.at = now + 1.7; }
+    return true;
+  }
+  function tripBack(st) { if (!st || !st.trip) return false; st.trip.until = 0; st.trip.next = null; return true; }
+  function tickTrips(t) {
+    for (let i = trips.length - 1; i >= 0; i--) {
+      const st = trips[i], tr = st.trip;
+      if (!tr) { trips.splice(i, 1); continue; }
+      if (stations.get(st.slug) !== st) { endTrip(st); continue; } // their desk was taken out of the room
+      if (tr.phase === 'say') { if (t >= tr.at) tripLeave(st); }
+      else if (tr.phase === 'away') {
+        const p = 0.5 + 0.5 * Math.sin(t * 2.6 + st.seed);
+        tr.beam.material.opacity = 0.14 + p * 0.16; tr.pad.material.opacity = 0.35 + p * 0.5; tr.pad.scale.setScalar(0.5 + p * 0.06);
+        if (t >= tr.until) {
+          tr.phase = 'in'; tr.sign.visible = false; tr.beam.visible = tr.pad.visible = false;
+          teleportFx(seatOf(st), st.agent.color, 'in', st.ch.body, () => { if (st.trip === tr) tr.gone = false; }, () => {
+            if (st.trip !== tr) return;
+            const next = tr.next;
+            endTrip(st);
+            if (next) tripOut(st, next);
+          });
+        }
+      }
+    }
+  }
+
+  // ---- someone from another room, here for a moment
+  function removeVisitor(id) {
+    const v = visitors.get(id); if (!v) return;
+    visitors.delete(id);
+    clearTimeout(v.st.bubbleTimer);
+    scene.remove(v.ch.root); v.tag.remove();
+    v.ch.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  function addVisitor(o) {
+    const id = String(o.id != null ? o.id : `${o.name || ''}>${o.to || ''}`);
+    if (o.id == null && !o.name) return false;
+    if (visitors.has(id)) return true;
+    const now = performance.now() / 1000, dur = Number(o.dur) > 0 ? Number(o.dur) : 10, side = plan.side || 1.9;
+    const found = o.to ? byName(o.to) : null, host = found && found.online && !(found.trip && found.trip.hold) ? found : null;
+    let n = 0; for (const x of visitors.values()) if (x.host === host) n++;
+    let spot, yaw = 0;
+    if (host) {
+      // beside them wherever they are, or are heading (as startConversation does): their desk, the board or the whiteboard
+      const last = [...host.steps].reverse().find((s) => s.type === 'arrive'), at = last ? last.at : host.at;
+      if (at !== 'desk') { const ps = placeSpot(host, at); yaw = placeYaw(at); spot = new THREE.Vector3(ps.x - Math.sin(yaw) * (0.95 + n * 0.9), 0, ps.z - Math.cos(yaw) * (0.95 + n * 0.9)); }
+      else { spot = new THREE.Vector3(host.x + (n % 2 ? -1 : 1) * Math.min(1.9, side) * (1 + (n >> 1) * 0.45), 0, SEAT_Z + (host.z || 0) + 0.25); yaw = n % 2 ? Math.PI / 2 : -Math.PI / 2; }
+      host.holdUntil = Math.max(host.holdUntil || 0, now + FX_DUR + dur + 1);
+      if (host.steps.length) { host.steps = host.steps.filter((s) => s.pose !== 'coffee'); host.hurry = true; }
+    } else spot = new THREE.Vector3(2.4 + (n % 4) * 1.2, 0, AISLE_Z + (plan.rows - 1) * ROW_D + 1.9 + (n >> 2) * 1.2); // nobody to stand beside: the open floor in front of the desks
+    const slug = `@visitor:${id}`, name = String(o.name || 'Visitor');
+    const ch = buildCharacter({ slug, lookSlug: o.slug || name, color: o.color || '#38d6ff' }, 0);
+    for (let i = pickables.length - 1; i >= 0; i--) if (pickables[i].userData.slug === slug) pickables.splice(i, 1); // a visitor is not someone you can open
+    ch.root.position.copy(spot); ch.root.rotation.y = yaw; ch.body.visible = false;
+    const tag = document.createElement('div');
+    tag.className = 'tag visitor'; tag.dataset.status = 'talking';
+    tag.innerHTML = '<div class="bubble"></div><div class="chip"><i class="dot"></i><b></b></div><div class="vfrom"></div>';
+    tag.querySelector('b').textContent = name;
+    const from = tag.querySelector('.vfrom'); from.textContent = String(o.from || ''); if (!o.from) from.style.display = 'none';
+    const label = new CSS2DObject(tag);
+    label.center.set(0.5, 1); label.position.set(0, host && !(host.idx % 2) ? 3.1 : 2.25, 0); // not at the height of the host's own label
+    label.visible = false;
+    ch.root.add(label);
+    scene.add(ch.root);
+    const step = { type: 'wait', dur: 1e9, pose: '', yaw, started: true };
+    // just enough of a station for tickCharacter to pose them: always standing on this one step
+    const st = { slug, agent: { name, color: o.color }, ch, tag, bubble: tag.querySelector('.bubble'), bubbleTimer: 0, online: true, status: 'working', askReq: 0,
+      kind: 'code', kindWant: 'code', kindSince: 0, placeSince: 0, steps: [step], pending: [], at: 'desk', mode: 'stand', pose: '', phase: 0, hurry: false,
+      listenUntil: 0, talkingUntil: 0, holdUntil: 0, nextBreak: 1e9, carry: false, sip: false, cur: {}, seed: (hashOf(id) % 1000) / 100, idx: 0, x: spot.x, z: spot.z - SEAT_Z, row: 0, trip: null };
+    const v = { id, ch, tag, label, st, step, host, text: String(o.text || ''), dur, until: Infinity, phase: 'in', shown: false };
+    visitors.set(id, v);
+    teleportFx(spot, o.color || BEAM, 'in', ch.body, () => { v.shown = true; label.visible = true; }, () => {
+      if (visitors.get(id) !== v) return;
+      const t = performance.now() / 1000;
+      v.phase = 'talk'; v.until = t + dur; step.pose = 'talk';
+      if (v.text) showBubble(st, v.text, dur * 1000, host ? `to ${host.agent.name.split(' ')[0]}` : '');
+      if (host) { host.listenUntil = t + dur; host.talkingUntil = t + dur; host.holdUntil = Math.max(host.holdUntil || 0, t + dur); }
+    });
+    return true;
+  }
+  function tickVisitors(dt, t) {
+    for (const v of visitors.values()) {
+      const root = v.ch.root;
+      if (v.host) { const hp = v.host.ch.root.position, dx = hp.x - root.position.x, dz = hp.z - root.position.z; if (dx * dx + dz * dz > 0.04) v.step.yaw = Math.atan2(dx, dz); }
+      v.step.dur = 1e9;
+      tickCharacter(v.st, dt, t);
+      v.ch.body.visible = v.shown;
+      if (v.phase === 'talk' && t >= v.until) {
+        v.phase = 'out'; v.step.pose = '';
+        clearTimeout(v.st.bubbleTimer); v.st.bubble.className = 'bubble';
+        teleportFx(root.position, v.st.agent.color || BEAM, 'out', v.ch.body, () => { v.shown = false; v.label.visible = false; }, () => removeVisitor(v.id));
+      }
+    }
+  }
+  function tickTravel(dt, t) {
+    if (!trips.length && !visitors.size && !fxs.length) return;
+    try { tickTrips(t); tickVisitors(dt, t); tickFx(dt); } catch (e) { console.warn('travel', e); }
+  }
   return {
     setArtifacts(counts) { // a sheet of paper standing on each desk: how many pages that person has published (chat.js)
       for (const [slug, st] of stations) {
@@ -1363,6 +1655,11 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       if (!from || !to || from === to || !from.online) return;
       if (from.steps.length) { from.steps = from.steps.filter((s) => s.pose !== 'coffee'); from.pending.push({ to, text }); } else startConversation(from, to, text);
     },
+    // Travel (travel.js): this person beams out to see someone in another room, and a sign over the desk says where they are.
+    teleportOut(name, o) { try { return tripOut(byName(name), o || {}); } catch (e) { console.warn('teleportOut', e); return false; } },
+    teleportBack(name) { try { return tripBack(byName(name)); } catch { return false; } },
+    // Someone from another room beams in beside `to`, says `text`, and leaves: { id, name, color, from, to, text, dur }
+    visitor(o) { try { return addVisitor(o || {}); } catch (e) { console.warn('visitor', e); return false; } },
     setLight(mode) { lightMode = mode; dayNow = -1; applyLight(); },
     order: () => order,
     // Stops drawing entirely (used when the Herdr tab showing the office is not on screen).

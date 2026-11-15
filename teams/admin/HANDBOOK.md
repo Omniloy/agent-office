@@ -118,6 +118,35 @@ When this handbook is wrong or incomplete, fix it as part of the change.
   (page icon next to the name, the list with delete, link buttons) and `world.js` `setArtifacts` (paper badge on each desk).
 - Never use the built-in Artifact tool or claude.ai artifacts: __OWNER__ wants every page on this server.
 
+## Other buildings
+
+A building is one computer's set of floors. Buildings on Herdr's other machines (`hc machine ls`) show up beside ours
+in the city view (zoom out past the building view), and their floors can be visited.
+
+- **Guest listener.** Every floor also listens on its port + 1000 (127.0.0.1 only; `peers.mjs`, loaded by `hub.mjs`,
+  identical in both apps). It serves the same page in guest mode (`public/js/guest.js`: look at the room, write
+  only to the floor's lead) and the building-to-building API `/peer/*` (info, hello, state, message, answer).
+  A guest never gets screens, activity, notes, chats or cards: `guestState()` blanks them.
+- **The link.** `peer-link.mjs` runs once per computer (LaunchAgent `com.omniloy.peer-link`, log
+  `~/.omniloy-team/logs/peer-link.log`). For each connected Herdr machine that has `~/.omniloy-team/building.json` it
+  keeps one ssh connection: their guest ports come to local ports 6000 + slot*100 + n, ours go there, and each
+  foreign floor gets a "door" on 7000 + slot*100 + n (also through `tailscale serve`, with the `remote.json` check).
+  One link serves both directions, so only the computer whose Herdr lists the other machine needs to run it.
+- **State and rules live in `team-peer`** (`~/.local/bin/team-peer`, run it without arguments). Files in
+  `~/.omniloy-team`: `peers.json` (who we know, status none/out/in/on/paused, per-floor switches `on` and `share`;
+  it holds the keys the buildings recognise each other by, so never print, copy or publish it),
+  `peers-seen.json` (their floors and ports), `building.json` (our name card), `visits.json` (teleports to draw),
+  `floors.json` (optional: this computer's own list of floors `[{ "name", "port", "dir" }]`, replaces the default
+  list in `hub.mjs`).
+- **Messages.** A person visiting writes to the lead; an agent uses `team-peer send <building> <floor> "..." --from
+  <name>` (needs status `on` and both floors switched on). Either becomes a request for that lead
+  (`team-ask external`), and the lead's `team-ask answer` travels back (`team-peer answered`).
+- **Screens.** `floors.js` draws the city, `peers.js` is the Connections screen (under More on the phone, in the top
+  bar elsewhere; `/api/buildings`, `/api/peers/*`), `travel.js` + `world.js` (`teleportOut`, `teleportBack`,
+  `visitor`) draw teleports from `/api/visits`. Messages to a person on another floor of this building are detected
+  in `peers.mjs` (`crossFloor`).
+- Never widen this: the guest listener and the doors stay on 127.0.0.1, and only __OWNER__ connects buildings.
+
 ## Where this system came from
 
 It was installed from the `agent-office` repo (its path is in `~/.omniloy-office/install.json`). The repo holds the

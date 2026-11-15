@@ -153,7 +153,9 @@ class Run:
                     f'<key>RunAtLoad</key><true/>{"<key>KeepAlive</key><true/>" if keep else ""}\n<key>StandardOutPath</key><string>{log}</string><key>StandardErrorPath</key><string>{log}</string>\n'
                     f'<key>EnvironmentVariables</key><dict><key>PATH</key><string>{path}</string></dict>\n</dict></plist>\n')
         jobs = [("com.omniloy.artifacts", [nd, f"{APPS}/artifacts/server.mjs"], f"{APPS}/artifacts", f"{TEAMS['dev']}/artifacts/.server.log", True),
-                ("com.omniloy.offices", ["/usr/bin/python3", f"{BIN}/office-restart", "all"], HOME, f"{APPS}/offices-start.log", False)]
+                ("com.omniloy.offices", ["/usr/bin/python3", f"{BIN}/office-restart", "all"], HOME, f"{APPS}/offices-start.log", False),
+                # other buildings: one link per computer to the offices on Herdr's other machines (idle when there are none)
+                ("com.omniloy.peer-link", [nd, f"{APPS}/team-office/peer-link.mjs"], f"{APPS}/team-office", f"{TEAMS['dev']}/logs/peer-link.log", True)]
         if self.cfg.get("mailRound"): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{TEAMS['biz']}/mail-round.log", False))
         for label, args, cwd, log, keep in jobs:
             f = f"{LA}/{label}.plist"; body = plist(label, args, cwd, log, keep)
@@ -185,7 +187,7 @@ def check():
     cl, cx = which("claude"), which("codex")
     line(bool(cl or cx), "an agent CLI", ", ".join(x for x in (cl and "claude", cx and "codex") if x) or "install Claude Code or Codex")
     for name in ("team-office", "biz-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
-    for t in ("team-ask", "team-card", "team-person", "omniloy-team", "office-restart", "team-artifact"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
+    for t in ("team-ask", "team-card", "team-person", "team-peer", "omniloy-team", "office-restart", "team-artifact"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
     for kind, d in TEAMS.items(): line(os.path.exists(f"{d}/team.json"), f"team folder {d}")
     line(os.path.isdir(f"{HERDR}/mods/team-requests"), "Herdr panels")
     def up(port, path="/health"):
@@ -197,6 +199,8 @@ def check():
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
     opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
+    opt(os.path.exists(f"{LA}/com.omniloy.peer-link.plist"), "link to other buildings installed (optional, see setup/SETUP.md step 11)")
+    opt(up(5317), "Dev floor's guest listener answers on 5317 (what another building reaches)")
     opt(os.path.exists(f"{TEAMS['dev']}/remote.json"), "phone door remote.json (optional)")
     try:
         t = json.load(open(f"{TEAMS['dev']}/team.json")); j = t.get("jira") or {}

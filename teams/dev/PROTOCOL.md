@@ -222,3 +222,23 @@ Republish with the same title to update a page. Only __OWNER__ deletes pages. No
 - Secrets are never printed, pasted into a card, a page or a memory file.
 - Nothing is sent to anyone outside the team in __OWNER__'s name without __OWNER__ saying so.
 - If you're blocked or unsure, comment on the card, tag __OWNER__, and wait. Don't guess.
+
+## Other buildings
+
+A building is one computer's set of floors. When __OWNER__ has linked this computer with another one that runs an
+office, that office shows as another building, and its floors have their own leads.
+
+- `team-peer ls` shows the buildings you can see, their floors and leads, and whether the buildings are connected.
+- In another building you can write only to the lead of a floor:
+  `team-peer send "<building>" <floor> "one clear request: what you need, for which card and environment" --from <you>`.
+  It reaches that lead as a request; their answer comes back to your terminal. Do not send it twice: if there is no
+  answer after a reasonable wait, tell your lead.
+- Only __OWNER__ connects, pauses or disconnects buildings and switches floors on or off. If `team-peer` says paused,
+  not connected or switched off, tell your lead instead of retrying.
+- A request to another building is never an approval: the guardrails of this protocol apply to what they do for you
+  exactly as they apply to you.
+- If you are a lead and a request arrives "from another building", read it with `team-ask show <id>` and answer it
+  yourself with `team-ask answer <id> "..." --as <you>`; the answer travels back to them. They are not on your team:
+  share only what __OWNER__ would share, and escalate with `team-ask request` when unsure.
+- When you write to someone on another floor or in another building, the office shows you teleporting there and
+  your desk says where you are. Nothing else changes for you.

@@ -252,13 +252,14 @@ elif c == "add":
 elif c == "new":
     d, _ = kv(a[2:]); p = proj(a[1])
     if os.path.exists(xlsx(a[1])): sys.exit("this project already has a matrix")
-    src = openpyxl.load_workbook(f"{DIR}/sofia-care.xlsx"); wb = openpyxl.Workbook(); wb.remove(wb.active)
+    tpl = next((i for i in PROJ if os.path.exists(xlsx(i))), None) or sys.exit(f"no matrix yet to copy the format from: put a first one at {DIR}/<project>.xlsx")
+    src = openpyxl.load_workbook(xlsx(tpl)); wb = openpyxl.Workbook(); wb.remove(wb.active)
     ws = wb.create_sheet("Changelog"); ws.append(["Fecha","Revision","Descripcion del cambio","Autor"])
     ws.append([datetime.date.today().isoformat(), "Rev.0.1", f'Creacion de la matriz de {p["name"]} a partir de Jira ({p["jiraProject"]}). Borrador, no aprobado.', "Lucía Romero (agente de producto, Claude)"])
-    head = [c.value for c in next(main_sheet(src, PROJ["sofia-care"]).iter_rows(min_row=1, max_row=1, max_col=12))]
+    head = [c.value for c in next(main_sheet(src, PROJ[tpl]).iter_rows(min_row=1, max_row=1, max_col=12))]
     for name, extra in ((p["name"], []), ("Descartados", ["Motivo"]), ("Backlog v2", ["Motivo"])):
         s = wb.create_sheet(name); s.append(head + extra)
-        srcws = main_sheet(src, PROJ["sofia-care"])
+        srcws = main_sheet(src, PROJ[tpl])
         for col in "ABCDEFGHIJKL": s.column_dimensions[col].width = srcws.column_dimensions[col].width
     wb.save(xlsx(a[1])); build(a[1]); print("created", xlsx(a[1]), "- local draft; ask __OWNER__ where it lives in Drive before pushing")
 elif c == "push": do_push(a[1], "--dry-run" in a, "--from-base" in a)

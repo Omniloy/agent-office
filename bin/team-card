@@ -59,7 +59,7 @@ def who(o, k="as"):
     w = o.get(k) or sys.exit(f"--{k} <your Herdr name> is required")
     if w not in NAMES: sys.exit(f"--{k} must be one of {sorted(NAMES)}")
     return w
-def line(k, c): return f'{k:10} {c["owner"]:9} {("ENRIQUE APPROVES: " if c["waiting"].get("kind") == "approval" else "WAITING: ") + c["waiting"]["on"] if c.get("waiting") else "active":32.32} since {c["since"][5:16]}  {c.get("title", "")[:60]}'
+def line(k, c): return f'{k:10} {c["owner"]:9} {("OWNER APPROVES: " if c["waiting"].get("kind") == "approval" else "WAITING: ") + c["waiting"]["on"] if c.get("waiting") else "active":32.32} since {c["since"][5:16]}  {c.get("title", "")[:60]}'
 
 a = sys.argv[1:]
 if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit(0)

@@ -3,7 +3,7 @@
 //   bottom bar   Office · Team · For you · Board · More, in thumb reach
 //   sheets       a person, the inbox, a card, the feed: all come up from the bottom, one at a time
 //   the room     one finger turns, two fingers move and pinch to zoom, a tap picks the nearest person (world.js)
-// The same file runs in the three office apps, so every element it uses is optional.
+// The same file runs in both office apps, so every element it uses is optional.
 const root = document.documentElement;
 if (root.classList.contains('phone')) start();
 
@@ -180,7 +180,7 @@ function start() {
     const top = s.getBoundingClientRect().top, scroller = e.target.closest('.pbody, .list, .body, .scroll, ol, pre, #asks');
     const onEdge = t.clientY - top < 56 && !e.target.closest('input, textarea');
     if (!onEdge && !(scroller && scroller.scrollTop <= 0)) return; // from the content, only when it is already at its top
-    drag = { s, y: t.clientY, x: t.clientX, dy: 0, onEdge, moved: false, t: Date.now() };
+    drag = { s, y: t.clientY, x: t.clientX, dy: 0, onEdge, moved: false, t: Date.now(), h: s.offsetHeight };
   }, { passive: true });
   addEventListener('touchmove', (e) => {
     if (!drag) return;
@@ -192,13 +192,24 @@ function start() {
     }
     drag.dy = dy;
     if (e.cancelable) e.preventDefault();
+    if (drag.s.id === 'chat') { drag.s.style.height = `min(var(--fullh), ${Math.max(60, drag.h - dy)}px)`; return; } // the chat changes size under the finger: taller, shorter, or all the way down to close
     drag.s.style.transform = `translateY(${Math.max(drag.s === el.panel && !el.panel.classList.contains('full') ? -40 : 0, dy)}px)`;
   }, { passive: false });
   const drop = () => {
     if (!drag) return;
-    const { s, dy, moved, onEdge, t } = drag; drag = null;
+    const drag0 = drag, { s, dy, moved, onEdge, t } = drag; drag = null;
     s.classList.remove('dragging'); s.style.transform = '';
     const isPerson = s === el.panel, full = isPerson && s.classList.contains('full');
+    if (s.id === 'chat') {
+      s.style.height = '';
+      if (!moved) return;
+      const min = innerHeight * 0.24, h = drag0.h - dy;
+      if (h < min - 50) return office().chat.close();
+      const f = Math.min(0.95, Math.max(min, h) / innerHeight);
+      root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`);
+      try { localStorage.setItem('office.chat.h', f.toFixed(3)); } catch { /* it still holds until the page reloads */ }
+      return sync();
+    }
     if (!moved) { if (isPerson && onEdge && Date.now() - t < 400 && lastTouchOnHandle) { s.classList.toggle('full'); sync(); } return; }
     if (isPerson && dy < -30) { s.classList.add('full'); return sync(); }
     if (dy > 70) {

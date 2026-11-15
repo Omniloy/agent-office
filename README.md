@@ -28,6 +28,8 @@ answers to the questions they ask you.
 - **Herdr panels**: Requests, Drafts, PRs, Board, Trace and usage limits, in a ready layout.
 - **Phone access** over Tailscale, with notifications, installable on the home screen. Nothing is exposed to the internet.
 - **Voice** (optional): a local transcriber on your Mac; no audio leaves the machine.
+- **Other buildings** (optional): an office on another computer shows up as another building in a city view. You
+  visit its floors as a guest, and the two teams' agents can exchange requests once both owners connect them.
 
 ## Install
 
@@ -51,13 +53,32 @@ about 15 minutes. Everything else is installed during setup.
 Apps, tools, panels and skills are replaced. Your team folders (people, protocols, memory, requests) are never
 overwritten; when the repo has a newer protocol it is left next to yours as `PROTOCOL.md.new`.
 
+## Connecting two computers as buildings
+
+Each computer with this repo installed is a building. If one of them is a machine in the other's Herdr (so `ssh`
+between them already works), they find each other by themselves: zoom out past the building view and the other
+building stands on the same street.
+
+- **Visit**: tap a building, pick a floor. You see the room as a guest (no screens, chats or cards) and can write
+  only to that floor's lead. Your message becomes a request there; the answer comes back to your office.
+- **Connect agents**: open Connections (under More on the phone, in the top bar on a computer) and press Connect;
+  the other owner accepts. From then on an agent can leave a request with the lead of a floor over there with
+  `team-peer send`. You can pause, resume or disconnect at any time, switch each of your floors on or off for that
+  building, and choose whether a floor shares its open requests with it.
+- **From the terminal**: `team-peer ls`, `team-peer request|accept|decline|disconnect <building>`,
+  `team-peer pause|resume <building>`, `team-peer floor <building> <port> on|off share|noshare`,
+  `team-peer me --name "Building name" --owner Name`.
+
+Everything travels inside ssh tunnels between 127.0.0.1 ports; no new port is opened to the network. Details in
+[`setup/SETUP.md`](setup/SETUP.md), step 11.
+
 ## What is where
 
 | In the repo | Installed to | What |
 |---|---|---|
 | `offices/team-office`, `offices/biz-office` | `~/.omniloy-office/` | The office web apps (Node, no build step) |
 | `services/artifacts` | `~/.omniloy-office/artifacts` | Local pages server (port 4340) |
-| `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `omniloy-team`, `office-restart` and friends |
+| `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `team-peer`, `omniloy-team`, `office-restart` and friends |
 | `teams/dev`, `teams/biz`, `teams/admin` | `~/.omniloy-team`, `~/.omniloy-biz`, `~/.omniloy-admin` | Team definition, protocol, memory |
 | `teams/*/agents` | `~/.claude/agents/` | Each person's instructions |
 | `skills/` | `~/.claude/skills`, `~/.codex/skills` | Skills every agent gets |
@@ -71,5 +92,7 @@ them in. After the install, ask Zeus (More > Zeus in the office) for any change:
 
 - The servers listen on 127.0.0.1 only. The phone comes in through Tailscale, and only the Tailscale logins you
   list in `~/.omniloy-team/remote.json` are let in.
+- Another building reaches a floor only through an ssh tunnel to its guest listener (127.0.0.1). A visitor sees the
+  room and can write to the floor's lead, nothing else; agents of two buildings talk only after both owners connect them.
 - Agents never merge, deploy, change production, or send messages in your name. The business floor makes drafts.
 - Tokens live in the macOS Keychain or in each tool's own sign-in; they are not in this repo or in any file it writes.

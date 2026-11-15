@@ -4,7 +4,7 @@
 //     Ways in: tap the figure in the building view, More > their name on a phone, their name in the top bar on a computer.
 //   Anyone on this floor, on a phone: tapping them opens this chat instead of their sheet. The sheet's sections
 //     (Overview, Activity, Live screen, Notes) are behind the "…" button, and "‹ Chat" in the sheet comes back.
-// The same file runs in the three office apps.
+// The same file runs in both office apps.
 if (!new URLSearchParams(location.search).has('embed')) start();
 
 function start() {
@@ -18,8 +18,11 @@ function start() {
   css.textContent = `
 #chat { position: fixed; z-index: 30; display: none; flex-direction: column; background: var(--panel, #10131d); color: var(--text, #e8eaf2); font-family: var(--sans, system-ui, sans-serif); top: 0; right: 0; bottom: 0; width: min(460px, 100vw); border-left: 1px solid var(--line, rgba(255,255,255,.12)); box-shadow: -18px 0 50px rgba(0, 0, 0, .45); }
 /* on a phone it is one more sheet: the top bar and a strip of the room stay above it, the bottom bar below */
-html.phone #chat { left: 0; right: 0; top: auto; bottom: var(--tab); height: calc(var(--fullh) - 13dvh); width: auto; border: 0; border-radius: 18px 18px 0 0; overflow: hidden; z-index: 15; box-shadow: 0 -10px 34px rgba(0, 0, 0, .45); box-sizing: border-box; will-change: transform; }
+html.phone #chat { left: 0; right: 0; top: auto; bottom: var(--tab); height: min(var(--fullh), var(--chat-h, calc(var(--fullh) - 13dvh))); width: auto; border: 0; border-radius: 18px 18px 0 0; overflow: hidden; z-index: 15; box-shadow: 0 -10px 34px rgba(0, 0, 0, .45); box-sizing: border-box; will-change: transform; }
 html.phone #chat.on { animation: sheet-up .24s cubic-bezier(.2, .8, .2, 1); }
+html.phone #chat.dragging { animation: none; transition: none; }
+/* the chat is the person's sheet now: the old one never shows behind it (its sections live in here, behind "…") */
+html.phone.chat-on #panel { visibility: hidden; pointer-events: none; }
 html.phone #chat::before { content: ""; flex: none; height: 14px; background: center 6px / 40px 5px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='5'%3E%3Crect width='40' height='5' rx='2.5' fill='%23ffffff' fill-opacity='.28'/%3E%3C/svg%3E"); }
 html.typing.phone #chat { bottom: var(--kb); height: calc(var(--vvh, 100dvh) - var(--bar) + 38px); }
 html.phone #chat header { padding: 0 6px 4px; gap: 8px; }
@@ -299,6 +302,7 @@ body.embed #chat { display: none !important; }`;
     show(a.herdrName); section('artifacts');
   });
   log.addEventListener('pointerdown', () => menu.classList.remove('on'));
+  if (PHONE) { try { const f = Number(localStorage.getItem('office.chat.h')); if (f > 0.1 && f < 1) root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`); } catch { /* no storage: the usual height */ } } // the height you left it at (drag its top edge)
   if (PHONE && panel) { // tapping someone opens their chat; their sheet stays underneath for the sections
     const openFor = () => { const o = office(), slug = o.selected && o.selected(), a = slug && (o.agents ? o.agents() : []).find((x) => x.slug === slug); if (a && a.herdrName) show(a.herdrName); };
     let was = panel.classList.contains('open'), last = '';

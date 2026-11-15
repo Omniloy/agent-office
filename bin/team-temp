@@ -59,7 +59,7 @@ TEMPLATE = """# Handover: {ticket} ({name}, temp copy of {of})
 <EVERYTHING that now exists because of you and is not in the PR: users and accounts (which system, username, role),
 test data, records in databases, env files, keychain entries, feature flags, services or containers left running,
 scheduled jobs, files outside the repo, worktrees. For each: where it is and how to remove it.
-Credentials: say WHERE they are kept (e.g. "Keychain, service omnicare-dev-admin, account admin@test"), never the secret itself.
+Credentials: say WHERE they are kept (e.g. "Keychain, service myapp-dev-admin, account admin@test"), never the secret itself.
 Write "Nothing" only if it is true.>
 
 ## What is left

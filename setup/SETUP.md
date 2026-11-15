@@ -53,7 +53,7 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 | 5 | Business floor: which Gmail account should it triage, and how often? | Only if they want the Business floor now. It needs the Gmail connector in their agent CLI. Default rounds: every 2 hours, 08:00 to 20:00, Monday to Friday. Goes in `gmailAccount` and `mailRound` in the config. No rounds wanted: leave `mailRound` out. |
 | 6 | Do they want the office on their phone? | Needs Tailscale (free for personal use; a company network needs an invite from its admin). |
 | 7 | Do they want to talk to the office by voice? | Local transcription. On Apple Silicon with 16 GB it downloads about 2 GB. |
-| 8 | Is there another computer (a server, a second Mac) whose terminals they want inside Herdr? | Needs ssh access to it already working. |
+| 8 | Is there another computer (a server, a second Mac) whose terminals they want inside Herdr? | Needs ssh access to it already working. If that computer has its own agent office, the two can also show up to each other as buildings (step 11). |
 
 ### Claude Code, Codex or both
 
@@ -210,6 +210,41 @@ line ok, tell the user to open More > Voice in the office and switch the Speak b
 4. The office teams themselves run on the Mac where this repo is installed. Agents started in a space on the
    other machine are ordinary Herdr agents: they appear in Herdr, not at a desk in the office.
 
+### Two offices as two buildings
+
+If the other computer runs its own agent office (this repo installed there too), the two show up to each other as
+**buildings**: zoom out past the building view to the city, tap the other building, and visit its floors as a guest.
+A guest sees the room but no screens, chats or cards, and can write only to that floor's lead: the message becomes
+a request there and the answer comes back. Agents of the two buildings can talk the same way once both owners agree.
+
+1. Both computers have the office installed and their floors running, and step 11 above is done on the computer
+   that links (machine added in Herdr, `ssh <name>` works without a prompt). Nothing else is opened: every floor
+   has a guest listener on its port + 1000 on 127.0.0.1 only, and the link is ssh tunnels between those.
+2. Give each building a name, on each computer: `team-peer me --name "Ana's office" --owner Ana`.
+3. The link itself is `com.omniloy.peer-link`, installed by `install.py` (it runs
+   `~/.omniloy-office/team-office/peer-link.mjs`, log `~/.omniloy-team/logs/peer-link.log`). It looks at Herdr's
+   connected machines every 30 seconds and links to each one that has an office. Only the computer whose Herdr
+   lists the other machine needs it; the link works in both directions.
+4. Verify: `team-peer ls` on both sides names the other building and its floors, and the log says `linked to
+   <machine>`. In the office, the city view shows the other building.
+5. Connecting agents is the two owners' decision (**ASK**), never yours: one side presses Connect in the
+   Connections screen (under More on the phone, in the top bar on a computer) or runs `team-peer request <building>`;
+   the other side gets a request in the office and accepts (`team-peer accept <building>`). After that:
+   - `team-peer pause <building>` / `resume` stops and restarts the exchange without disconnecting;
+   - `team-peer disconnect <building>` ends it;
+   - `team-peer floor <building> <your floor port> on|off share|noshare` decides, per floor of yours, whether its
+     agents may talk with that building and whether its open requests are shown to (and answerable by) a visitor
+     from it. The same switches are in the Connections screen.
+6. Phone: with step 9 done, each foreign floor's door (ports from 7100 up, printed in the log) is also served
+   through Tailscale with the same `remote.json` check as the offices.
+
+The installer and its services are for macOS. On a Linux computer the same files work, but you place them and keep
+them running yourself: the floors (`PORT=4317 node server.mjs` in the app folder) under a service, and, only if
+that computer is the one whose Herdr lists the other machine, `node peer-link.mjs` too, for example as a systemd
+user unit with `ExecStart=<node> %h/.omniloy-office/team-office/peer-link.mjs`, `Restart=always` and
+`~/.local/bin` on its `PATH`. A computer whose floors are not the default two lists them in
+`~/.omniloy-team/floors.json`: `[{ "name": "Dev", "port": 4317, "dir": ".omniloy-team" }]`.
+
 ## Step 12. Hand over
 
 Run `python3 setup/install.py --check` one last time and give the user a short summary:
@@ -245,4 +280,5 @@ they differed. People who are running keep their old instructions until their ne
 | Owner id clashes with a persona | Pick another id in the config and rerun the installer before anything is started. |
 | The user's name was installed wrong | Fix `owner` in the config, delete nothing, rerun the installer: tools, apps and role files are rewritten. The three `PROTOCOL.md` and `team.json` files are kept, so edit the name in those by hand. |
 | An Intel Mac or 8 GB of memory | Everything works except the preferred voice engine; the voice guide picks a lighter one. |
+| `team-peer ls` says "No other buildings found" | The other machine must be `connected` in `hc machine ls` and have `~/.omniloy-team/building.json` (written when its floors start). Read `~/.omniloy-team/logs/peer-link.log`; `ssh <name>` must work without a prompt. |
 | A security tool blocks a command | Do not work around it. Tell the user what was blocked. |

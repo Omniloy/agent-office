@@ -86,7 +86,7 @@ def archived(n):
 def opts(args):
     d, pos, it = {}, [], iter(args)
     for a in it:
-        if a.startswith("--"): d[a[2:]] = True if a in ("--all",) else next(it, "")
+        if a.startswith("--"): d[a[2:]] = True if a in ("--all", "--note", "--connect") else next(it, "")
         else: pos.append(a)
     return d, pos
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
@@ -114,6 +114,18 @@ if c in ("request", "note"):
         subprocess.run([os.path.expanduser("~/.local/bin/team-card"), "wait", x["ticket"], "--as", who, "--req", str(x["id"]), f'request #{x["id"]} to {to}'], capture_output=True)
     if to != "__OWNER_ID__" and c == "request":
         subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", to, f'{who} left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to}) or escalate it to __OWNER__ only if it needs him.'], capture_output=True)
+elif c == "external":   # from another building (written by team-peer): a request to a lead or the owner, or a note to the owner
+    to = d.get("to") or "owner"
+    if to == "owner": to = "__OWNER_ID__"
+    elif to not in NAMES: sys.exit("no such person here")
+    with Box() as b:
+        x = {"id": b["next"], "kind": "note" if d.get("note") else "request", "from": d.get("name") or "another building", "title": pos[0][:140], "body": d.get("body", "") if isinstance(d.get("body"), str) else "", "ticket": "",
+             "options": [o.strip() for o in d.get("options", "").split(",") if o.strip()] if isinstance(d.get("options"), str) else [],
+             "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to,
+             "ext": {"peer": d.get("peer", ""), "connect": bool(d.get("connect")), "ref": json.loads(d["ref"]) if isinstance(d.get("ref"), str) else {}}}
+        b["next"] += 1; b["items"].append(x); print(x["id"])
+    if to != "__OWNER_ID__":
+        subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", to, f'{x["from"]} (from another building) left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to}); your answer is sent back to them. They are not on your team: share only what your owner would share, and escalate with team-ask request if unsure.'], capture_output=True)
 elif c == "ls":
     with Box() as b:
         items = [x for x in b["items"] if (d.get("all") or x["status"] == "open") and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", "__OWNER_ID__") == d["to"])]
@@ -135,7 +147,10 @@ elif c in ("answer", "read", "cancel"):
         else: x["status"] = "read" if c == "read" else "cancelled"; x["answeredAt"] = now()
     if c in ("answer", "cancel") and x.get("ticket"):
         subprocess.run([os.path.expanduser("~/.local/bin/team-card"), "resume", x["ticket"], "--req", str(x["id"])], capture_output=True)
-    if c == "answer":
+    if c == "answer" and x.get("ext"):   # asked from another building: the answer travels back there
+        r = subprocess.run([os.path.expanduser("~/.local/bin/team-peer"), "answered"], input=json.dumps(x), capture_output=True, text=True)
+        print("answered; " + (r.stdout.strip() or r.stderr.strip()[:200]))
+    elif c == "answer":
         msg = f'{x["answeredBy"]} answered request #{x["id"]} ("{x["title"]}"' + (f', {x["ticket"]}' if x.get("ticket") else "") + f'): {x["answer"]}'
         r = subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", x["from"], msg], capture_output=True, text=True)
         if x.get("via") and x["from"] != x["via"] and x["answeredBy"] == "__OWNER__":

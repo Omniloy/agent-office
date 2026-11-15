@@ -1,5 +1,5 @@
 // What waits for __OWNER__ across every office, and the notifications that reach his phone.
-// The same file sits in the three office apps (edit it in team-office, copy it to the other two).
+// The same file sits in both office apps (edit it in team-office, copy it to the other two).
 //
 //   attention   open questions and messages addressed to him (the shared team-ask store), drafts waiting for his
 //               check, and people stuck on a question in their terminal. Each office writes its stuck people to
@@ -8,18 +8,22 @@
 //               subscription is kept in ~/.omniloy-team/push/subs.json, and a new item is sent once (whichever
 //               office sees it first claims it). The text is encrypted for the phone; Apple/Google only relay it.
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createPeers } from './peers.mjs';
 
 const APP = path.dirname(fileURLToPath(import.meta.url)); // this office app's folder
 const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = path.join(SHARED, 'push');
-export const OFFICES = [
+const DEFAULT_OFFICES = [
   { name: 'Dev', port: 4317, dir: '.omniloy-team' },
   { name: 'Business', port: 4318, dir: '.omniloy-biz' },
 ];
+// A computer with other floors says so in ~/.omniloy-team/floors.json: [{ "name", "port", "dir" }]
+export const OFFICES = (() => { try { const l = JSON.parse(readFileSync(path.join(SHARED, 'floors.json'), 'utf8')); return Array.isArray(l) && l.length ? l : DEFAULT_OFFICES; } catch { return DEFAULT_OFFICES; } })();
 const readJson = async (f, dflt) => { try { return JSON.parse(await fs.readFile(f, 'utf8')); } catch { return dflt; } };
 const writeJson = async (f, v) => { await fs.mkdir(path.dirname(f), { recursive: true, mode: 0o700 }); const t = `${f}.${process.pid}.tmp`; await fs.writeFile(t, JSON.stringify(v), { mode: 0o600 }); await fs.rename(t, f); };
 const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
@@ -250,7 +254,9 @@ export function createHub({ port, stuck, agents }) {
   // ---------------------------------------------------------------- routes (the caller has already checked the office token)
   const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
   const readBody = (req, max = 16_000) => new Promise((resolve, reject) => { let s = ''; req.on('data', (c) => { s += c; if (s.length > max) { reject(new Error('too large')); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch (e) { reject(e); } }); req.on('error', reject); });
+  const peers = createPeers({ port, agents, OFFICES, APP }); // other buildings: guest listener and connections
   async function route(req, res, p) {
+    if (p === '/api/buildings' || p === '/api/visits' || p.startsWith('/api/peers/')) return peers.route(req, res, p);
     if (p === '/api/attention') {
       const items = await attention();
       const offices = [];

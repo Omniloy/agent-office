@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""team-peer: other buildings (offices on other computers reached through Herdr's ssh machines).
+
+  team-peer ls                                   the buildings you can see, their floors and leads, and whether you are connected
+  team-peer send <building> <floor> "text" --from <you>
+                                                 leave a request for the LEAD of that floor (the only person you can write to there).
+                                                 Their answer comes back to your terminal. Needs the buildings connected and both floors switched on.
+  team-peer request|accept|decline|disconnect <building>     ask to connect agents / answer a request / end the connection
+  team-peer pause|resume <building>              stop talking for a while without disconnecting
+  team-peer floor <building> <your floor port> [on|off] [share|noshare]
+                                                 per floor of yours: may its agents talk with that building; are its requests shared with it
+  team-peer me [--name "Building name"] [--owner Name]       this building's name card
+
+<building> is its id or the start of its name. Store: ~/.omniloy-team/peers.json (connections), peers-seen.json (what was found)."""
+import sys, os, json, time, secrets, subprocess, urllib.request, urllib.error, fcntl, re, socket
+H = os.path.expanduser; D = H("~/.omniloy-team"); F = D + "/peers.json"; SEEN = D + "/peers-seen.json"; VISITS = D + "/visits.json"
+os.makedirs(D, exist_ok=True)
+def load(f, dflt):
+    try: return json.load(open(f))
+    except Exception: return dflt
+def save(f, d):
+    tmp = f + ".tmp"; json.dump(d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, f)
+class Box:   # one writer at a time
+    def __enter__(self):
+        self.l = open(F + ".lock", "w"); fcntl.flock(self.l, fcntl.LOCK_EX)
+        self.d = load(F, {}); self.d.setdefault("peers", {})
+        if not self.d.get("me"): self.d["me"] = {"id": secrets.token_hex(4), "name": socket.gethostname().split(".")[0] + " office", "owner": ""}
+        return self.d
+    def __exit__(self, *a):
+        if a[0] is None or a[0] is SystemExit: save(F, self.d)
+        fcntl.flock(self.l, fcntl.LOCK_UN)
+def seen(): return load(SEEN, {})
+def find(d, q):
+    q = q.lower(); c = [p for p in d["peers"].values() if p["id"] == q or p.get("name", "").lower().startswith(q) or (p.get("machine") or "").lower() == q]
+    if len(c) != 1: sys.exit(f'{"no" if not c else "more than one"} building matches "{q}". See: team-peer ls')
+    return c[0]
+def floors_of(pid): return (seen().get(pid) or {}).get("floors") or []
+def call(pid, path, body=None, floor=None, timeout=8):
+    """Talk to that building through the tunnel: any of its floors answers for the building, `floor` picks one."""
+    fl = floors_of(pid); d = load(F, {}); p = d.get("peers", {}).get(pid) or {}
+    fl = [x for x in fl if not floor or str(x["port"]) == str(floor)] or fl
+    err = "no way to reach that building right now"
+    for x in fl:
+        try:
+            req = urllib.request.Request(f'http://127.0.0.1:{x["local"]}{path}', data=None if body is None else json.dumps(body).encode(),
+                                         headers={"content-type": "application/json", "x-peer-id": d["me"]["id"], "x-peer-key": p.get("key", "")})
+            return json.load(urllib.request.urlopen(req, timeout=timeout))
+        except urllib.error.HTTPError as e:
+            try: return json.load(e)
+            except Exception: err = f"HTTP {e.code}"
+        except Exception as e: err = str(e)[:120]
+    return {"error": err}
+def visit(v):   # shown in the rooms: someone teleports out, or a visitor arrives (see travel.js)
+    l = open(VISITS + ".lock", "w"); fcntl.flock(l, fcntl.LOCK_EX)
+    now = int(time.time() * 1000); items = [x for x in load(VISITS, []) if x.get("until", 0) > now - 60000]
+    items.append({"id": secrets.token_hex(5), "ts": now, **v}); save(VISITS, items); fcntl.flock(l, fcntl.LOCK_UN)
+def teams():
+    out = {}
+    for b in load(D + "/building.json", {}).get("floors") or []:
+        t = load(H("~/" + b["dir"] + "/team.json"), None)
+        if t: out[str(b["port"])] = {**b, "team": t}
+    return out
+def person(name):
+    for port, f in teams().items():
+        tm = load(H("~/" + f["dir"] + "/temps.json"), [])
+        for p in f["team"]["personas"] + (tm if isinstance(tm, list) else []):
+            if p["herdrName"] == name: return port, f, p
+    return None, None, None
+def hc(*a): return subprocess.run([H("~/.local/bin/hc"), *a], capture_output=True, text=True)
+def ask(*a, stdin=None): return subprocess.run([H("~/.local/bin/team-ask"), *a], capture_output=True, text=True, input=stdin)
+def opts(a):
+    o, pos = {}, []; i = 0
+    while i < len(a):
+        if a[i].startswith("--"): o[a[i][2:]] = a[i + 1] if i + 1 < len(a) and not a[i + 1].startswith("--") else True; i += 2 if o[a[i][2:]] is not True else 1
+        else: pos.append(a[i]); i += 1
+    return o, pos
+def status_line(p): return {"none": "not connected", "out": "request sent", "in": "wants to connect", "on": "connected", "paused": "paused"}.get(p.get("status", "none"), p.get("status"))
+
+a = sys.argv[1:]; c = a[0] if a else ""; o, pos = opts(a[1:])
+if c == "me":
+    with Box() as d:
+        if o.get("name"): d["me"]["name"] = o["name"]
+        if o.get("owner"): d["me"]["owner"] = o["owner"]
+        print(json.dumps(d["me"], ensure_ascii=False))
+elif c == "ls":
+    with Box() as d: pass
+    s = seen()
+    if o.get("json"): print(json.dumps({"me": d["me"], "peers": d["peers"], "seen": s}, ensure_ascii=False)); sys.exit()
+    if not d["peers"]: print("No other buildings found.")
+    for p in d["peers"].values():
+        print(f'{p["name"]}  ({p["id"]}, on {p.get("machine") or "another computer"}): {status_line(p)}')
+        for f in floors_of(p["id"]): print(f'    floor {f["port"]}  {f["name"]:18} lead: {(f.get("lead") or {}).get("name", "?")}')
+        mine = p.get("my") or {}
+        for port, f in teams().items():
+            m = mine.get(port) or {}; print(f'    your floor {port} ({f["name"]}): {"agents can talk" if m.get("on", True) else "agents switched off"}{", requests shared" if m.get("share") else ""}')
+elif c in ("request", "accept", "decline", "disconnect", "pause", "resume"):
+    with Box() as d:
+        p = find(d, pos[0] if pos else sys.exit("which building?")); st = p.get("status", "none"); pid = p["id"]
+        if c == "request":
+            if st in ("on", "paused"): sys.exit("already connected")
+            p["status"] = "on" if st == "in" else "out"   # they had asked too: that is a yes from both
+        elif c == "accept":
+            if st != "in": sys.exit("they have not asked to connect")
+            p["status"] = "on"
+        elif c in ("decline", "disconnect"): p["status"] = "none"; p.pop("pausedBy", None)
+        elif c == "pause":
+            if st != "on": sys.exit("not connected")
+            p["status"], p["pausedBy"] = "paused", "me"
+        elif c == "resume":
+            if st != "paused" or p.get("pausedBy") != "me": sys.exit("it was not paused from here" if st == "paused" else "not paused")
+            p["status"] = "on"; p.pop("pausedBy", None)
+        new = p["status"]; me = d["me"]
+    r = call(pid, "/peer/state", {"status": new, "verb": c, "from": me})
+    print(f'{p["name"]}: {status_line(p)}' + ("" if r.get("ok") else f' (they could not be told now: {r.get("error", "no answer")})'))
+elif c == "floor":
+    with Box() as d:
+        p = find(d, pos[0]); port = str(pos[1]); m = p.setdefault("my", {}).setdefault(port, {"on": True, "share": False})
+        for w in pos[2:]:
+            if w in ("on", "off"): m["on"] = w == "on"
+            elif w in ("share", "noshare"): m["share"] = w == "share"
+        print(json.dumps(m))
+elif c == "send":
+    who = o.get("from") or sys.exit("--from <your Herdr name> is required")
+    if len(pos) < 3: sys.exit('team-peer send <building> <floor> "text" --from <you>')
+    port, fl, me_p = person(who)
+    if not me_p: sys.exit(f"{who} is not someone in this building")
+    with Box() as d: p = find(d, pos[0]); me = d["me"]
+    if p.get("status") != "on": sys.exit(f'{p["name"]} is {status_line(p)}: agents cannot talk with it now. Only your owner can connect buildings.')
+    if not ((p.get("my") or {}).get(port) or {}).get("on", True): sys.exit("your floor is switched off for that building")
+    q = pos[1].lower(); tf = [f for f in floors_of(p["id"]) if str(f["port"]) == q or f["name"].lower().startswith(q)]
+    if len(tf) != 1: sys.exit("which floor? " + ", ".join(f'{f["port"]} {f["name"]}' for f in floors_of(p["id"])))
+    tf = tf[0]; text = pos[2].strip()
+    r = call(p["id"], "/peer/message", {"floor": tf["port"], "text": text, "agent": who, "name": me_p["name"].split(" ")[0], "color": me_p.get("color", "#888"),
+                                        "fromFloor": fl["name"], "fromPort": int(port), "building": me["name"]}, floor=tf["port"])
+    if not r.get("ok"): sys.exit("not delivered: " + str(r.get("error", "no answer")))
+    lead = (tf.get("lead") or {}).get("name", "the lead").split(" ")[0]
+    visit({"kind": "out", "floor": int(port), "who": who, "label": f'At {p["name"]} · with {lead}', "text": text[:160], "until": int(time.time() * 1000) + 14000})
+    print(f'left with {lead} ({p["name"]}, {tf["name"]}) as request #{r.get("id")}. Their answer will arrive in your terminal.')
+elif c == "incoming":   # called by the office server for what arrives from another building; JSON on stdin
+    kind = pos[0]; b = json.load(sys.stdin); pid = b.get("peer") or ""
+    if kind == "hello":   # first contact through a new tunnel: remember who they are and how to reach their floors
+        with Box() as d:
+            fr = b["from"]; p = d["peers"].setdefault(fr["id"], {"id": fr["id"], "status": "none", "my": {}})
+            if p.get("key") and p["key"] != b.get("key") and p.get("status") in ("on", "paused", "in"): sys.exit(json.dumps({"error": "this building is already known with another key"}))
+            p.update({"name": fr.get("name") or fr["id"], "owner": fr.get("owner", ""), "machine": b.get("machine", ""), "key": b.get("key", "")})
+            s = seen(); s[fr["id"]] = {"floors": b.get("floors") or [], "at": int(time.time())}; save(SEEN, s)
+            print(json.dumps({"ok": True, "me": d["me"], "status": p["status"]}))
+    elif kind == "state":
+        with Box() as d:
+            p = d["peers"].get(pid) or sys.exit(json.dumps({"error": "unknown building"})); verb = b.get("verb"); st = p.get("status", "none"); note = ""
+            if verb == "request":
+                if st == "out": p["status"] = "on"; note = f'{p["name"]} accepted: your agents can now talk with it.'
+                elif st == "none": p["status"] = "in"; note = "ASK"
+            elif verb == "accept" and st == "out": p["status"] = "on"; note = f'{p["name"]} accepted: your agents can now talk with it.'
+            elif verb in ("decline", "disconnect"):
+                if st != "none": note = f'{p["name"]} {"declined the connection" if verb == "decline" else "disconnected"}.'
+                p["status"] = "none"; p.pop("pausedBy", None)
+            elif verb == "pause" and st == "on": p["status"], p["pausedBy"] = "paused", "them"; note = f'{p["name"]} paused the connection.'
+            elif verb == "resume" and st == "paused" and p.get("pausedBy") == "them": p["status"] = "on"; p.pop("pausedBy", None); note = f'{p["name"]} resumed the connection.'
+            name, owner = p["name"], p.get("owner") or "Someone"
+        if note == "ASK": ask("external", "--to", "owner", "--name", f"{owner} · {name}", "--peer", pid, "--connect", "--options", "Accept,Decline", f"{name} wants to connect its agents with yours. Accept?")
+        elif note: ask("external", "--to", "owner", "--note", "--name", name, "--peer", pid, note)
+        print(json.dumps({"ok": True}))
+    elif kind == "message":   # a person or an agent of another building writes to the lead of one of our floors
+        d = load(F, {}); p = d.get("peers", {}).get(pid)
+        fl = teams().get(str(b.get("floor"))) or sys.exit(json.dumps({"error": "no such floor"}))
+        lead = fl["team"].get("lead"); agent = b.get("agent")
+        if agent:   # agents only talk when both owners agreed and neither floor is switched off
+            if not p or p.get("status") != "on": sys.exit(json.dumps({"error": "the buildings are not connected"}))
+            if not ((p.get("my") or {}).get(str(fl["port"])) or {}).get("on", True): sys.exit(json.dumps({"error": "that floor is not taking messages from your building"}))
+        who = f'{b.get("name") or "Someone"} · {b.get("building") or (p or {}).get("name") or "another building"}'
+        text = " ".join(str(b.get("text") or "").split())
+        if not text: sys.exit(json.dumps({"error": "empty message"}))
+        r = ask("external", "--to", lead, "--name", who, "--peer", pid, "--ref", json.dumps({"agent": agent or "", "fromPort": b.get("fromPort")}), *(["--body", text] if len(text) > 140 else []), text[:140])
+        if r.returncode: sys.exit(json.dumps({"error": (r.stderr or r.stdout).strip()[:200]}))
+        visit({"kind": "in", "floor": int(fl["port"]), "name": b.get("name") or "Visitor", "color": b.get("color") or "#94a3b8", "from": " · ".join(x for x in [b.get("building"), b.get("fromFloor")] if x),
+               "to": lead, "text": text[:160], "until": int(time.time() * 1000) + 12000})
+        print(json.dumps({"ok": True, "id": r.stdout.strip().split("\n")[-1], "lead": lead}))
+    elif kind == "answer":   # the lead over there answered something that left from here
+        ref = b.get("ref") or {}; who = b.get("lead") or "The lead"; nm = (load(F, {}).get("peers", {}).get(pid) or {}).get("name", "the other building")
+        msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
+        if ref.get("agent") and hc("send", ref["agent"], msg).returncode == 0: print(json.dumps({"ok": True})); sys.exit()
+        ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])
+        print(json.dumps({"ok": True}))
+    else: sys.exit(json.dumps({"error": "unknown"}))
+elif c == "answered":   # called by team-ask when one of ours answers an external request; JSON of the item on stdin
+    x = json.load(sys.stdin); e = x.get("ext") or {}
+    if e.get("connect"):
+        v = "accept" if str(x.get("answer", "")).strip().lower().startswith("acc") else "decline"
+        print(subprocess.run([sys.argv[0], v, e["peer"]], capture_output=True, text=True).stdout.strip()); sys.exit()
+    r = call(e.get("peer"), "/peer/answer", {"ref": e.get("ref") or {}, "text": x.get("answer", ""), "title": x.get("title", ""), "lead": x.get("answeredBy", "")})
+    print("sent back" if r.get("ok") else "could not be sent back now: " + str(r.get("error")))
+else: print(__doc__)
