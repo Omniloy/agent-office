@@ -362,9 +362,21 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   // (canvas coordinates) and a click on the wall is matched against them.
   let boardHits = [], boardModel = null, boardLast = null;
   // Columns with more cards than fit scroll: the wheel over the column, or a finger dragged along it (see boardColAt).
-  const boardScroll = new Map(); let boardCols = [], redrawBoard = () => {};
-  const scrollOf = (id, len, shown) => { const o = Math.max(0, Math.min(Math.max(0, len - shown), boardScroll.get(id) || 0)); boardScroll.set(id, o); return o; };
-  const moreText = (up, down) => [up > 0 ? `↑ ${up}` : '', down > 0 ? `↓ ${down} more` : ''].filter(Boolean).join('    ');
+  // boardScroll: where each column is going (in cards); boardAt: where it is drawn right now, gliding there (tickBoard).
+  const boardScroll = new Map(), boardAt = new Map(); let boardCols = [], redrawBoard = () => {}, boardT = 0;
+  const scrollOf = (id, len, shown) => {
+    const max = Math.max(0, len - shown), t = Math.max(0, Math.min(max, boardScroll.get(id) || 0)); boardScroll.set(id, t);
+    const d = Math.max(0, Math.min(max, boardAt.has(id) ? boardAt.get(id) : t)); boardAt.set(id, d); return d;
+  };
+  function tickBoard() {
+    const now = performance.now(), dt = Math.min(0.1, (now - boardT) / 1000); boardT = now; let moved = false;
+    for (const c of boardCols) {
+      const t = boardScroll.get(c.id) || 0, d = boardAt.has(c.id) ? boardAt.get(c.id) : t;
+      if (Math.abs(t - d) > 0.004) { boardAt.set(c.id, Math.abs(t - d) < 0.012 ? t : d + (t - d) * Math.min(1, dt * 12)); moved = true; }
+    }
+    if (moved) redrawBoard();
+  }
+  const moreText = (up, down) => [(up = Math.round(up)) > 0 ? `↑ ${up}` : '', (down = Math.round(down)) > 0 ? `↓ ${down} more` : ''].filter(Boolean).join('    ');
   function drawBoard(agents, jira) {
     redrawBoard = () => drawBoard(agents, jira); boardCols = [];
     boardLast = [agents, jira];
@@ -406,10 +418,12 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       boardHits.push({ x, y, w, h: 102, id: `card:${t.key}` });
     };
     if (M.flat) { // finished cards: no holder any more, so one plain grid
-      const cols = 5, cw = (W - 88 - (cols - 1) * 16) / cols, rows = 6, max = cols * rows - (M.flat.length > cols * rows ? 1 : 0);
-      const rowsAll = rows + Math.max(0, Math.ceil((M.flat.length - max) / cols)), off = scrollOf('@flat', rowsAll, rows) * cols; boardCols.push({ id: '@flat', x: 44, y: 100, w: W - 88, h: H - 100, len: rowsAll, shown: rows });
-      M.flat.slice(off, off + max).forEach((t, i) => card(t, 44 + (i % cols) * (cw + 16), 100 + Math.floor(i / cols) * 114, cw, 'done'));
-      if (M.flat.length > max) { g.fillStyle = '#7f8aa3'; g.font = '24px system-ui'; g.fillText(moreText(off, M.flat.length - max - off), 44 + (cols - 1) * (cw + 16) + 14, 100 + (rows - 1) * 114 + 50); }
+      const cols = 5, cw = (W - 88 - (cols - 1) * 16) / cols, rows = 6, max = cols * rows;
+      const rowsAll = Math.ceil(M.flat.length / cols), offR = scrollOf('@flat', rowsAll, rows), o0 = Math.floor(offR), fr = offR - o0, off = Math.round(offR) * cols; boardCols.push({ id: '@flat', x: 44, y: 100, w: W - 88, h: H - 100, len: rowsAll, shown: rows });
+      g.save(); g.beginPath(); g.rect(0, 92, W, rows * 114 + 4); g.clip(); // rows slide behind the grid's own window
+      M.flat.slice(o0 * cols, o0 * cols + max + cols).forEach((t, i) => card(t, 44 + (i % cols) * (cw + 16), 100 + (Math.floor(i / cols) - fr) * 114, cw, 'done'));
+      g.restore();
+      if (M.flat.length > max) { g.fillStyle = '#7f8aa3'; g.font = '24px system-ui'; g.textAlign = 'right'; g.fillText(moreText(off, M.flat.length - max - off), W - 44, 57); g.textAlign = 'left'; }
       if (!M.flat.length) { g.fillStyle = '#5d6780'; g.font = '26px system-ui'; g.fillText('Nothing finished in this period.', 44, 150); }
       board.tex.needsUpdate = true; return;
     }
@@ -433,7 +447,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
         g.fillText(fit(jira && jira.error ? 'Jira not reachable' : M.show ? 'None' : 'No open cards', cw - 32), x + 16, y0 + 102);
       }
       const off = scrollOf(a.slug, tickets.length, shown); boardCols.push({ id: a.slug, x, y: y0, w: cw, h: bh, len: tickets.length, shown });
-      tickets.slice(off, off + shown).forEach((t, k) => card(t, x + 12, y0 + 80 + k * 114, cw - 24, (M.tone && M.tone[t.key]) || 'idle'));
+      const o0 = Math.floor(off), fr = off - o0;
+      g.save(); g.beginPath(); g.rect(x, y0 + 72, cw, shown * 114 - 2); g.clip(); // cards slide behind the column's own window
+      tickets.slice(o0, o0 + shown + 1).forEach((t, k) => card(t, x + 12, y0 + 80 + (k - fr) * 114, cw - 24, (M.tone && M.tone[t.key]) || 'idle'));
+      g.restore();
       if (tickets.length > shown) { g.fillStyle = '#7f8aa3'; g.font = '20px system-ui'; g.fillText(moreText(off, tickets.length - shown - off), x + 16, y0 + bh - 20); }
       g.restore();
     });
@@ -1129,7 +1146,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const x = hit.uv.x * 1600, y = (1 - hit.uv.y) * 800;
     return boardCols.find((c) => c.len > c.shown && x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) || null;
   }
-  const boardStep = (c, n) => { const o = scrollOf(c.id, c.len, c.shown), v = Math.max(0, Math.min(c.len - c.shown, o + n)); if (v !== o) { boardScroll.set(c.id, v); redrawBoard(); } };
+  const boardStep = (c, n, snap) => { const v = Math.max(0, Math.min(c.len - c.shown, (boardScroll.get(c.id) || 0) + n)); boardScroll.set(c.id, snap ? Math.round(v) : v); };
   let wheelAcc = 0, boardDrag = null;
   sceneEl.addEventListener('wheel', (e) => { // over a full column the wheel moves its cards instead of the zoom
     const c = boardColAt(e); if (!c) return;
@@ -1143,8 +1160,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const c = boardColAt(e); if (!c) return;
     boardDrag = { c, y: e.clientY, id: e.pointerId }; controls.enabled = false;
   }, true);
-  addEventListener('pointermove', (e) => { if (!boardDrag || e.pointerId !== boardDrag.id) return; const n = Math.trunc((boardDrag.y - e.clientY) / 30); if (n) { boardDrag.y -= n * 30; boardStep(boardDrag.c, n); } }, true);
-  const endBoardDrag = (e) => { if (boardDrag && e.pointerId === boardDrag.id) { boardDrag = null; controls.enabled = true; } };
+  addEventListener('pointermove', (e) => { if (!boardDrag || e.pointerId !== boardDrag.id) return; boardStep(boardDrag.c, (boardDrag.y - e.clientY) / 34); boardDrag.y = e.clientY; }, true); // the cards follow the finger
+  const endBoardDrag = (e) => { if (boardDrag && e.pointerId === boardDrag.id) { boardStep(boardDrag.c, 0, true); boardDrag = null; controls.enabled = true; } }; // let go: settle on a whole card
   addEventListener('pointerup', endBoardDrag, true); addEventListener('pointercancel', endBoardDrag, true);
   function pick(ev) {
     const r = renderer.domElement.getBoundingClientRect();
@@ -1297,6 +1314,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     controls.update();
     renderer.render(scene, camera);
     labels.render(scene, camera);
+    tickBoard();
     tidyLabels();
   };
   renderer.setAnimationLoop(frame);
