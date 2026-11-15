@@ -365,7 +365,12 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format }) {
   const daysText = (d) => (d === null ? 'never' : d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`);
   // Wall board: every client, grouped by state. boardRects remembers where each card is, so a click can open that client.
   const boardRects = [];
+  // Columns with more cards than fit scroll: the wheel over the column, or a finger dragged along it (see boardColAt).
+  const boardScroll = new Map(); let boardCols = [], redrawBoard = () => {};
+  const scrollOf = (id, len, shown) => { const o = Math.max(0, Math.min(Math.max(0, len - shown), boardScroll.get(id) || 0)); boardScroll.set(id, o); return o; };
+  const moreText = (up, down) => [up > 0 ? `↑ ${up}` : '', down > 0 ? `↓ ${down} more` : ''].filter(Boolean).join('    ');
   function drawBoard(data) {
+    redrawBoard = () => drawBoard(data); boardCols = [];
     const g = board.ctx, W = 1600, H = 800, list = (data && data.clients) || [];
     g.textAlign = 'left'; g.textBaseline = 'middle';
     g.fillStyle = '#0f1c1e'; g.fillRect(0, 0, W, H);
@@ -391,7 +396,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format }) {
       g.fillStyle = '#fff'; g.font = '600 28px system-ui';
       g.fillText(STATE_NAME[sName], x + 18, 136);
       g.textAlign = 'right'; g.fillText(String(items.length), x + cw - 18, 136); g.textAlign = 'left';
-      items.slice(0, perCol).forEach((c, k) => {
+      const off = scrollOf(sName, items.length, perCol); boardCols.push({ id: sName, x, y: 104, w: cw, h: H - 140, len: items.length, shown: perCol });
+      items.slice(off, off + perCol).forEach((c, k) => {
         const y = 180 + k * 112, d = daysSince(c);
         g.fillStyle = '#f2f7f4'; g.beginPath(); g.roundRect(x + 12, y, cw - 24, 102, 10); g.fill();
         boardRects.push({ x: x + 12, y, w: cw - 24, h: 102, id: c.id });
@@ -402,7 +408,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format }) {
         g.fillStyle = d === null || d > 14 ? '#b91c1c' : '#56706d'; g.font = '20px system-ui';
         g.fillText(d === null ? 'no contact yet' : d === 0 ? 'today' : `${daysText(d)} ago`, x + 32, y + 82);
       });
-      if (items.length > perCol) { g.fillStyle = '#7f9a97'; g.font = '22px system-ui'; g.fillText(`+${items.length - perCol} more`, x + 18, H - 54); }
+      if (items.length > perCol) { g.fillStyle = '#7f9a97'; g.font = '22px system-ui'; g.fillText(moreText(off, items.length - perCol - off), x + 18, H - 54); }
     });
     board.tex.needsUpdate = true;
   }
@@ -1080,6 +1086,33 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format }) {
     flyTo(new THREE.Vector3(st.x + 3.4, 5.4, 4.6 + st.z), new THREE.Vector3(st.x + 1.1, 2.3 - st.row * 0.5, -6.4 + st.z));
   }
   const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+  // Which board column is under the pointer, when it has more cards than it shows.
+  function boardColAt(ev) {
+    const r = renderer.domElement.getBoundingClientRect();
+    ptr.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ptr, camera);
+    const hit = ray.intersectObjects(pickables, false)[0];
+    if (!hit || hit.object !== boardMesh || !hit.uv) return null;
+    const x = hit.uv.x * 1600, y = (1 - hit.uv.y) * 800;
+    return boardCols.find((c) => c.len > c.shown && x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) || null;
+  }
+  const boardStep = (c, n) => { const o = scrollOf(c.id, c.len, c.shown), v = Math.max(0, Math.min(c.len - c.shown, o + n)); if (v !== o) { boardScroll.set(c.id, v); redrawBoard(); } };
+  let wheelAcc = 0, boardDrag = null;
+  sceneEl.addEventListener('wheel', (e) => { // over a full column the wheel moves its cards instead of the zoom
+    const c = boardColAt(e); if (!c) return;
+    e.preventDefault(); e.stopPropagation();
+    wheelAcc += e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY; const n = Math.trunc(wheelAcc / 50);
+    if (n) { wheelAcc -= n * 50; boardStep(c, n); }
+  }, { capture: true, passive: false });
+  sceneEl.addEventListener('pointerdown', (e) => { // a finger on a full column drags its cards instead of turning the room
+    if (boardDrag) { boardDrag = null; controls.enabled = true; return; } // a second finger: back to moving the room
+    if (e.pointerType !== 'touch') return;
+    const c = boardColAt(e); if (!c) return;
+    boardDrag = { c, y: e.clientY, id: e.pointerId }; controls.enabled = false;
+  }, true);
+  addEventListener('pointermove', (e) => { if (!boardDrag || e.pointerId !== boardDrag.id) return; const n = Math.trunc((boardDrag.y - e.clientY) / 30); if (n) { boardDrag.y -= n * 30; boardStep(boardDrag.c, n); } }, true);
+  const endBoardDrag = (e) => { if (boardDrag && e.pointerId === boardDrag.id) { boardDrag = null; controls.enabled = true; } };
+  addEventListener('pointerup', endBoardDrag, true); addEventListener('pointercancel', endBoardDrag, true);
   function pick(ev) {
     const r = renderer.domElement.getBoundingClientRect();
     ptr.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);

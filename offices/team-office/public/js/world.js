@@ -361,7 +361,12 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   // The wall board. Cards and filter chips are clickable: every rectangle drawn is kept in boardHits
   // (canvas coordinates) and a click on the wall is matched against them.
   let boardHits = [], boardModel = null, boardLast = null;
+  // Columns with more cards than fit scroll: the wheel over the column, or a finger dragged along it (see boardColAt).
+  const boardScroll = new Map(); let boardCols = [], redrawBoard = () => {};
+  const scrollOf = (id, len, shown) => { const o = Math.max(0, Math.min(Math.max(0, len - shown), boardScroll.get(id) || 0)); boardScroll.set(id, o); return o; };
+  const moreText = (up, down) => [up > 0 ? `↑ ${up}` : '', down > 0 ? `↓ ${down} more` : ''].filter(Boolean).join('    ');
   function drawBoard(agents, jira) {
+    redrawBoard = () => drawBoard(agents, jira); boardCols = [];
     boardLast = [agents, jira];
     const g = board.ctx, W = 1600, H = 800, M = boardModel || {};
     boardHits = [];
@@ -402,8 +407,9 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     };
     if (M.flat) { // finished cards: no holder any more, so one plain grid
       const cols = 5, cw = (W - 88 - (cols - 1) * 16) / cols, rows = 6, max = cols * rows - (M.flat.length > cols * rows ? 1 : 0);
-      M.flat.slice(0, max).forEach((t, i) => card(t, 44 + (i % cols) * (cw + 16), 100 + Math.floor(i / cols) * 114, cw, 'done'));
-      if (M.flat.length > max) { g.fillStyle = '#7f8aa3'; g.font = '24px system-ui'; g.fillText(`+${M.flat.length - max} more`, 44 + (cols - 1) * (cw + 16) + 14, 100 + (rows - 1) * 114 + 50); }
+      const rowsAll = rows + Math.max(0, Math.ceil((M.flat.length - max) / cols)), off = scrollOf('@flat', rowsAll, rows) * cols; boardCols.push({ id: '@flat', x: 44, y: 100, w: W - 88, h: H - 100, len: rowsAll, shown: rows });
+      M.flat.slice(off, off + max).forEach((t, i) => card(t, 44 + (i % cols) * (cw + 16), 100 + Math.floor(i / cols) * 114, cw, 'done'));
+      if (M.flat.length > max) { g.fillStyle = '#7f8aa3'; g.font = '24px system-ui'; g.fillText(moreText(off, M.flat.length - max - off), 44 + (cols - 1) * (cw + 16) + 14, 100 + (rows - 1) * 114 + 50); }
       if (!M.flat.length) { g.fillStyle = '#5d6780'; g.font = '26px system-ui'; g.fillText('Nothing finished in this period.', 44, 150); }
       board.tex.needsUpdate = true; return;
     }
@@ -426,8 +432,9 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
         g.fillStyle = '#5d6780'; g.font = '22px system-ui';
         g.fillText(fit(jira && jira.error ? 'Jira not reachable' : M.show ? 'None' : 'No open cards', cw - 32), x + 16, y0 + 102);
       }
-      tickets.slice(0, shown).forEach((t, k) => card(t, x + 12, y0 + 80 + k * 114, cw - 24, (M.tone && M.tone[t.key]) || 'idle'));
-      if (tickets.length > shown) { g.fillStyle = '#7f8aa3'; g.font = '20px system-ui'; g.fillText(`+${tickets.length - shown} more`, x + 16, y0 + bh - 20); }
+      const off = scrollOf(a.slug, tickets.length, shown); boardCols.push({ id: a.slug, x, y: y0, w: cw, h: bh, len: tickets.length, shown });
+      tickets.slice(off, off + shown).forEach((t, k) => card(t, x + 12, y0 + 80 + k * 114, cw - 24, (M.tone && M.tone[t.key]) || 'idle'));
+      if (tickets.length > shown) { g.fillStyle = '#7f8aa3'; g.font = '20px system-ui'; g.fillText(moreText(off, tickets.length - shown - off), x + 16, y0 + bh - 20); }
       g.restore();
     });
     board.tex.needsUpdate = true;
@@ -1112,6 +1119,33 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     flyTo(new THREE.Vector3(st.x + 3.4, 5.4, 4.6 + st.z), new THREE.Vector3(st.x + 1.1, 2.3 - st.row * 0.5, -6.4 + st.z));
   }
   const ray = new THREE.Raycaster(), ptr = new THREE.Vector2();
+  // Which board column is under the pointer, when it has more cards than it shows.
+  function boardColAt(ev) {
+    const r = renderer.domElement.getBoundingClientRect();
+    ptr.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ptr, camera);
+    const hit = ray.intersectObjects(pickables, false)[0];
+    if (!hit || hit.object !== boardMesh || !hit.uv) return null;
+    const x = hit.uv.x * 1600, y = (1 - hit.uv.y) * 800;
+    return boardCols.find((c) => c.len > c.shown && x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) || null;
+  }
+  const boardStep = (c, n) => { const o = scrollOf(c.id, c.len, c.shown), v = Math.max(0, Math.min(c.len - c.shown, o + n)); if (v !== o) { boardScroll.set(c.id, v); redrawBoard(); } };
+  let wheelAcc = 0, boardDrag = null;
+  sceneEl.addEventListener('wheel', (e) => { // over a full column the wheel moves its cards instead of the zoom
+    const c = boardColAt(e); if (!c) return;
+    e.preventDefault(); e.stopPropagation();
+    wheelAcc += e.deltaMode === 1 ? e.deltaY * 30 : e.deltaY; const n = Math.trunc(wheelAcc / 50);
+    if (n) { wheelAcc -= n * 50; boardStep(c, n); }
+  }, { capture: true, passive: false });
+  sceneEl.addEventListener('pointerdown', (e) => { // a finger on a full column drags its cards instead of turning the room
+    if (boardDrag) { boardDrag = null; controls.enabled = true; return; } // a second finger: back to moving the room
+    if (e.pointerType !== 'touch') return;
+    const c = boardColAt(e); if (!c) return;
+    boardDrag = { c, y: e.clientY, id: e.pointerId }; controls.enabled = false;
+  }, true);
+  addEventListener('pointermove', (e) => { if (!boardDrag || e.pointerId !== boardDrag.id) return; const n = Math.trunc((boardDrag.y - e.clientY) / 30); if (n) { boardDrag.y -= n * 30; boardStep(boardDrag.c, n); } }, true);
+  const endBoardDrag = (e) => { if (boardDrag && e.pointerId === boardDrag.id) { boardDrag = null; controls.enabled = true; } };
+  addEventListener('pointerup', endBoardDrag, true); addEventListener('pointercancel', endBoardDrag, true);
   function pick(ev) {
     const r = renderer.domElement.getBoundingClientRect();
     ptr.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
