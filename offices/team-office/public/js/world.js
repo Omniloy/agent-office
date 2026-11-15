@@ -1155,13 +1155,13 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     if (n) { wheelAcc -= n * 50; boardStep(c, n); }
   }, { capture: true, passive: false });
   sceneEl.addEventListener('pointerdown', (e) => { // a finger on a full column drags its cards instead of turning the room
-    if (boardDrag) { boardDrag = null; controls.enabled = true; return; } // a second finger: back to moving the room
+    if (boardDrag) { controls.enabled = boardDrag.was; boardDrag = null; return; } // a second finger: back to moving the room
     if (e.pointerType !== 'touch') return;
     const c = boardColAt(e); if (!c) return;
-    boardDrag = { c, y: e.clientY, id: e.pointerId }; controls.enabled = false;
+    boardDrag = { c, y: e.clientY, id: e.pointerId, was: controls.enabled }; controls.enabled = false; // put back as it was: the board view keeps the room still
   }, true);
   addEventListener('pointermove', (e) => { if (!boardDrag || e.pointerId !== boardDrag.id) return; boardStep(boardDrag.c, (boardDrag.y - e.clientY) / 34); boardDrag.y = e.clientY; }, true); // the cards follow the finger
-  const endBoardDrag = (e) => { if (boardDrag && e.pointerId === boardDrag.id) { boardStep(boardDrag.c, 0, true); boardDrag = null; controls.enabled = true; } }; // let go: settle on a whole card
+  const endBoardDrag = (e) => { if (boardDrag && e.pointerId === boardDrag.id) { boardStep(boardDrag.c, 0, true); controls.enabled = boardDrag.was; boardDrag = null; } }; // let go: settle on a whole card
   addEventListener('pointerup', endBoardDrag, true); addEventListener('pointercancel', endBoardDrag, true);
   function pick(ev) {
     const r = renderer.domElement.getBoundingClientRect();
@@ -1195,7 +1195,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     fingers.delete(e.pointerId);
     if (multi || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > (TOUCH ? 14 : 6)) return;
     if (TOUCH && selected && SPOTS[selected] && pick(e) !== selected) { focus(null); return onSelect(null); } // off the board: back to the view from before
-    const slug = pick(e), on = slug === '@board' ? boardTarget() : null;
+    const slug = pick(e), on = slug === '@board' && selected === '@board' ? boardTarget() : null; // a card opens only once you are at the board: the first tap goes there
     if (on && onBoard) return onBoard(on);
     onSelect(slug);
   });
@@ -1220,7 +1220,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     el.addEventListener('pointermove', (e) => {
       const p = pts.get(e.pointerId); if (!p) return;
       const dx = e.clientX - p[0], dy = e.clientY - p[1]; p[0] = e.clientX; p[1] = e.clientY;
-      if (!TOUCH || !selected || !SPOTS[selected]) return;
+      if (!TOUCH || !selected || !SPOTS[selected] || boardDrag) return; // a finger moving a column's cards does not slide the view too
       tween = null;
       const dir = controls.target.clone().sub(camera.position), dist = dir.length(); dir.normalize();
       if (pts.size === 1) {
