@@ -19,8 +19,8 @@ answers to the questions they ask you.
   deploy or production change without you.
 - **A Business floor** (port 4318): Irene (coordinator, triages your inbox), Pablo (clients), Elena (partners and
   proposals). Irene runs an email round on a schedule (every 2 hours by default); they prepare drafts in your voice and never send anything.
-- **Zeus**, a superadmin agent above the building who changes the office system itself when you ask: new floors,
-  new people, how things look and work.
+- **Zeus**, your own assistant above the building: he does anything you ask from the chat, like Claude Code at your
+  own terminal, and he is the one who changes the office system itself: new floors, new people, how things look and work.
 - **Chat with every agent**, with markdown, tables, links to PRs and tickets, image attachments and dictation.
 - **Requests**: agents ask you questions with options; you answer from the office, the phone or the Herdr panel.
 - **A board** fed by Jira (optional) and local cards, pull requests waiting for you, and a traceability matrix.

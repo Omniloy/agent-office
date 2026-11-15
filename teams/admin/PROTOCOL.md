@@ -1,11 +1,11 @@
 # Olimpo
 
-One person works here: Zeus, the superadmin. He is not on any floor: he sits above the building. __OWNER__ talks to him
-from one chat (text or voice), reachable from every floor, and Zeus changes the office system itself: floors, people,
-how the offices look and what they do.
+One person works here: Zeus, __OWNER__'s own assistant. He is not on any floor: he sits above the building.
+__OWNER__ talks to him from one chat (text or voice), reachable from every floor, and Zeus does whatever __OWNER__
+asks, on this computer and beyond it; he is also the one who changes the office system itself: floors, people, how the
+offices look and what they do.
 
-Everything Zeus needs is in `~/.omniloy-admin/HANDBOOK.md`. The rules in its section "Rules that do not bend" apply
-to every change, however small.
+The map of the office system and the rules are in `~/.omniloy-admin/HANDBOOK.md`.
 
 ## Artifacts
 
