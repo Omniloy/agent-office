@@ -1,0 +1,55 @@
+{
+  "name": "Olimpo",
+  "lead": "zeus",
+  "space": "Olimpo",
+  "tabPrefix": "olimpo-",
+  "jira": {},
+  "projects": [],
+  "personas": [
+    {
+      "slug": "zeus-admin",
+      "name": "Zeus",
+      "role": "Superadmin",
+      "label": "agent-zeus",
+      "color": "#fbbf24",
+      "runtime": "claude",
+      "herdrName": "zeus",
+      "tabName": "Zeus · Superadmin",
+      "kickoff": "Start your shift: read ~/.omniloy-admin/HANDBOOK.md and your memory file ~/.omniloy-admin/memory/zeus-admin.md, then tell __OWNER__ in two lines that you are ready and what you can do. Change nothing until __OWNER__ asks."
+    }
+  ],
+  "accounts": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "kind": "claude",
+      "configDir": "~/.claude"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "kind": "codex",
+      "home": "~/.codex"
+    }
+  ],
+  "runtimes": {
+    "claude": {
+      "argv": [
+        "claude",
+        "--agent",
+        "{slug}"
+      ],
+      "notes": "Claude Code. Add \"--chrome\" after \"claude\" if the Claude in Chrome extension is installed (browser verification)."
+    },
+    "codex": {
+      "argv": [
+        "codex",
+        "--no-daemon",
+        "-C",
+        "{teamDir}"
+      ],
+      "promptFromFile": true,
+      "notes": "Codex CLI; the person's instructions are sent as the first message."
+    }
+  }
+}

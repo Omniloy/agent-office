@@ -1,0 +1,78 @@
+{
+  "name": "Business Team",
+  "lead": "irene",
+  "space": "Business Team",
+  "tabPrefix": "biz-",
+  "jira": {},
+  "projects": [],
+  "personas": [
+    {
+      "slug": "irene-coordinator",
+      "name": "Irene Castaño",
+      "role": "Coordinator",
+      "label": "agent-irene",
+      "color": "#7c3aed",
+      "runtime": "claude",
+      "herdrName": "irene",
+      "tabName": "Irene · Coordinator",
+      "kickoff": "Start your shift: read ~/.omniloy-biz/PROTOCOL.md, team.json and your memory file. Then set up your recurring email round with the loop skill: /loop 2h run the email-triaje skill on __OWNER__'s inbox following your role file, then check team-ask ls --to irene. Do the first round now. Never send email: drafts only."
+    },
+    {
+      "slug": "pablo-clients",
+      "name": "Pablo Rivas",
+      "role": "Clients",
+      "label": "agent-pablo",
+      "color": "#0891b2",
+      "runtime": "claude",
+      "herdrName": "pablo",
+      "tabName": "Pablo · Clients",
+      "kickoff": "Start your shift: read ~/.omniloy-biz/PROTOCOL.md, team.json and your memory file. If ~/.omniloy-biz/clients.json has no clients yet, your first job is to build the client register (read-only research, see your role file) and leave Irene a note with what you could not confirm. Don't email or message any client."
+    },
+    {
+      "slug": "elena-partners",
+      "name": "Elena Ferrer",
+      "role": "Partners",
+      "label": "agent-elena",
+      "color": "#ea580c",
+      "runtime": "claude",
+      "herdrName": "elena",
+      "tabName": "Elena · Partners",
+      "kickoff": "Start your shift: read ~/.omniloy-biz/PROTOCOL.md, team.json and your memory file. First job: build your picture of everything open with __OWNER__'s key partners (read-only research, see your role file), write it to your memory file, and leave Irene a note with the open items and what needs __OWNER__. Don't email or message anyone."
+    }
+  ],
+  "accounts": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "kind": "claude",
+      "configDir": "~/.claude"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "kind": "codex",
+      "home": "~/.codex"
+    }
+  ],
+  "runtimes": {
+    "claude": {
+      "argv": [
+        "claude",
+        "--agent",
+        "{slug}"
+      ],
+      "notes": "Claude Code. Add \"--chrome\" after \"claude\" if the Claude in Chrome extension is installed (browser verification)."
+    },
+    "codex": {
+      "argv": [
+        "codex",
+        "--no-daemon",
+        "-C",
+        "{teamDir}"
+      ],
+      "promptFromFile": true,
+      "notes": "Codex CLI; the person's instructions are sent as the first message."
+    }
+  },
+  "gmailAccount": ""
+}

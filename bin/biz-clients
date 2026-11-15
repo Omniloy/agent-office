@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""biz-clients: the client register of the business team (~/.omniloy-biz/clients.json). The 3D office reads it.
+  biz-clients ls [--state active] [--stale 14]        one line per client (--stale N: no contact in N+ days)
+  biz-clients show <id>
+  biz-clients add <id> "Name" [state=lead] [products=ProductA,ProductB] [owner=..] [health=green]
+  biz-clients set <id> [name=..] [state=..] [health=green|amber|red] [products=a,b] [owner=..] [nextStep=..] [waitingOn=us|client|] [notes=..]
+  biz-clients integration <id> "Integration name" <live|in-progress|blocked|planned> ["note"]     (status 'remove' deletes it)
+  biz-clients contact <id> <YYYY-MM-DD> <channel> <in|out> "who" "one-line summary"      records a communication; keeps the latest as lastContact
+  biz-clients person <id> "Full name" [role=..] [org=..] [channels=email,whatsapp] [email=..] [phone=..] [note=..]     a person involved at the client; run again to update; `person <id> "Full name" remove` deletes
+  biz-clients rm <id>
+States: lead, pilot, onboarding, active, at-risk, paused, churned. Record only what a source shows (email, calendar, Slack, Jira, meeting notes); put the source in the summary or notes. Never guess."""
+import sys, os, json, datetime, fcntl
+F = os.path.expanduser("~/.omniloy-biz/clients.json")
+STATES = ["lead","pilot","onboarding","active","at-risk","paused","churned"]
+CHANNELS = ["email","whatsapp","phone","slack","teams","meeting"]   # how we talk to a person; list only what a source shows
+def load():
+    try: return json.load(open(F))
+    except Exception: return {"updated": "", "clients": []}
+def save(d):
+    d["updated"] = datetime.datetime.now().isoformat(timespec="seconds"); tmp = F + ".tmp"
+    json.dump(d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, F)
+def kv(args): return {a.split("=",1)[0]: a.split("=",1)[1] for a in args if "=" in a}
+def days(c):
+    try: return (datetime.date.today() - datetime.date.fromisoformat(c["lastContact"]["date"][:10])).days
+    except Exception: return None
+def get(d, i): return next((c for c in d["clients"] if c["id"] == i), None) or sys.exit(f"no client '{i}'")
+def apply(c, f):
+    for k, v in f.items():
+        if k == "state" and v not in STATES: sys.exit(f"state must be one of {STATES}")
+        if k == "health" and v not in ("green","amber","red"): sys.exit("health must be green, amber or red")
+        if k == "waitingOn" and v not in ("us","client",""): sys.exit("waitingOn must be us, client or empty")
+        if k == "products": v = [x.strip() for x in v.split(",") if x.strip()]
+        if k not in ("name","state","health","products","owner","nextStep","waitingOn","notes"): sys.exit(f"unknown field {k}")
+        c[k] = v
+a = sys.argv[1:]
+if not a or a[0] in ("-h","--help"): print(__doc__); sys.exit()
+lock = open(F + ".lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX); d = load(); c0 = a[0]
+if c0 == "ls":
+    opt = dict(zip(a[1::2], a[2::2])); rows = d["clients"]
+    if "--state" in opt: rows = [c for c in rows if c["state"] == opt["--state"]]
+    if "--stale" in opt: rows = [c for c in rows if days(c) is None or days(c) >= int(opt["--stale"])]
+    for c in sorted(rows, key=lambda c: -(days(c) if days(c) is not None else 9999)):
+        n = days(c); ints = ", ".join(f'{i["name"]}:{i["status"]}' for i in c.get("integrations", []))
+        print(f'{c["id"]:16} {c["state"]:10} {c.get("health","-"):6} last contact: {"never recorded" if n is None else str(n)+"d ago"} | {ints or "no integrations"} | next: {c.get("nextStep","") or "-"}')
+    if not rows: print("no clients")
+elif c0 == "show": print(json.dumps(get(d, a[1]), indent=1, ensure_ascii=False))
+elif c0 == "add":
+    if any(c["id"] == a[1] for c in d["clients"]): sys.exit("id already exists")
+    c = {"id": a[1], "name": a[2], "state": "lead", "products": [], "integrations": [], "owner": "", "lastContact": None, "contacts": [], "nextStep": "", "waitingOn": "", "health": "green", "notes": ""}
+    apply(c, kv(a[3:])); d["clients"].append(c); save(d); print("added", a[1])
+elif c0 == "set": apply(get(d, a[1]), kv(a[2:])); save(d); print("ok")
+elif c0 == "integration":
+    c = get(d, a[1]); c["integrations"] = [i for i in c.get("integrations", []) if i["name"] != a[2]]
+    if a[3] != "remove":
+        if a[3] not in ("live","in-progress","blocked","planned"): sys.exit("status must be live, in-progress, blocked or planned")
+        c["integrations"].append({"name": a[2], "status": a[3], "note": a[4] if len(a) > 4 else ""})
+    save(d); print("ok")
+elif c0 == "contact":
+    c = get(d, a[1]); datetime.date.fromisoformat(a[2][:10])
+    if a[4] not in ("in","out"): sys.exit("direction must be in or out")
+    e = {"date": a[2], "channel": a[3], "direction": a[4], "who": a[5], "summary": a[6]}
+    c.setdefault("contacts", []).append(e); c["contacts"] = sorted(c["contacts"], key=lambda x: x["date"])[-30:]; c["lastContact"] = c["contacts"][-1]
+    save(d); print("ok; last contact is now", c["lastContact"]["date"])
+elif c0 == "person":
+    c = get(d, a[1]); ppl = c.setdefault("people", []); cur = next((x for x in ppl if x["name"] == a[2]), None)
+    if len(a) > 3 and a[3] == "remove": c["people"] = [x for x in ppl if x["name"] != a[2]]
+    else:
+        if cur is None: cur = {"name": a[2], "role": "", "org": "", "channels": [], "email": "", "phone": "", "note": ""}; ppl.append(cur)
+        for k, v in kv(a[3:]).items():
+            if k not in ("role","org","channels","email","phone","note"): sys.exit(f"unknown field {k}")
+            if k == "channels":
+                v = [x.strip().lower() for x in v.split(",") if x.strip()]
+                bad = [x for x in v if x not in CHANNELS]
+                if bad: sys.exit(f"channels must be among {CHANNELS}")
+            cur[k] = v
+    save(d); print("ok;", len(c["people"]), "people on", a[1])
+elif c0 == "rm": d["clients"] = [c for c in d["clients"] if c["id"] != a[1]]; save(d); print("removed")
+else: print(__doc__); sys.exit(1)

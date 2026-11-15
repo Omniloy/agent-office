@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""team-ask: messages and requests inside the team, and from the team to __OWNER__.
+Rule: messages (notes, FYIs, status) go to your team lead (dev: Lucía, business: Irene), never to __OWNER__. A request that needs
+__OWNER__'s own answer can be opened directly to him with --to __OWNER_ID__; anything Lucía can
+decide goes to her.
+Daniel, Marta, Kenji:
+  team-ask note --from <you> "Short message" [--body ..] [--ticket KEY]     FYI: always goes to Lucía
+  team-ask request --from <you> "Short question" [--body ..] [--ticket KEY] [--options "A,B"]
+                                     a question for Lucía (she is nudged). Prints its id.
+  team-ask request --from <you> --to __OWNER_ID__ "Short question" [--options "A,B"] ...
+                                     a request straight to __OWNER__: only when it needs him
+  team-ask ls --from <you> [--all]   yours, with answers
+Lucía:
+  team-ask ls --to lucia             what the team left for you
+  team-ask answer <id> "text" --as lucia     answer a teammate yourself
+  team-ask escalate <id> ["Rewritten short question"] [--body ..] [--options "A,B"]
+                                     pass a teammate's request on to __OWNER__ (keeps who asked)
+  team-ask request|note --from lucia ...     your own request/message to __OWNER__
+  team-ask read <id> | cancel <id>
+__OWNER__ (the Herdr Requests panel and the 3D office use these):
+  team-ask ls --to __OWNER_ID__           what is waiting for __OWNER__
+  team-ask answer <id> "text"        answers and tells the agent(s) in their terminal
+  team-ask read <id>                 marks a note as read
+<you> is your Herdr name (dev: lucia, daniel, marta, kenji; business: irene, pablo, elena). Where this help says Lucía/lucia, the business team reads Irene/irene. Store: ~/.omniloy-team/requests.json"""
+import sys, os, json, time, fcntl, subprocess, datetime
+TEAM = os.path.expanduser("~/.omniloy-team"); STORE = f"{TEAM}/requests.json"
+NAMES, LEAD = {}, {}   # every persona of every team, and each one's team lead
+for d in ("~/.omniloy-team", "~/.omniloy-biz"):
+    try: tj = json.load(open(os.path.expanduser(d + "/team.json")))
+    except Exception: continue
+    try: tj["personas"] = tj["personas"] + json.load(open(os.path.expanduser(d + "/temps.json")))   # temps hired with team-temp
+    except Exception: pass
+    for p in tj["personas"]: NAMES[p["herdrName"]] = p; LEAD[p["herdrName"]] = tj.get("lead", "lucia")
+class Box:
+    def __enter__(self):
+        self.lock = open(STORE + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try: self.d = json.load(open(STORE))
+        except Exception: self.d = {"next": 1, "items": []}
+        return self.d
+    def __exit__(self, et, *_):
+        if et is None or et is SystemExit:
+            tidy(self.d)
+            tmp = STORE + ".tmp"; json.dump(self.d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STORE)
+        self.lock.close()
+def age(ts):
+    try: return (datetime.datetime.now() - datetime.datetime.fromisoformat(ts)).total_seconds() / 86400
+    except Exception: return 0
+# Two stores. requests.json is what gets loaded and shown: everything still open, plus __OWNER__'s last 15 finished
+# ones (the panel lists them). It is read whole by the Herdr panel (1 MiB limit) and by every office.
+# Everything else is history: requests-archive-<month>.jsonl, one line each, read only by `show` and `ls --all`.
+def tidy(d, cap=400_000):
+    mine = lambda x: x.get("to", "__OWNER_ID__") == "__OWNER_ID__"
+    recent = {x["id"] for x in [x for x in d["items"] if x["status"] != "open" and mine(x)][-15:]}
+    def keep(x):
+        if x["status"] != "open": return x["id"] in recent
+        return x["kind"] == "request" or mine(x) or age(x["created"]) <= 2   # a note to a lead nobody read in two days is history
+    old = [x for x in d["items"] if not keep(x)]; gone = {x["id"] for x in old}
+    size = lambda xs: sum(len(json.dumps(x, ensure_ascii=False)) + 40 for x in xs)
+    left = size(x for x in d["items"] if x["id"] not in gone)
+    for x in d["items"]:   # a very busy day: the oldest unread notes to leads go first; open requests and __OWNER__'s items never do
+        if left <= cap: break
+        if x["id"] in gone or x["status"] != "open" or x["kind"] != "note" or mine(x): continue
+        old.append(x); gone.add(x["id"]); left -= size([x])
+    if not old: return
+    by = {}
+    for x in old: by.setdefault((x.get("answeredAt") or x["created"])[:7], []).append(x)
+    for month, xs in by.items():
+        with open(f"{TEAM}/requests-archive-{month}.jsonl", "a") as f:
+            for x in xs: f.write(json.dumps(x, ensure_ascii=False) + "\n")
+    d["items"] = [x for x in d["items"] if x["id"] not in gone]
+def history(months=2):
+    import glob
+    out = []
+    for p in sorted(glob.glob(f"{TEAM}/requests-archive-*.jsonl"))[-months:]:
+        for l in open(p):
+            try: out.append(json.loads(l))
+            except Exception: pass
+    return out
+def archived(n):
+    import glob
+    for p in sorted(glob.glob(f"{TEAM}/requests-archive-*.jsonl"), reverse=True):
+        for l in open(p):
+            if f'"id": {n},' in l:
+                try: return json.loads(l)
+                except Exception: pass
+def opts(args):
+    d, pos, it = {}, [], iter(args)
+    for a in it:
+        if a.startswith("--"): d[a[2:]] = True if a in ("--all",) else next(it, "")
+        else: pos.append(a)
+    return d, pos
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def line(x):
+    state = {"open": "OPEN", "answered": "answered", "read": "read", "cancelled": "cancelled"}[x["status"]]
+    return f'#{x["id"]} [{x["kind"]}/{state}] {x["from"]} -> {x.get("to", "__OWNER_ID__")}: {x["title"]}' + (f' ({x["ticket"]})' if x.get("ticket") else "") + (f'\n    -> {x.get("answeredBy", "__OWNER__")}: {x["answer"]}' if x.get("answer") else "")
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+c = a[0]; d, pos = opts(a[1:])
+if c in ("request", "note"):
+    who = d.get("from") or sys.exit("--from <your Herdr name> is required")
+    if who not in NAMES: sys.exit(f"--from must be one of {list(NAMES)}")
+    if not pos or len(pos[0]) > 140: sys.exit("give one short line (max 140 chars) as the question/message; put the rest in --body")
+    with Box() as b:
+        lead = LEAD[who]
+        to = "__OWNER_ID__" if who == lead or (c == "request" and d.get("to") == "__OWNER_ID__") else lead
+        if d.get("to") == "__OWNER_ID__" and c == "note" and who != lead: print(f"notes go to your team lead ({lead}); sent there", file=sys.stderr)
+        dup = [x for x in b["items"] if x["status"] == "open" and x["from"] == who and x["title"] == pos[0]]
+        if dup: print(dup[0]["id"]); sys.exit()
+        x = {"id": b["next"], "kind": c, "from": who, "title": pos[0], "body": d.get("body", ""), "ticket": d.get("ticket", ""),
+             "options": [o.strip() for o in d.get("options", "").split(",") if o.strip()] if c == "request" else [],
+             "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to}
+        b["next"] += 1; b["items"].append(x); print(x["id"])
+    if c == "request" and x["ticket"]:   # the card waits on this request until it is answered (team-card)
+        subprocess.run([os.path.expanduser("~/.local/bin/team-card"), "wait", x["ticket"], "--as", who, "--req", str(x["id"]), f'request #{x["id"]} to {to}'], capture_output=True)
+    if to != "__OWNER_ID__" and c == "request":
+        subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", to, f'{who} left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to}) or escalate it to __OWNER__ only if it needs him.'], capture_output=True)
+elif c == "ls":
+    with Box() as b:
+        items = [x for x in b["items"] if (d.get("all") or x["status"] == "open") and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", "__OWNER_ID__") == d["to"])]
+    if d.get("all"):   # finished ones live in the history files (this month and the last)
+        seen = {x["id"] for x in items}
+        items = sorted([x for x in history() if x["id"] not in seen and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", "__OWNER_ID__") == d["to"])] + items, key=lambda x: x["id"])
+    print("\n".join(line(x) for x in items) or "nothing open")
+elif c == "show":
+    with Box() as b: x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None)
+    x = x or archived(pos[0].lstrip("#")) or sys.exit("not found")
+    print(line(x)); print(x["body"]) if x["body"] else None
+elif c in ("answer", "read", "cancel"):
+    with Box() as b:
+        x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None) or sys.exit("not found")
+        if c == "answer":
+            if len(pos) < 2 or not pos[1].strip(): sys.exit("answer text is required")
+            x["status"], x["answer"], x["answeredAt"] = "answered", pos[1].strip(), now()
+            x["answeredBy"] = NAMES[d["as"]]["name"].split(" ")[0] if d.get("as") in NAMES else "__OWNER__"
+        else: x["status"] = "read" if c == "read" else "cancelled"; x["answeredAt"] = now()
+    if c in ("answer", "cancel") and x.get("ticket"):
+        subprocess.run([os.path.expanduser("~/.local/bin/team-card"), "resume", x["ticket"], "--req", str(x["id"])], capture_output=True)
+    if c == "answer":
+        msg = f'{x["answeredBy"]} answered request #{x["id"]} ("{x["title"]}"' + (f', {x["ticket"]}' if x.get("ticket") else "") + f'): {x["answer"]}'
+        r = subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", x["from"], msg], capture_output=True, text=True)
+        if x.get("via") and x["from"] != x["via"] and x["answeredBy"] == "__OWNER__":
+            subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", x["via"], "FYI, " + msg + f' (asked by {x["from"]}, already told)'], capture_output=True)
+        print("answered; " + ("delivered to " + x["from"] if r.returncode == 0 else f'{x["from"]} is not running, they will see it with: team-ask ls --from {x["from"]} --all'))
+    else: print("ok")
+elif c == "escalate":
+    with Box() as b:
+        x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None) or sys.exit("not found")
+        if x["status"] != "open": sys.exit("already closed")
+        x["to"], x["via"], x["escalatedAt"] = "__OWNER_ID__", LEAD.get(x["from"], "lucia"), now()
+        if len(pos) > 1: x["title"] = pos[1][:140]
+        if d.get("body"): x["body"] = d["body"]
+        if d.get("options"): x["options"] = [o.strip() for o in d["options"].split(",") if o.strip()]
+    print("escalated to __OWNER__")
+else: print(__doc__); sys.exit(1)

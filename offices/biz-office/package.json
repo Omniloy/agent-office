@@ -1,0 +1,13 @@
+{
+  "name": "biz-office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Live 3D office for the Omniloy business team (reads Herdr, local only)",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  }
+}

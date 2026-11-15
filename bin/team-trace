@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""team-trace: Software Traceability Matrix per project (one sheet per project).
+  team-trace ls                              projects and their matrix
+  team-trace pull <project>                  download the matrix from Drive to the local copy
+  team-trace import <project> <file.xlsx>    use a file you downloaded another way
+  team-trace build <project>                 refresh the panel's data from the local copy
+  team-trace check <project>                 compare with Jira: gaps and drift (read-only)
+  team-trace show <project> <REQ-ID>         one requirement, all columns
+  team-trace set <project> <REQ-ID> [impl=..] [status=..] [verif=..] --why "text"
+                                             update ONLY Jira ticket / status / verification ticket
+  team-trace add <project> stake=.. stake_desc=.. req=.. desc=.. risk=.. risk_desc=.. impl=.. tc=.. method=.. status=.. verif=.. module=.. --why "text"
+                                             new requirement row (existing approved docs: only after __OWNER__ approves)
+  team-trace new <project> --title "..."     new empty matrix for a project, same tabs and columns
+  team-trace push <project>                  write your changed cells into the Drive file (new version; nothing else in the file is touched)
+  team-trace status <project>                local changes that Drive doesn't have yet
+  team-trace sync <project>                  pull Drive changes if nothing local is waiting
+Local copies: ~/.omniloy-team/trace/<project>.xlsx (+ .json for the panel). Drive needs: gcloud auth login --enable-gdrive-access"""
+import sys, os, json, re, subprocess, datetime, shutil, urllib.request, base64
+import openpyxl
+TEAM = os.path.expanduser("~/.omniloy-team"); CFG = f"{TEAM}/team.json"; DIR = f"{TEAM}/trace"
+cfg = json.load(open(CFG)); PROJ = {p["id"]: p for p in cfg["projects"]}
+COLS = ["stake","stake_desc","req","desc","risk","risk_desc","impl","tc","method","status","verif","module"]
+EDITABLE = {"impl","status","verif"}
+def proj(i):
+    if i not in PROJ: sys.exit(f"unknown project {i}; one of {list(PROJ)}")
+    return PROJ[i]
+def xlsx(i): return f"{DIR}/{i}.xlsx"
+def main_sheet(wb, p):
+    name = (p.get("trace") or {}).get("sheet")
+    if name and name in wb.sheetnames: return wb[name]
+    for ws in wb:
+        if ws.title not in ("Changelog","Descartados","Backlog v2","Inventario_Colores"): return ws
+def keys(text, jp, primary=True):
+    t = str(text or ""); t = re.split(r"Antecedente", t)[0] if primary else t
+    return re.findall(rf"\b{jp}-\d+\b", t)
+def rows(i):
+    p = proj(i); wb = openpyxl.load_workbook(xlsx(i)); out = []
+    for ws in wb:
+        if ws.title in ("Changelog","Inventario_Colores"): continue
+        tab = "active" if ws.title == main_sheet(wb, p).title else ws.title
+        for n, r in enumerate(ws.iter_rows(min_row=2, max_col=12, values_only=True), start=2):
+            if not r[2]: continue
+            d = dict(zip(COLS, [str(c).strip() if c is not None else "" for c in r]))
+            desc = re.split(r"\s{2,}|Criterio de aceptaci", d["desc"])[0].strip()
+            out.append({"tab": tab, "row": n, "stake": d["stake"], "req": d["req"], "title": desc[:160],
+              "risks": re.findall(r"R-\d+", d["risk"]), "impl": keys(d["impl"], p["jiraProject"]), "implText": d["impl"][:120],
+              "tc": d["tc"], "method": d["method"][:80], "status": re.split(r"\s[—-]\s", d["status"])[0].strip()[:60],
+              "verif": keys(d["verif"], p["jiraProject"]), "verifText": d["verif"][:120], "module": d["module"]})
+    return out
+def build(i):
+    p = proj(i); r = rows(i); st = os.stat(xlsx(i))
+    json.dump({"project": i, "pending": len(pending(i)), "built": datetime.datetime.now().isoformat(timespec="seconds"),
+               "fileId": (p.get("trace") or {}).get("fileId"), "rows": r}, open(f"{DIR}/{i}.json","w"), ensure_ascii=False)
+    print(f"{i}: {sum(1 for x in r if x['tab']=='active')} active requirements, {len(r)} total")
+def jira_status(ks):
+    j = cfg["jira"]; tok = subprocess.run(["security","find-generic-password","-s",j["keychainService"],"-a",j["email"],"-w"],capture_output=True,text=True).stdout.strip()
+    auth = "Basic " + base64.b64encode(f'{j["email"]}:{tok}'.encode()).decode(); out = {}
+    ks = sorted(set(ks))
+    for s in range(0, len(ks), 80):
+        body = json.dumps({"jql": f'key in ({",".join(ks[s:s+80])})', "maxResults": 100, "fields": ["status","summary"]}).encode()
+        rq = urllib.request.Request(j["site"]+"/rest/api/3/search/jql", data=body, headers={"Authorization": auth, "Content-Type": "application/json", "Accept": "application/json"})
+        for it in json.load(urllib.request.urlopen(rq)).get("issues", []):
+            out[it["key"]] = (it["fields"]["status"]["name"], it["fields"]["status"]["statusCategory"]["key"])
+    return out
+def sheet_cat(s):
+    s = s.lower()
+    if re.search(r"verificad|implementad|done|hecho|released", s): return "done"
+    if re.search(r"en desarrollo|en curso|en verificaci|in progress", s): return "indeterminate"
+    return "new"
+def check(i):
+    r = [x for x in rows(i) if x["tab"] == "active"]; js = jira_status([k for x in r for k in x["impl"] + x["verif"]])
+    n = 0
+    for x in r:
+        issues = []
+        if not x["impl"]: issues.append("no Jira ticket")
+        if not x["verif"]: issues.append("no verification ticket")
+        if not x["tc"]: issues.append("no test case")
+        cats = [js[k][1] for k in x["impl"] if k in js]
+        if cats:
+            jc = "done" if all(c == "done" for c in cats) else "new" if all(c == "new" for c in cats) else "indeterminate"
+            if jc != sheet_cat(x["status"]): issues.append(f'drift: sheet "{x["status"]}" vs Jira {", ".join(f"{k}={js[k][0]}" for k in x["impl"] if k in js)}')
+        for k in x["impl"] + x["verif"]:
+            if k not in js: issues.append(f"{k} not found in Jira")
+        if issues: n += 1; print(f'{x["req"]}\t{" | ".join(issues)}')
+    print(f"-- {n} of {len(r)} requirements need attention")
+def find(ws, req):
+    for row in ws.iter_rows(min_row=2, max_col=12):
+        if str(row[2].value or "").strip() == req: return row
+AUTHOR = "Lucía Romero (agente de producto, Claude)"
+def changelog(wb, text, project=None):
+    """One Changelog line per day for the agent; the per-requirement detail goes to a local log."""
+    today = datetime.date.today().isoformat()
+    if project:
+        with open(f"{DIR}/{project}.changes.log", "a") as f: f.write(json.dumps({"date": today, "change": text}, ensure_ascii=False) + "\n")
+        entries = [json.loads(l)["change"] for l in open(f"{DIR}/{project}.changes.log") if json.loads(l)["date"] == today]
+    else: entries = [text]
+    ids = sorted({m for e in entries for m in re.findall(r"\b(?:RF|RNF)-[A-Z0-9]+-\d+\b", e.split(":")[0])})
+    news = [e for e in entries if e.startswith("Nuevo requisito")]
+    line = f"Sincronizacion con Jira: {len(ids)} requisitos actualizados en las columnas Ticket Jira, Estado y Ticket Verificacion ({', '.join(ids)})." if ids else text
+    if news: line += f" Requisitos nuevos: {len(news)}."
+    if ids: line += " Sin cambios en requisitos, riesgos ni casos de prueba. Detalle por requisito en el informe diario del agente."
+    ws = wb["Changelog"] if "Changelog" in wb.sheetnames else wb.create_sheet("Changelog", 0)
+    n = 2
+    while ws.cell(n, 1).value or ws.cell(n, 3).value:
+        if str(ws.cell(n, 1).value)[:10] == today and ws.cell(n, 4).value == AUTHOR: break
+        n += 1
+    rev = ws.cell(n, 2).value or (ws.cell(n-1, 2).value if n > 2 else "Rev.0.1")
+    for c, v in enumerate([today, rev, line, AUTHOR], 1): ws.cell(n, c, v)
+def kv(args):
+    d, why = {}, ""
+    it = iter(args)
+    for a in it:
+        if a == "--why": why = next(it, "")
+        elif a == "--title": d["_title"] = next(it, "")
+        elif "=" in a: k, v = a.split("=", 1); d[k] = v
+    return d, why
+def gtoken():
+    r = subprocess.run("PATH=$PATH:$HOME/google-cloud-sdk/bin gcloud auth print-access-token", shell=True, capture_output=True, text=True)
+    return r.stdout.strip()
+def drive(method, url, data=None, ctype=None):
+    h = {"Authorization": "Bearer " + gtoken()}
+    if ctype: h["Content-Type"] = ctype
+    try: return urllib.request.urlopen(urllib.request.Request(url, data=data, method=method, headers=h)).read()
+    except urllib.error.HTTPError as e:
+        sys.exit(f"Drive {e.code}. The terminal has no Drive access: __OWNER__ runs once  gcloud auth login --enable-gdrive-access\n(or download with the Google Workspace connector and use: team-trace import)")
+def base(i): return f"{DIR}/{i}.base.xlsx"
+def norm(v):
+    if v is None: return ""
+    if isinstance(v, float) and v.is_integer(): return str(int(v))
+    return str(v)
+def values(path):
+    wb = openpyxl.load_workbook(path); out = {}
+    for ws in wb:
+        for row in ws.iter_rows():
+            for c in row:
+                if c.value is not None: out[(ws.title, c.coordinate)] = norm(c.value)
+    return out
+def pending(i):
+    """Cells changed locally since the last pull: {(sheet, ref): new value}."""
+    if not os.path.exists(base(i)): return {}
+    b, l = values(base(i)), values(xlsx(i))
+    return {k: l.get(k, "") for k in set(b) | set(l) if b.get(k, "") != l.get(k, "")}
+def colnum(ref):
+    n = 0
+    for ch in re.match(r"[A-Z]+", ref).group(): n = n * 26 + ord(ch) - 64
+    return n
+def patch_sheet(xml, ref, text):
+    """Set one cell to an inline string inside raw sheet XML, touching nothing else."""
+    from xml.sax.saxutils import escape
+    rown = int(re.search(r"\d+", ref).group()); val = f'<is><t xml:space="preserve">{escape(text)}</t></is>'
+    def style_above():
+        col = re.match(r"[A-Z]+", ref).group()
+        for r in range(rown - 1, 0, -1):
+            m = re.search(rf'<c r="{col}{r}"([^>]*?)/?>', xml)
+            if m:
+                sm = re.search(r'\bs="(\d+)"', m.group(1)); return f' s="{sm.group(1)}"' if sm else ""
+        return ""
+    rm = re.search(rf'<row\b[^>]*\br="{rown}"[^>]*?(/>|>(.*?)</row>)', xml, re.S)
+    if not rm:
+        newrow = f'<row r="{rown}"><c r="{ref}"{style_above()} t="inlineStr">{val}</c></row>'
+        later = [m for m in re.finditer(r'<row\b[^>]*\br="(\d+)"', xml) if int(m.group(1)) > rown]
+        if later: return xml[:later[0].start()] + newrow + xml[later[0].start():]
+        if "<sheetData/>" in xml: return xml.replace("<sheetData/>", f"<sheetData>{newrow}</sheetData>")
+        return xml.replace("</sheetData>", newrow + "</sheetData>")
+    if rm.group(1) == "/>":
+        head = rm.group(0)[:-2]
+        return xml[:rm.start()] + head + f'><c r="{ref}"{style_above()} t="inlineStr">{val}</c></row>' + xml[rm.end():]
+    body, bstart = rm.group(2), rm.start(2)
+    cm = re.search(rf'<c r="{ref}"([^>]*?)(/>|>.*?</c>)', body, re.S)
+    if cm:
+        attrs = re.sub(r'\s+t="[^"]*"', "", cm.group(1)).rstrip()
+        new = f'<c r="{ref}"{attrs} t="inlineStr">{val}</c>'
+        return xml[:bstart + cm.start()] + new + xml[bstart + cm.end():]
+    new = f'<c r="{ref}"{style_above()} t="inlineStr">{val}</c>'
+    for m in re.finditer(r'<c r="([A-Z]+)\d+"', body):
+        if colnum(m.group(1)) > colnum(ref): return xml[:bstart + m.start()] + new + xml[bstart + m.start():]
+    return xml[:bstart + len(body)] + new + xml[bstart + len(body):]
+def patch_xlsx(src_bytes, changes):
+    """Apply {(sheet, ref): text} to xlsx bytes; every other part of the file stays byte-identical."""
+    import zipfile, io
+    zin = zipfile.ZipFile(io.BytesIO(src_bytes)); wbx = zin.read("xl/workbook.xml").decode(); rels = zin.read("xl/_rels/workbook.xml.rels").decode()
+    path = {}
+    for m in re.finditer(r"<sheet\b[^>]*>", wbx):
+        name = re.search(r'name="([^"]*)"', m.group(0)).group(1).replace("&amp;", "&"); rid = re.search(r'r:id="([^"]*)"', m.group(0)).group(1)
+        rel = next(r for r in re.findall(r"<Relationship\b[^>]*>", rels) if f'Id="{rid}"' in r)
+        tgt = re.search(r'Target="([^"]*)"', rel).group(1); path[name] = tgt.lstrip("/") if tgt.startswith("/") else "xl/" + tgt
+    xmls = {}
+    for (sheet, ref), text in sorted(changes.items()):
+        pth = path[sheet]; xmls.setdefault(pth, zin.read(pth).decode("utf-8")); xmls[pth] = patch_sheet(xmls[pth], ref, text)
+    out = io.BytesIO(); zout = zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED)
+    for item in zin.infolist():
+        zout.writestr(item, xmls[item.filename].encode("utf-8") if item.filename in xmls else zin.read(item.filename))
+    zout.close(); return out.getvalue()
+def fileid(i): return (proj(i).get("trace") or {}).get("fileId") or sys.exit("no trace.fileId in team.json: this matrix is local only; ask __OWNER__ for its Drive location")
+def download(i): 
+    data = drive("GET", f"https://www.googleapis.com/drive/v3/files/{fileid(i)}?alt=media&supportsAllDrives=true")
+    if len(data) < 1000: sys.exit("download looks empty; nothing changed")
+    return data
+def do_pull(i, force=False):
+    p = pending(i)
+    if p and not force: sys.exit(f"{len(p)} local changes are not in Drive yet: run  team-trace push {i}  first (or pull --discard to drop them)")
+    data = download(i); open(base(i), "wb").write(data); open(xlsx(i), "wb").write(data); build(i)
+def do_push(i, dry=False, from_base=False):
+    import tempfile
+    ch = pending(i)
+    if not ch: print("nothing to push: Drive already has everything"); return
+    # from_base: rebuild from the last pulled file instead of what is in Drive now (repair after a bad upload)
+    data = open(base(i), "rb").read() if from_base else download(i); tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False); tmp.write(data); tmp.close()
+    dv, bv = values(tmp.name), values(base(i)); conflicts = {k for k in ch if dv.get(k, "") != bv.get(k, "") and dv.get(k, "") != ch[k]}
+    for k in sorted(conflicts): print(f"CONFLICT {k[0]}!{k[1]}: someone changed this cell in Drive; left as it is there")
+    apply = {k: v for k, v in ch.items() if k not in conflicts}
+    new = patch_xlsx(data, apply); open(tmp.name, "wb").write(new); nv = values(tmp.name)
+    bad = [k for k, v in apply.items() if nv.get(k, "") != v] + [k for k in dv if k not in apply and nv.get(k, "") != dv[k]]
+    if bad: sys.exit(f"safety check failed on {len(bad)} cells (e.g. {bad[0]}); nothing uploaded")
+    if dry:
+        import zipfile, io
+        za, zb = zipfile.ZipFile(io.BytesIO(data)), zipfile.ZipFile(io.BytesIO(new))
+        print(f"dry run: {len(apply)} cells would change, {len(conflicts)} conflicts; file parts identical: {za.namelist() == zb.namelist()}; parts touched: {[n for n in za.namelist() if za.read(n) != zb.read(n)]}; result matches local values: {nv == values(xlsx(i))}; saved {tmp.name}")
+        return
+    drive("PATCH", f"https://www.googleapis.com/upload/drive/v3/files/{fileid(i)}?uploadType=media&supportsAllDrives=true", new, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    open(base(i), "wb").write(new); open(xlsx(i), "wb").write(new); build(i)
+    print(f"pushed {len(apply)} cells to Drive as a new version of the same file" + (f"; {len(conflicts)} conflicts left for review" if conflicts else ""))
+a = sys.argv[1:]
+if not a or a[0] in ("-h","--help"): print(__doc__); sys.exit()
+c = a[0]; os.makedirs(DIR, exist_ok=True)
+if c == "ls":
+    for i, p in PROJ.items(): print(f'{i:12} {"matrix: "+(p.get("trace") or {}).get("fileId","local only") if os.path.exists(xlsx(i)) else "no matrix yet"}')
+elif c == "pull": do_pull(a[1], "--discard" in a)
+elif c == "import": shutil.copy(a[2], xlsx(a[1])); shutil.copy(a[2], base(a[1])); build(a[1])
+elif c == "build": build(a[1])
+elif c == "check": check(a[1])
+elif c == "show":
+    wb = openpyxl.load_workbook(xlsx(a[1])); row = find(main_sheet(wb, proj(a[1])), a[2]) or sys.exit("not found")
+    for k, cell in zip(COLS, row): print(f"{k}: {cell.value}")
+elif c == "set":
+    d, why = kv(a[3:]); bad = set(d) - EDITABLE
+    if bad: sys.exit(f"set only changes {sorted(EDITABLE)}; {sorted(bad)} need __OWNER__'s approval (then use the sheet directly)")
+    if not why: sys.exit('add --why "reason / Jira evidence"')
+    wb = openpyxl.load_workbook(xlsx(a[1])); row = find(main_sheet(wb, proj(a[1])), a[2]) or sys.exit("requirement not found")
+    for k, v in d.items(): row[COLS.index(k)].value = v
+    changelog(wb, f'{a[2]}: {", ".join(f"{k} -> {v}" for k, v in d.items())}. {why}', a[1]); wb.save(xlsx(a[1])); build(a[1])
+elif c == "add":
+    d, why = kv(a[2:])
+    if not d.get("req") or not why: sys.exit('needs req=... and --why "..."')
+    wb = openpyxl.load_workbook(xlsx(a[1])); ws = main_sheet(wb, proj(a[1]))
+    if find(ws, d["req"]): sys.exit("requirement already exists")
+    n = 2
+    while ws.cell(n, 3).value: n += 1
+    for k, v in d.items():
+        if k in COLS: ws.cell(n, COLS.index(k)+1, v)
+    changelog(wb, f'Nuevo requisito {d["req"]}. {why}', a[1]); wb.save(xlsx(a[1])); build(a[1])
+elif c == "new":
+    d, _ = kv(a[2:]); p = proj(a[1])
+    if os.path.exists(xlsx(a[1])): sys.exit("this project already has a matrix")
+    src = openpyxl.load_workbook(f"{DIR}/sofia-care.xlsx"); wb = openpyxl.Workbook(); wb.remove(wb.active)
+    ws = wb.create_sheet("Changelog"); ws.append(["Fecha","Revision","Descripcion del cambio","Autor"])
+    ws.append([datetime.date.today().isoformat(), "Rev.0.1", f'Creacion de la matriz de {p["name"]} a partir de Jira ({p["jiraProject"]}). Borrador, no aprobado.', "Lucía Romero (agente de producto, Claude)"])
+    head = [c.value for c in next(main_sheet(src, PROJ["sofia-care"]).iter_rows(min_row=1, max_row=1, max_col=12))]
+    for name, extra in ((p["name"], []), ("Descartados", ["Motivo"]), ("Backlog v2", ["Motivo"])):
+        s = wb.create_sheet(name); s.append(head + extra)
+        srcws = main_sheet(src, PROJ["sofia-care"])
+        for col in "ABCDEFGHIJKL": s.column_dimensions[col].width = srcws.column_dimensions[col].width
+    wb.save(xlsx(a[1])); build(a[1]); print("created", xlsx(a[1]), "- local draft; ask __OWNER__ where it lives in Drive before pushing")
+elif c == "push": do_push(a[1], "--dry-run" in a, "--from-base" in a)
+elif c == "status":
+    p = pending(a[1]); print(f"{len(p)} local changes not in Drive yet")
+    for k in sorted(p)[:40]: print(f"  {k[0]}!{k[1]}")
+elif c == "sync":
+    # safe direction only: bring Drive changes down when nothing local is waiting
+    if pending(a[1]): print(f"{len(pending(a[1]))} local changes waiting for push; not pulling")
+    else: do_pull(a[1])
+else: print(__doc__); sys.exit(1)

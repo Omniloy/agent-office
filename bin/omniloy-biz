@@ -1,0 +1,3 @@
+#!/bin/zsh
+# Business team: same launcher, other team folder.  omniloy-biz start|stop|ls|runtime
+OMNILOY_TEAM_DIR="$HOME/.omniloy-biz" exec "$HOME/.local/bin/omniloy-team" "$@"

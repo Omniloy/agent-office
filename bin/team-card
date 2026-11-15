@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""team-card: who has to move each card NOW. This replaces agent labels and signatures in Jira:
+Jira never says which teammate holds a card; this local list does. No network calls.
+
+  team-card mine <you>                         your cards (this is your sweep)
+  team-card take KEY --as <you> ["title"]      the card is yours (new work, or you picked it up)
+  team-card pass KEY <to> --from <you> "what you need from them"
+                                               hand the card over: it is THEIRS now and they are told at once.
+                                               Asking for a review, an approval or an answer IS a hand-over.
+  team-card wait KEY --as <you> "what/who outside the team"
+                                               still yours, but you cannot move until someone outside the team acts
+                                               (a client, Jordi, a deploy window). For __OWNER__ use
+                                               `team-ask request --to __OWNER_ID__ --ticket KEY`: that marks it waiting by itself.
+  team-card approval KEY --as <you> "PR links, or what he has to approve"
+                                               your part is done and the ONLY thing left is __OWNER__ approving or merging
+                                               (pull requests ready: review passed, checks green). Still yours, the watchdog
+                                               leaves it alone, and the office shows it to __OWNER__ as waiting for HIS approval.
+                                               Not for questions or decisions: those are a team-ask request.
+  team-card resume KEY --as <you>              you can move again
+  team-card done KEY --as <you>                finished or closed: off the list
+  team-card ls [--owner x] [--team name] [--json]     every card
+  team-card log KEY                            its history (who held it, hand-overs, approvals)
+
+The rule: a card is always held by exactly one teammate, the one who has to act next. If you stop while you
+hold cards that are not waiting, the watchdog tells your Product lead. So before you stop: pass it, mark it
+waiting, or finish it. Store: ~/.omniloy-team/cards.json"""
+import json, os, sys, fcntl, datetime, subprocess
+HOME = os.path.expanduser("~"); STORE = f"{HOME}/.omniloy-team/cards.json"; LOG = f"{HOME}/.omniloy-team/cards-log.jsonl"
+DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz"]
+NAMES = {}
+for d in DIRS:
+    try: tj = json.load(open(f"{d}/team.json"))
+    except Exception: continue
+    ps = list(tj["personas"])
+    try: ps += json.load(open(f"{d}/temps.json"))
+    except Exception: pass
+    for p in ps: NAMES[p["herdrName"]] = {"team": tj.get("name", ""), "name": p["name"]}
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def opts(args):
+    o, pos, i = {}, [], 0
+    while i < len(args):
+        if args[i].startswith("--"):
+            if i + 1 < len(args) and not args[i + 1].startswith("--"): o[args[i][2:]] = args[i + 1]; i += 2
+            else: o[args[i][2:]] = True; i += 1
+        else: pos.append(args[i]); i += 1
+    return o, pos
+class Box:
+    def __enter__(self):
+        self.lock = open(STORE + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try: self.d = json.load(open(STORE))
+        except Exception: self.d = {}
+        return self.d
+    def __exit__(self, et, *_):
+        if et is None:
+            tmp = STORE + ".tmp"; json.dump(self.d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STORE)
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+def log(key, ev, **kw): open(LOG, "a").write(json.dumps({"ts": now(), "key": key, "ev": ev, **kw}, ensure_ascii=False) + "\n")
+def who(o, k="as"):
+    w = o.get(k) or sys.exit(f"--{k} <your Herdr name> is required")
+    if w not in NAMES: sys.exit(f"--{k} must be one of {sorted(NAMES)}")
+    return w
+def line(k, c): return f'{k:10} {c["owner"]:9} {("ENRIQUE APPROVES: " if c["waiting"].get("kind") == "approval" else "WAITING: ") + c["waiting"]["on"] if c.get("waiting") else "active":32.32} since {c["since"][5:16]}  {c.get("title", "")[:60]}'
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit(0)
+cmd = a[0]; o, pos = opts(a[1:])
+if cmd == "mine":
+    me = pos[0] if pos else who(o)
+    with Box() as d: mine = {k: c for k, c in d.items() if c["owner"] == me}
+    if not mine: print("You hold no cards.")
+    for k, c in sorted(mine.items(), key=lambda x: x[1]["since"]): print(line(k, c))
+elif cmd == "ls":
+    with Box() as d: items = {k: c for k, c in d.items() if (not o.get("owner") or c["owner"] == o["owner"]) and (not o.get("team") or c.get("team") == o["team"])}
+    if o.get("json"): print(json.dumps(items, ensure_ascii=False))
+    else:
+        for k, c in sorted(items.items(), key=lambda x: (x[1]["owner"], x[1]["since"])): print(line(k, c))
+        if not items: print("No cards.")
+elif cmd == "log":
+    try:
+        for l in open(LOG):
+            x = json.loads(l)
+            if x["key"] == pos[0]: print(x["ts"][5:16], x["ev"], " ".join(f"{k}={v}" for k, v in x.items() if k not in ("ts", "key", "ev")))
+    except FileNotFoundError: pass
+elif cmd == "take":
+    me = who(o); key = pos[0]
+    with Box() as d:
+        prev = d.get(key, {})
+        d[key] = {"owner": me, "team": NAMES[me]["team"], "since": now(), "title": " ".join(pos[1:]) or prev.get("title", ""), "waiting": None}
+    log(key, "take", by=me, prev=prev.get("owner", "")); print(f"{key} is yours.")
+elif cmd == "pass":
+    if len(pos) < 3: sys.exit('usage: team-card pass KEY <to> --from <you> "what you need from them"')
+    me = who(o, "from"); key, to, msg = pos[0], pos[1], " ".join(pos[2:])
+    if to not in NAMES: sys.exit(f"<to> must be one of {sorted(NAMES)} (for __OWNER__ use team-ask request --to __OWNER_ID__ --ticket {key})")
+    if to == me: sys.exit("that is you already")
+    with Box() as d:
+        prev = d.get(key, {})
+        d[key] = {"owner": to, "team": NAMES[to]["team"], "since": now(), "title": o.get("title") or prev.get("title", ""), "waiting": None}
+    log(key, "pass", by=me, to=to, msg=msg)
+    r = subprocess.run([f"{HOME}/.local/bin/hc", "send", to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} "..." or hand the card back with team-card pass.)'], capture_output=True, text=True)
+    print(f"{key} passed to {to}" + ("; they were told." if r.returncode == 0 else "; they are not running now, they will see it in `team-card mine` when they start."))
+elif cmd == "wait":
+    me = who(o); key = pos[0]; on = " ".join(pos[1:]) or sys.exit("say what or who outside the team you are waiting for")
+    if not o.get("req") and on.split()[0].lower().strip(":,.") in NAMES: sys.exit(f"{on.split()[0]} is a teammate: hand the card over instead (team-card pass {key} {on.split()[0].lower()} --from {me} \"...\"), so it is theirs and they know.")
+    with Box() as d:
+        c = d.get(key) or {"owner": me, "team": NAMES[me]["team"], "since": now(), "title": ""}
+        if c["owner"] != me: sys.exit(f"{key} is held by {c['owner']}, not you")
+        c["waiting"] = {"on": on, "since": now(), "req": o.get("req")}; d[key] = c
+    log(key, "wait", by=me, on=on); print(f"{key} marked waiting.")
+elif cmd == "approval":
+    me = who(o); key = pos[0]; on = " ".join(pos[1:]) or "pull requests ready"
+    with Box() as d:
+        c = d.get(key) or {"owner": me, "team": NAMES[me]["team"], "since": now(), "title": ""}
+        if c["owner"] != me: sys.exit(f"{key} is held by {c['owner']}, not you")
+        c["waiting"] = {"on": on, "since": now(), "req": None, "kind": "approval"}; d[key] = c
+    log(key, "approval", by=me, on=on); print(f"{key} marked as waiting for __OWNER__'s approval. He sees it in the office; the watchdog leaves it alone. When he approves or merges: team-card resume {key} --as {me}.")
+elif cmd == "resume":
+    key = pos[0]
+    with Box() as d:
+        if key in d and (o.get("req") is None or (d[key].get("waiting") or {}).get("req") == o["req"]): d[key]["waiting"] = None; d[key]["since"] = now()
+    log(key, "resume", by=o.get("as", "")); print(f"{key} active again.")
+elif cmd == "done":
+    key = pos[0]
+    with Box() as d: prev = d.pop(key, None)
+    log(key, "done", by=o.get("as", "")); print(f"{key} off the list." if prev else f"{key} was not on the list.")
+else: print(__doc__)

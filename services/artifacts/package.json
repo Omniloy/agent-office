@@ -1,0 +1,3 @@
+{ "name": "office-artifacts", "private": true, "type": "module", "version": "1.0.0",
+  "description": "Local pages published by the office agents (HTML sites and MDX/Markdown documents)",
+  "dependencies": { "@mdx-js/mdx": "^3.1.0", "react": "^18.3.1", "react-dom": "^18.3.1", "remark-gfm": "^4.0.0" } }

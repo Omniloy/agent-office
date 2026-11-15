@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""team-watch: catches teammates who stopped while it is their move. Local only: it reads `hc ls`,
+~/.omniloy-team/cards.json (team-card) and requests.json (team-ask). No Jira, no network, no tokens
+unless it catches someone; then it sends ONE message to the Product lead (or to the lead herself).
+
+  team-watch run            loop forever (interval from watch-config.json)
+  team-watch once [--dry]   one check; --dry prints what it would do and sends nothing
+  team-watch status         last check and current stalls
+
+Someone is caught when they have not been working for `idleAfter` seconds AND
+  - they hold cards that are not marked waiting, or
+  - a teammate's request addressed to them is still open.
+The lead is also caught when the whole team is stopped, every card the team holds is marked waiting
+and no request to __OWNER__ is open: nothing would move otherwise. Cards marked with `team-card approval`
+(only __OWNER__'s approval or merge is missing) do not count: the office shows those to him.
+Config ~/.omniloy-team/watch-config.json: interval, idleAfter, repeatAfter (seconds), maxPings,
+paused (team names the watchdog leaves alone; switched from each 3D office: More > Watchdog).
+State and events (the 3D offices draw a lightning bolt from these): ~/.omniloy-team/watch.json"""
+import json, os, sys, subprocess, time, datetime
+HOME = os.path.expanduser("~"); T = f"{HOME}/.omniloy-team"; STATE = f"{T}/watch.json"; HC = f"{HOME}/.local/bin/hc"
+DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz"]
+DEF = {"interval": 60, "idleAfter": 120, "repeatAfter": 1800, "maxPings": 2}
+def rj(p, d):
+    try: return json.load(open(p))
+    except Exception: return d
+def cfg(): return {**DEF, **rj(f"{T}/watch-config.json", {})}
+def people():
+    out = {}
+    for d in DIRS:
+        tj = rj(f"{d}/team.json", None)
+        if not tj: continue
+        for p in list(tj["personas"]) + rj(f"{d}/temps.json", []):
+            out[p["herdrName"]] = {"name": p["name"].split(" ")[0], "lead": tj.get("lead"), "team": tj.get("name", "")}
+    return out
+def mins(s): return f"{int(s // 60)} min"
+def check(dry=False):
+    c = cfg(); now = time.time(); P = people()
+    st = rj(STATE, {}); ag = st.get("agents", {}); events = st.get("events", [])
+    try: terms = {t["name"]: t for t in json.loads(subprocess.run([HC, "ls", "--json"], capture_output=True, text=True, timeout=20).stdout)["terminals"] if t.get("name") and t.get("state") == "live"}
+    except Exception as e: print("hc ls failed:", e); return
+    cards = rj(f"{T}/cards.json", {}); reqs = rj(f"{T}/requests.json", {}).get("items", [])
+    stalls = []
+    for n, p in P.items():
+        if p["team"] in c.get("paused", []): ag[n] = {"paused": True}; continue   # switched off for this team from its 3D office
+        a = ag.setdefault(n, {})
+        if n not in terms: ag[n] = {}; continue                       # not running: nothing to catch
+        if terms[n].get("status") == "working": ag[n] = {"status": "working"}; continue
+        a["status"] = terms[n].get("status") or "idle"; a.setdefault("idleSince", now)
+        mine = sorted(k for k, x in cards.items() if x["owner"] == n and not x.get("waiting"))
+        asked = sorted(f'#{x["id"]}' for x in reqs if x.get("status") == "open" and x.get("kind") == "request" and x.get("to") == n)
+        if not mine and not asked: a.pop("stall", None); continue
+        idle = now - a["idleSince"]
+        if idle < c["idleAfter"]: continue
+        s = a.setdefault("stall", {"since": now, "pings": 0, "last": 0})
+        s["cards"], s["requests"] = mine, asked
+        stalls.append(n)
+        if s["pings"] >= c["maxPings"] or (s["pings"] and now - s["last"] < c["repeatAfter"]): continue
+        s["pings"] += 1; s["last"] = now
+        what = " and ".join(x for x in [f'holding {", ".join(mine[:6])}{" and more" if len(mine) > 6 else ""}' if mine else "", f'with open request(s) {", ".join(asked)} from teammates' if asked else ""] if x)
+        lead = p["lead"]; is_lead = n == lead
+        ev = {"id": f"zap:{n}:{int(now)}", "ts": int(now * 1000), "agent": n, "name": p["name"], "team": p["team"], "cards": mine, "requests": asked, "idleMin": int(idle // 60), "ping": s["pings"], "to": n if is_lead else lead}
+        if is_lead:
+            msg = (f"Watchdog: you have been stopped for {mins(idle)} {what}. Those are yours to move. For each one: act on it now, hand it over (team-card pass), "
+                   f"mark it waiting if someone outside the team must act (team-card wait), or close it (team-card done). If you are stuck or need a decision, ask __OWNER__ now: "
+                   f'team-ask request --from {n} --to __OWNER_ID__ "one clear question" --ticket KEY. Do not just reply to this message.')
+            to = n
+        else:
+            msg = (f"Watchdog: {p['name']} ({n}) has been stopped for {mins(idle)} {what}, and nothing says they are waiting for anyone. Write to them now (hc send {n} \"...\") to get it moving. "
+                   f"If the card is really someone else's move, fix it with team-card pass; if nobody can move it, ask __OWNER__ with team-ask request --to __OWNER_ID__.")
+            to = lead
+        print(f'{datetime.datetime.now():%H:%M:%S} CAUGHT {n}: {what} (idle {mins(idle)}), ping {s["pings"]} -> {to}')
+        if dry: continue
+        events.append(ev)
+        subprocess.run([HC, "send", to, msg], capture_output=True)
+        if s["pings"] >= 2 and lead in P:   # a reminder did not work: __OWNER__ sees it in "Messages for you"
+            subprocess.run([f"{HOME}/.local/bin/team-ask", "note", "--from", lead, f"Watchdog: {p['name']} still stopped after a reminder, {what}"[:140],
+                            "--body", f"{p['name']} has not worked for {mins(idle)} and nothing marks those cards as waiting. A reminder was sent {mins(c['repeatAfter'])} ago with no effect. A person should look at why."], capture_output=True)
+    # A whole team parked: everyone stopped, every held card marked waiting, and nobody has asked __OWNER__.
+    # Nobody is caught above, yet nothing will move, so it is the lead's move. Pinged at most maxPings
+    # times for the same set of waiting cards.
+    teams = st.get("teams", {}); parked = []
+    for d in DIRS:
+        tj = rj(f"{d}/team.json", None)
+        if not tj: continue
+        tn, lead = tj.get("name", ""), tj.get("lead")
+        if tn in c.get("paused", []): teams.pop(tn, None); continue
+        members = [n for n, p in P.items() if p["team"] == tn]; live = [n for n in members if n in terms]
+        # cards that only wait for __OWNER__'s approval (team-card approval) are a known human bottleneck, shown in the office: not a stall
+        waiting = sorted(k for k, x in cards.items() if x["owner"] in members and x.get("waiting") and x["waiting"].get("kind") != "approval")
+        asked_me = any(x.get("status") == "open" and x.get("kind") == "request" and x.get("to") in (None, "__OWNER_ID__") and x.get("from") in members for x in reqs)
+        if not waiting or asked_me: teams.pop(tn, None); continue
+        sig = ",".join(waiting); t = teams.get(tn)
+        if not t or not set(waiting) <= set(t.get("sig", "").split(",")): t = teams[tn] = {"sig": sig, "pings": 0, "last": 0}   # a new card joined: start over
+        else: t["sig"] = sig                                                                                                    # same cards or fewer: no fresh reminder
+        if lead not in live or any(n in stalls for n in members) or any(terms[n].get("status") == "working" for n in live): continue
+        idle = min(now - ag.get(n, {}).get("idleSince", now) for n in live)
+        if idle < c["idleAfter"]: continue
+        parked.append(tn)
+        if t["pings"] >= c["maxPings"] or (t["pings"] and now - t["last"] < c["repeatAfter"]): continue
+        t["pings"] += 1; t["last"] = now
+        lst = "; ".join(f'{k} ({P[cards[k]["owner"]]["name"]}: {str((cards[k]["waiting"] or {}).get("on", "") if isinstance(cards[k]["waiting"], dict) else "")[:90]})' for k in waiting[:8])
+        msg = (f"Watchdog: the whole team has been stopped for {mins(idle)}. Every card the team holds is marked waiting and there is no open request to __OWNER__, so nobody outside knows they are being waited on: {lst}. "
+               f"This is your move. For each card: if a teammate can move it, write to them now (hc send NAME \"...\"); if it needs __OWNER__ (an approval, a merge, a decision), ask him now: "
+               f'team-ask request --from {lead} --to __OWNER_ID__ "one clear question" --ticket KEY; if your side is finished and the only thing left is __OWNER__ approving or merging pull requests, its holder marks it: team-card approval KEY --as HOLDER "PR links" (he sees it in the office and you are not chased for it); only if it truly waits on something outside with nothing to ask, leave it. Do not just reply to this message.')
+        print(f'{datetime.datetime.now():%H:%M:%S} CAUGHT team {tn}: all cards waiting ({sig}), nobody asked __OWNER__ (idle {mins(idle)}), ping {t["pings"]} -> {lead}')
+        if dry: continue
+        events.append({"id": f"zap:{lead}:{int(now)}", "ts": int(now * 1000), "agent": lead, "name": P[lead]["name"], "team": tn, "cards": waiting, "requests": [], "idleMin": int(idle // 60), "ping": t["pings"], "to": lead, "kind": "team"})
+        subprocess.run([HC, "send", lead, msg], capture_output=True)
+        if t["pings"] >= 2:
+            subprocess.run([f"{HOME}/.local/bin/team-ask", "note", "--from", lead, f"Watchdog: {tn} is stopped with every card waiting ({sig})"[:140],
+                            "--body", f"Everyone has been stopped for {mins(idle)}, all held cards are marked waiting and nobody has asked you anything. {P[lead]['name']} was reminded {mins(c['repeatAfter'])} ago with no effect. A person should look at why."], capture_output=True)
+    for n in list(ag):
+        if n not in P: ag.pop(n)
+    if not dry:
+        st = {"checkedAt": int(now * 1000), "config": c, "stalled": stalls, "parked": parked, "agents": ag, "teams": teams, "events": events[-60:]}
+        tmp = STATE + ".tmp"; json.dump(st, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STATE)
+    return stalls + [f"{t} (all waiting, lead told)" for t in parked]
+a = sys.argv[1:] or ["status"]
+if a[0] == "run":
+    print(f"team-watch: checking every {cfg()['interval']}s, catching after {cfg()['idleAfter']}s stopped. Local reads only.")
+    while True:
+        t0 = time.time()
+        try:
+            s = check()
+            print(f"{datetime.datetime.now():%H:%M:%S} checked in {int((time.time() - t0) * 1000)} ms, stalled: {', '.join(s) if s else 'nobody'}", flush=True)
+        except Exception as e: print("check failed:", e, flush=True)
+        time.sleep(max(5, cfg()["interval"] - (time.time() - t0)))
+elif a[0] == "once": print("stalled:", check(dry="--dry" in a))
+elif a[0] == "status":
+    st = rj(STATE, {})
+    if not st: print("never ran"); sys.exit()
+    print("last check:", datetime.datetime.fromtimestamp(st["checkedAt"] / 1000).strftime("%H:%M:%S"), "| config:", st["config"])
+    for n in st["stalled"]: s = st["agents"][n]["stall"]; print(f'  {n:9} {", ".join(s["cards"] + s["requests"])}  pings {s["pings"]}')
+    for t in st.get("parked", []): x = st["teams"][t]; print(f'  {t}: everyone stopped, all cards waiting ({x["sig"]}), lead pinged {x["pings"]}')
+    if not st["stalled"] and not st.get("parked"): print("  nobody stalled")
+else: print(__doc__)

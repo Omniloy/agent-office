@@ -1,0 +1,173 @@
+/* The office on a phone. Same page, same data: only the layout changes. The classes `touch` and `phone`
+   are set on <html> by the small script in index.html; js/phone.js builds the bottom bar and the sheets.
+   Rules: everything you tap sits in thumb reach at the bottom, one sheet at a time, the room stays visible. */
+
+/* ---- any touch screen (also tablets, which keep the desktop layout) */
+html.touch body { -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; overscroll-behavior: none; }
+html.touch #scene canvas { touch-action: none; }
+html.touch .card kbd { display: none; }
+html.touch #panel-grip { display: none; }
+
+/* ---- phone */
+html.phone { --sab: max(0px, calc(env(safe-area-inset-bottom, 0px) - 16px)); /* the icons sit just above the home bar, not a full inset away */ --bar: calc(44px + env(safe-area-inset-top, 0px)); --tab: calc(54px + var(--sab)); --half: 54dvh; --fullh: calc(100dvh - var(--bar) - var(--tab) - 6px); --kb: 0px; }
+html.phone, html.phone body { height: 100dvh; overscroll-behavior: none; touch-action: manipulation; }
+/* Installed on an iPhone home screen, iOS makes the page one status bar shorter than the screen and leaves an empty
+   band under the tab bar. A page that asks for that height gets the whole screen. */
+@media (display-mode: standalone) { @supports (-webkit-touch-callout: none) {
+  html.phone { min-height: calc(100% + env(safe-area-inset-top, 0px)); }
+  html.phone body { min-height: calc(100dvh + env(safe-area-inset-top, 0px)); }
+} }
+html.phone body { user-select: none; -webkit-user-select: none; }
+html.phone .pbody, html.phone #inbox .list, html.phone #cards .body, html.phone #feed ol, html.phone .psheet .scroll { user-select: text; -webkit-user-select: text; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+html.phone input, html.phone textarea { font-size: 16px !important; } /* below 16px iOS zooms the page when you tap a field */
+
+/* top bar: who we are looking at, and the three numbers that matter */
+html.phone .top { height: var(--bar); padding: env(safe-area-inset-top, 0px) max(10px, env(safe-area-inset-right, 0px)) 0 max(12px, env(safe-area-inset-left, 0px)); gap: 10px; }
+html.phone .tools, html.phone .brand small { display: none; }
+html.phone .brand { min-height: 44px; padding-right: 4px; }
+html.phone .brand b::after { content: " ▾"; color: var(--dim); font-weight: 400; }
+html.phone .stats { display: flex; flex-wrap: nowrap; justify-content: flex-end; gap: 12px; height: 30px; align-items: center; overflow: visible; }
+html.phone .stat { height: 30px; font-size: 13px; }
+html.phone div.stat span { display: none; }                  /* the dot says which number it is */
+html.phone div.stat:last-child { display: none; }            /* open cards: that is the Board tab */
+html.phone button.stat.need { padding: 0 11px; height: 30px; }
+
+/* bottom bar */
+#tabbar { display: none; }
+html.phone #tabbar { position: fixed; left: 0; right: 0; bottom: 0; height: var(--tab); padding: 0 max(4px, env(safe-area-inset-left, 0px)) var(--sab); display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--panel); border-top: 1px solid var(--line); z-index: 20; }
+#tabbar button { position: relative; border: 0; background: transparent; color: var(--dim); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px; font-weight: 500; min-width: 0; padding: 0; }
+#tabbar button svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#tabbar button.on { color: var(--text); }
+#tabbar button.on svg { stroke: var(--accent); }
+#tabbar button i { position: absolute; top: 5px; left: calc(50% + 6px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 99px; background: var(--needs); color: #201600; font: 700 11px/17px var(--sans); font-style: normal; display: none; }
+#tabbar button.has i { display: block; }
+#tabbar button.has { color: var(--needs); }
+html.typing #tabbar { display: none; }
+
+/* sheets: everything that was a side panel comes up from the bottom */
+html.phone #panel, html.phone #inbox, html.phone #cards, html.phone #feed, html.phone .psheet {
+  position: fixed; top: auto; left: 0; right: 0; bottom: var(--tab); width: auto; max-width: none; min-width: 0; margin: 0;
+  border-radius: 18px 18px 0 0; border-bottom: 0; background: var(--panel); box-shadow: 0 -10px 34px rgba(0, 0, 0, .45); z-index: 14; flex-direction: column; overflow: hidden;
+  padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); will-change: transform; }
+html.phone #panel::before, html.phone #inbox::before, html.phone #cards::before, html.phone #feed::before, html.phone .psheet::before {
+  content: ""; flex: none; height: 18px; background: center 7px / 40px 5px no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='5'%3E%3Crect width='40' height='5' rx='2.5' fill='%23ffffff' fill-opacity='.28'/%3E%3C/svg%3E"); }
+@keyframes sheet-up { from { transform: translateY(40%); opacity: .4; } }
+html.phone #inbox.show, html.phone #cards.show, html.phone #feed:not(.hidden), html.phone .psheet.on { display: flex; animation: sheet-up .24s cubic-bezier(.2, .8, .2, 1); }
+html.phone .psheet { display: none; max-height: min(78dvh, var(--fullh)); }
+html.phone #inbox, html.phone #feed { max-height: min(82dvh, var(--fullh)); }
+html.phone #inbox { min-height: 44dvh; }
+html.phone #cards { max-height: min(76dvh, var(--fullh)); z-index: 16; }
+html.phone .dragging { transition: none !important; animation: none !important; }
+/* typing: the sheet takes what the keyboard leaves */
+html.typing.phone #panel, html.typing.phone #inbox, html.typing.phone .psheet { bottom: var(--kb); height: calc(var(--vvh, 100dvh) - var(--bar) + 38px); max-height: none; }
+
+/* a person */
+html.phone #panel { height: var(--half); transform: translateY(calc(100% + var(--tab) + 30px)); transition: transform .3s cubic-bezier(.2, .8, .2, 1), height .25s cubic-bezier(.2, .8, .2, 1); }
+html.phone #panel.open { transform: none; }
+html.phone #panel.full { height: var(--fullh); }
+html.phone .phead { padding: 2px 14px 10px; grid-template-columns: 40px 1fr auto; gap: 11px; background: none; }
+html.phone .phead .avatar { width: 40px; height: 40px; font-size: 14px; }
+html.phone .phead h2 { font-size: 16px; }
+html.phone .x, html.phone #cards .x, html.phone #inbox header .x { width: 40px; height: 40px; font-size: 16px; border-radius: 12px; display: grid; place-items: center; padding: 0; }
+html.phone .tabs { padding: 0 8px; overflow-x: auto; scrollbar-width: none; flex: none; }
+html.phone .tabs button { padding: 11px 12px; font-size: 14px; white-space: nowrap; }
+html.phone .pbody { padding: 12px 14px; gap: 14px; }
+html.phone .prose, html.phone ul.plain li { font-size: 14px; }
+html.phone .ticket, html.phone .pr { padding: 11px 12px; }
+html.phone pre.term { font-size: 10px; min-height: 160px; -webkit-overflow-scrolling: touch; }
+html.phone .composer { padding: 8px 10px 10px; gap: 7px; }
+html.phone .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -10px; padding: 0 10px; }
+html.phone .chips::-webkit-scrollbar, html.phone .tabs::-webkit-scrollbar, html.phone .pchips::-webkit-scrollbar { display: none; }
+html.phone .chips button { flex: none; padding: 8px 13px; font-size: 13px; }
+html.phone .chips .danger { margin-left: 0; order: -1; }
+html.phone .send { height: 44px; padding: 0 18px; }
+html.phone textarea { min-height: 44px; padding: 10px 12px; }
+html.phone #asks { padding: 10px 12px; max-height: 52%; }
+html.phone .ask button { padding: 10px 14px; font-size: 14px; min-height: 42px; }
+html.phone .ask input { padding: 9px 11px; min-height: 42px; }
+
+/* For you */
+html.phone #inbox header { padding: 0 6px 0 8px; }
+html.phone #inbox header .tab { padding: 11px 10px 12px; font-size: 14px; }
+html.phone #inbox .list { padding: 10px 10px 16px; flex: 1; }
+html.phone #inbox .it .t { font-size: 14.5px; }
+html.phone #inbox .it .b { font-size: 13.5px; max-height: 190px; }
+html.phone #inbox .acts button, html.phone #inbox .acts a { padding: 10px 14px; font-size: 14px; min-height: 42px; display: inline-flex; align-items: center; }
+html.phone #inbox .acts input { min-height: 42px; padding: 8px 11px; }
+html.phone #inbox .pf { padding: 8px 12px; font-size: 13px; }
+html.phone #inbox .list > * { flex: none; } /* a long list must scroll, not squash its rows (the filters used to shrink to a sliver) */
+html.phone #inbox .pfs { gap: 6px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: -10px -10px 0; padding: 10px 10px 8px; position: sticky; top: -10px; z-index: 2; background: var(--panel); }
+html.phone #inbox .pfs .pf, html.phone #inbox .pfs .upd { flex: none; white-space: nowrap; }
+html.phone #inbox a.prow { padding: 11px 12px; }
+
+/* one card */
+html.phone #cards header { padding: 0 12px 10px 14px; }
+html.phone #cards .title { font-size: 14.5px; -webkit-line-clamp: 3; }
+html.phone #cards .body { padding: 12px 14px 18px; }
+html.phone #cards .body > * { flex: none; }
+html.phone #cards a { font-size: 14px; padding: 8px 6px; }
+html.phone #cards .c { font-size: 13px; padding: 7px 11px; }
+html.phone #cards summary { font-size: 14px; padding: 8px 0; }
+html.phone #cards details p { font-size: 13.5px; }
+
+/* the sheets phone.js builds: team, board, more, offices */
+.psheet h3 { margin: 0; padding: 0 16px 8px; font-size: 13px; color: var(--muted); font-weight: 600; flex: none; display: flex; align-items: center; gap: 8px; }
+.psheet h3 small { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 12px; }
+.psheet .scroll { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding-bottom: 8px; }
+html.phone #roster { position: static; width: auto; max-height: none; overflow: visible; flex-direction: column; background: none; border: 0; border-radius: 0; box-shadow: none; display: flex; }
+html.phone #roster .card { min-width: 0; padding: 10px 16px; grid-template-columns: 38px 1fr; gap: 1px 12px; min-height: 58px; border-left: 0 !important; }
+html.phone #roster .card + .card { border-top: 1px solid var(--line); }
+html.phone #roster .avatar { width: 38px; height: 38px; font-size: 13px; }
+html.phone #roster .card .who b { font-size: 14.5px; }
+html.phone #roster .card .line { font-size: 13px; }
+html.phone #roster .last { display: none; }
+html.phone #cmd { position: relative; left: 0 !important; bottom: auto; transform: none; width: auto !important; min-width: 0; margin: 6px 12px 12px; flex: none; z-index: auto; box-shadow: none; }
+html.phone #cmd .send { height: 40px; }
+html.phone #cmd input { padding: 8px 10px; }
+
+.pchips { display: flex; gap: 6px; overflow-x: auto; padding: 0 12px 10px; flex: none; scrollbar-width: none; }
+.pchips button { flex: none; border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 99px; padding: 8px 13px; font-size: 13px; white-space: nowrap; }
+.pchips button b { margin-left: 6px; font-weight: 600; color: var(--dim); }
+.pchips button.on { background: rgba(124, 156, 255, .2); border-color: var(--accent); color: #fff; }
+.pchips button.on b { color: #fff; }
+.prow2 { width: 100%; border: 0; border-top: 1px solid var(--line); background: transparent; text-align: left; display: grid; grid-template-columns: 8px 1fr auto; gap: 2px 11px; align-items: center; padding: 11px 16px; min-height: 58px; }
+.prow2 > i { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); grid-row: span 2; }
+.prow2.working > i { background: var(--working); } .prow2.waiting > i { background: var(--needs); } .prow2.caught > i { background: var(--blocked); } .prow2.done > i { background: var(--accent); }
+.prow2 span { font-size: 14px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.prow2 small { grid-column: 2; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prow2 small b { font: 600 11.5px var(--mono); color: var(--muted); margin-right: 6px; }
+.prow2 em { grid-row: span 2; grid-column: 3; font-style: normal; font-size: 12px; color: var(--dim); white-space: nowrap; }
+.pempty { padding: 26px 20px 30px; color: var(--dim); text-align: center; font-size: 13.5px; }
+.pmenu { display: flex; flex-direction: column; }
+.pmenu > button, .pmenu > a { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 52px; padding: 0 18px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--text); font-size: 15px; text-align: left; text-decoration: none; }
+.pmenu > :first-child { border-top: 0; }
+.pmenu > a small, .pmenu > button small { color: var(--dim); font-size: 13px; }
+.pmenu > a.here { color: var(--accent); }
+.pmenu #btn-feed::after { font-size: 13px; }
+
+/* the room */
+html.phone .tag .chip { padding: 6px 12px 6px 10px; font-size: 12.5px; }
+html.phone .tag:not(.hot) .chip span { display: none; }
+html.phone .tag .doing { max-width: 190px; font-size: 12px; }
+html.phone .tag .bubble { max-width: 230px; font-size: 13.5px; padding: 9px 12px; }
+html.phone #toasts { left: 10px; right: 10px; transform: none; align-items: stretch; z-index: 30; }
+html.phone .toast { padding: 11px 14px; font-size: 14px; flex-wrap: wrap; }
+html.phone .toast .go { margin-left: auto; padding: 6px 4px 6px 12px; font-size: 14px; }
+html.phone #recap, html.phone #banner { max-width: calc(100vw - 20px); font-size: 13px; }
+html.phone #trace-pick { top: calc(var(--bar) + 10px); }
+html.phone #trace-pick button, html.phone #trace-pick a { padding: 9px 12px; font-size: 13.5px; }
+html.phone #requests { display: none !important; }
+html.phone.reqs-open #requests { display: block !important; position: fixed; top: auto !important; left: 0 !important; right: 0 !important; bottom: var(--tab); width: auto; max-height: min(78dvh, var(--fullh)); overflow-y: auto; z-index: 14; padding: 22px 16px 18px; border-radius: 18px 18px 0 0; border: 0; background: var(--panel); box-shadow: 0 -10px 34px rgba(0, 0, 0, .45); font-size: 14px; animation: sheet-up .24s cubic-bezier(.2, .8, .2, 1); }
+html.phone #requests .t { font-size: 15px; } html.phone #requests .b { font-size: 13.5px; }
+html.phone #requests button { padding: 10px 14px; font-size: 14px; min-height: 42px; }
+html.phone #requests input { min-height: 42px; padding: 8px 11px; }
+
+/* phone on its side: little height, so the bars shrink and the person sheet becomes a side panel again */
+@media (orientation: landscape) and (max-height: 520px) {
+  html.phone { --tab: calc(44px + var(--sab)); --half: var(--fullh); }
+  html.phone #tabbar button { flex-direction: row; gap: 7px; font-size: 12px; }
+  html.phone #tabbar button svg { width: 19px; height: 19px; }
+  html.phone #tabbar button i { top: 4px; left: calc(50% - 22px); }
+  html.phone #panel, html.phone #inbox, html.phone #cards, html.phone #feed, html.phone .psheet { left: auto; right: 0; width: min(430px, 56vw); border-radius: 18px 0 0 0; max-height: var(--fullh); }
+  html.phone #inbox { height: var(--fullh); }
+}

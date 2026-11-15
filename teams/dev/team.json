@@ -1,0 +1,168 @@
+{
+  "name": "Dev Team",
+  "lead": "lucia",
+  "space": "Dev Team",
+  "tabPrefix": "team-",
+  "jira": {},
+  "projects": [
+    {
+      "id": "example",
+      "name": "Example project",
+      "jiraProject": "",
+      "productBoard": null,
+      "devBoard": null,
+      "repos": []
+    }
+  ],
+  "personas": [
+    {
+      "slug": "lucia-product",
+      "name": "Lucía Romero",
+      "role": "Product",
+      "label": "agent-lucia",
+      "color": "#e11d48",
+      "runtime": "claude",
+      "herdrName": "lucia"
+    },
+    {
+      "slug": "daniel-dev",
+      "name": "Daniel Okafor",
+      "role": "Development",
+      "label": "agent-daniel",
+      "color": "#2563eb",
+      "runtime": "claude",
+      "herdrName": "daniel"
+    },
+    {
+      "slug": "marta-qa",
+      "name": "Marta Ibáñez",
+      "role": "Verification",
+      "label": "agent-marta",
+      "color": "#16a34a",
+      "runtime": "claude",
+      "herdrName": "marta"
+    },
+    {
+      "slug": "kenji-infra",
+      "name": "Kenji Watanabe",
+      "role": "Infrastructure",
+      "label": "agent-kenji",
+      "color": "#d97706",
+      "runtime": "claude",
+      "herdrName": "kenji"
+    }
+  ],
+  "accounts": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "kind": "claude",
+      "configDir": "~/.claude"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "kind": "codex",
+      "home": "~/.codex"
+    }
+  ],
+  "runtimes": {
+    "claude": {
+      "argv": [
+        "claude",
+        "--agent",
+        "{slug}"
+      ],
+      "notes": "Claude Code. Add \"--chrome\" after \"claude\" if the Claude in Chrome extension is installed (browser verification)."
+    },
+    "codex": {
+      "argv": [
+        "codex",
+        "--no-daemon",
+        "-C",
+        "{teamDir}"
+      ],
+      "promptFromFile": true,
+      "notes": "Codex CLI; the person's instructions are sent as the first message."
+    }
+  },
+  "traceStages": [
+    {
+      "id": "planned",
+      "name": "Planned",
+      "statuses": [
+        "Backlog",
+        "Later",
+        "Next"
+      ],
+      "progress": 0,
+      "env": "Not started"
+    },
+    {
+      "id": "discovery",
+      "name": "Discovery",
+      "statuses": [
+        "Discovery"
+      ],
+      "progress": 10,
+      "env": "Not started"
+    },
+    {
+      "id": "ready",
+      "name": "Ready for dev",
+      "statuses": [
+        "Ready For Development",
+        "Ready for Development"
+      ],
+      "progress": 20,
+      "env": "Not started"
+    },
+    {
+      "id": "dev",
+      "name": "In development",
+      "statuses": [
+        "In Progress"
+      ],
+      "progress": 40,
+      "env": "Dev"
+    },
+    {
+      "id": "verification",
+      "name": "In verification",
+      "statuses": [
+        "Verification"
+      ],
+      "progress": 60,
+      "env": "Dev"
+    },
+    {
+      "id": "validation",
+      "name": "In validation",
+      "statuses": [
+        "Validation"
+      ],
+      "progress": 80,
+      "env": "Staging"
+    },
+    {
+      "id": "release",
+      "name": "Ready for release",
+      "statuses": [
+        "Ready For Release",
+        "Ready for release"
+      ],
+      "progress": 90,
+      "env": "Staging"
+    },
+    {
+      "id": "prod",
+      "name": "Released",
+      "statuses": [
+        "Done",
+        "Released"
+      ],
+      "progress": 100,
+      "env": "Production"
+    }
+  ]
+}

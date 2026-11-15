@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""team-person: the people on every team, as data: who they are, what they are told, what they run on.
+
+  team-person ls                                  everyone, by team: name, role, harness, model
+  team-person show <who>                          one person's instructions and settings
+  team-person remove <who> --as <lead> [--force]  let a permanent person go (only their team's lead; the lead stays)
+  team-person restore <who> --as <lead>           bring back someone who was let go
+  team-person json | save | add | protocol        used by the 3D office (JSON on stdin/stdout)
+
+A person is three things: an entry in <team>/team.json (name, role, harness, start message), an instructions file
+~/.claude/agents/<slug>.md (copied to every Claude account; Codex gets the same text as its first message), and a
+memory file <team>/memory/<slug>.md. Edits take effect the next time the person starts. Every change keeps the
+previous version in <team>/history/. `remove` ends the session, takes the person out of team.json and moves their
+instructions to <team>/former/; the memory file stays. It refuses while they still hold cards (see `team-card`)
+unless --force. <who> and <lead> are Herdr names."""
+import json, os, sys, subprocess, datetime, fcntl, re, shutil
+HOME = os.path.expanduser("~"); HC = f"{HOME}/.local/bin/hc"
+TEAMS = [(4317, f"{HOME}/.omniloy-team"), (4318, f"{HOME}/.omniloy-biz")]
+MODELS = ["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "inherit"]
+PALETTE = ["#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6", "#6366f1", "#eab308"]
+def sh(*a, **k):
+    try: return subprocess.run(a, capture_output=True, text=True, **k)
+    except Exception as e: return subprocess.CompletedProcess(a, 1, '', str(e))
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def stamp(): return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+def short(p): return p.replace(HOME, "~")
+def die(msg): print(json.dumps({"error": msg}) if JSON_MODE else msg, file=sys.stdout if JSON_MODE else sys.stderr); sys.exit(1)
+JSON_MODE = False
+
+def load(d): return json.load(open(f"{d}/team.json"))
+def teams():
+    out = []
+    for port, d in TEAMS:
+        try: out.append((port, d, load(d)))
+        except Exception: pass
+    return out
+class locked:
+    def __init__(self, d): self.d = d
+    def __enter__(self): self.f = open(f"{self.d}/.team.lock", "w"); fcntl.flock(self.f, fcntl.LOCK_EX); return self
+    def __exit__(self, *_): fcntl.flock(self.f, fcntl.LOCK_UN); self.f.close()
+def keep(d, name, text):
+    os.makedirs(f"{d}/history", exist_ok=True); open(f"{d}/history/{stamp()}-{name}", "w").write(text)
+def write(path, text):
+    tmp = f"{path}.tmp{os.getpid()}"; open(tmp, "w").write(text); os.replace(tmp, path)
+def save_team(d, t, why):
+    keep(d, "team.json", open(f"{d}/team.json").read()); write(f"{d}/team.json", json.dumps(t, indent=2, ensure_ascii=False) + "\n")
+    open(f"{d}/people-log.jsonl", "a").write(json.dumps({"at": now(), **why}, ensure_ascii=False) + "\n")
+def agent_dirs(t):
+    dirs = [os.path.expanduser(a["configDir"]) + "/agents" for a in t.get("accounts", []) if a.get("kind") == "claude" and a.get("configDir")]
+    return dirs or [f"{HOME}/.claude/agents"]
+def read_agent(t, slug):
+    for ad in agent_dirs(t):
+        try: s = open(f"{ad}/{slug}.md").read()
+        except Exception: continue
+        m = re.match(r"---\n(.*?)\n---\n?(.*)", s, re.S)
+        if not m: return {}, s
+        head = {}
+        for line in m.group(1).split("\n"):
+            if ":" in line: k, v = line.split(":", 1); head[k.strip()] = v.strip()
+        return head, m.group(2).lstrip("\n")
+    return {}, ""
+def write_agent(d, t, slug, head, body):
+    text = "---\n" + "\n".join(f"{k}: {v}" for k, v in head.items()) + "\n---\n\n" + body.rstrip("\n") + "\n"
+    for ad in agent_dirs(t):
+        os.makedirs(ad, exist_ok=True)
+        try: keep(d, f"{slug}.md", open(f"{ad}/{slug}.md").read())
+        except Exception: pass
+        write(f"{ad}/{slug}.md", text)
+def find(who):
+    for port, d, t in teams():
+        for p in t["personas"]:
+            if who in (p["herdrName"], p["slug"]): return port, d, t, p
+    return None
+def default_kickoff(d):
+    return (f"Start your shift: read {short(d)}/PROTOCOL.md, team.json and your memory file, run your Jira sweep, and give __OWNER__ a short status "
+            "(what's on your plate, what you're waiting on). Don't create or change any Jira tickets or code until __OWNER__ gives you a task.")
+def codex_model():
+    try: return re.search(r'^model\s*=\s*"([^"]+)"', open(f"{HOME}/.codex/config.toml").read(), re.M).group(1)
+    except Exception: return ""
+def running():
+    try: return {x.get("name") for x in json.loads(sh(HC, "ls", "--json").stdout)["terminals"] if x.get("state") == "live"}
+    except Exception: return set()
+def person(d, t, p, full=True, live=()):
+    head, body = read_agent(t, p["slug"])
+    x = {"slug": p["slug"], "herdrName": p["herdrName"], "name": p["name"], "role": p.get("role", ""), "color": p.get("color", "#888"), "runtime": p.get("runtime", ""),
+         "model": head.get("model", ""), "description": head.get("description", ""), "lead": t.get("lead") == p["herdrName"], "running": p["herdrName"] in live}
+    if full: x.update({"instructions": body, "kickoff": p.get("kickoff", "")})
+    return x
+
+def cmd_json(full=True):
+    live = running(); out = []
+    for port, d, t in teams():
+        lead = next((p for p in t["personas"] if p["herdrName"] == t.get("lead")), None)
+        try: proto = open(f"{d}/PROTOCOL.md").read() if full else ""
+        except Exception: proto = ""
+        out.append({"port": port, "dir": short(d), "name": t.get("name", ""), "lead": t.get("lead", ""), "leadName": lead["name"].split(" ")[0] if lead else "",
+                    "people": [person(d, t, p, full, live) for p in t["personas"]], "protocol": proto, "defaultKickoff": default_kickoff(d),
+                    "runtimes": [{"id": k, "notes": v.get("notes", ""), "codex": bool(v.get("promptFromFile"))} for k, v in t.get("runtimes", {}).items()]})
+    return {"teams": out, "models": MODELS, "codexModel": codex_model()}
+
+def cmd_save(b):
+    hit = find(b.get("who", ""))
+    if not hit: die("no such person")
+    port, d, t, p = hit; f = b.get("fields") or {}
+    with locked(d):
+        t = load(d); p = next(x for x in t["personas"] if x["slug"] == p["slug"])
+        head, body = read_agent(t, p["slug"])
+        if "runtime" in f:
+            if f["runtime"] not in t.get("runtimes", {}): die("unknown harness")
+            p["runtime"] = f["runtime"]
+        for k in ("name", "role"):
+            if k in f and str(f[k]).strip(): p[k] = str(f[k]).strip()
+        if "name" in f and p.get("tabName"): p["tabName"] = f'{p["name"].split(" ")[0]} · {p.get("role", "")}'
+        if "kickoff" in f:
+            if str(f["kickoff"]).strip(): p["kickoff"] = str(f["kickoff"]).strip()
+            else: p.pop("kickoff", None)
+        if "model" in f and str(f["model"]).strip(): head["model"] = str(f["model"]).strip()
+        if "description" in f and str(f["description"]).strip(): head["description"] = " ".join(str(f["description"]).split())
+        if "instructions" in f:
+            if len(str(f["instructions"]).strip()) < 40: die("the instructions are almost empty; not saved")
+            body = str(f["instructions"])
+        head.setdefault("name", p["slug"])
+        write_agent(d, t, p["slug"], head, body)
+        save_team(d, t, {"what": "edit", "who": p["herdrName"], "fields": sorted(f)})
+    return {"ok": True, "person": person(d, t, p)}
+
+def cmd_add(b):
+    hit = next(((port, d, t) for port, d, t in teams() if str(port) == str(b.get("port")) or short(d) == b.get("dir")), None)
+    if not hit: die("no such team")
+    port, d, _ = hit
+    name = " ".join(str(b.get("name", "")).split()); role = " ".join(str(b.get("role", "")).split())
+    if len(name) < 2 or len(role) < 2: die("a name and a role are needed")
+    taken = {p["herdrName"] for _, _, tt in teams() for p in tt["personas"]} | {p["slug"] for _, _, tt in teams() for p in tt["personas"]}
+    import unicodedata
+    plain = lambda s: re.sub(r"[^a-z0-9]+", "-", unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()).strip("-")
+    hn = plain(name.split(" ")[0]) or "person"; base = hn; n = 2
+    while hn in taken: hn = f"{base}{n}"; n += 1
+    slug = f"{hn}-{plain(role).split('-')[0] or 'role'}"
+    while slug in taken or any(os.path.exists(f"{ad}/{slug}.md") for ad in agent_dirs(load(d))): slug += "x"
+    with locked(d):
+        t = load(d)
+        like = find(b.get("like", "")) if b.get("like") else None
+        runtime = b.get("runtime") or (like[3].get("runtime") if like else "") or next(iter(t.get("runtimes", {})), "")
+        if runtime not in t.get("runtimes", {}): die("unknown harness")
+        used = {p.get("color") for p in t["personas"]}
+        color = next((c for c in PALETTE if c not in used), PALETTE[len(t["personas"]) % len(PALETTE)])
+        first = name.split(" ")[0]; team_name = t.get("name", "the team")
+        if like:
+            lh, lb = read_agent(like[2], like[3]["slug"]); lp = like[3]
+            body = lb.replace(lp["name"], name).replace(f'`{lp["herdrName"]}`', f"`{hn}`").replace(lp["slug"], slug).replace(short(like[1]), short(d)).replace(lp["name"].split(" ")[0], first)
+            model = b.get("model") or lh.get("model") or "claude-fable-5-2"
+        else:
+            body = (f"You are **{name}**, {role}, on the {team_name}. Your Herdr name is `{hn}`, and your memory file is `{short(d)}/memory/{slug}.md`.\n\n"
+                    f"## How you work\n\n- Read `{short(d)}/PROTOCOL.md` first: it is the team's way of working and it applies to you.\n"
+                    f"- Your lead is `{t.get('lead', '')}`. Ask them when the task or its scope is unclear; ask __OWNER__ with `team-ask --from {hn}` when only he can decide.\n"
+                    "- Keep your memory file up to date with what you learn that the next session would need.\n\n## What you do\n\n- (Describe this person's responsibilities here.)\n")
+            model = b.get("model") or "claude-fable-5-2"
+        if str(b.get("instructions", "")).strip(): body = str(b["instructions"])
+        desc = " ".join(str(b.get("description") or f"{name}, {role} on the {team_name}.").split())
+        p = {"slug": slug, "name": name, "role": role, "herdrName": hn, "label": f"agent-{hn}", "color": color, "runtime": runtime}
+        if any(x.get("tabName") for x in t["personas"]): p["tabName"] = f"{first} · {role}"
+        if like and like[1] == d and like[3].get("kickoff"): p["kickoff"] = like[3]["kickoff"]
+        write_agent(d, t, slug, {"name": slug, "description": desc, "model": model, "color": "blue"}, body)
+        os.makedirs(f"{d}/memory", exist_ok=True)
+        if not os.path.exists(f"{d}/memory/{slug}.md"): open(f"{d}/memory/{slug}.md", "w").write(f"# {slug} memory\n\n- {now()[:10]}: {name} joined the {team_name} as {role}.\n")
+        t["personas"].append(p)
+        save_team(d, t, {"what": "add", "who": hn, "like": b.get("like") or ""})
+    return {"ok": True, "port": port, "person": person(d, t, p)}
+
+def launcher(d): return {**os.environ, "OMNILOY_TEAM_DIR": d}
+def cmd_start(b):
+    hit = find(b.get("who", ""))
+    if not hit: die("no such person")
+    r = sh(f"{HOME}/.local/bin/omniloy-team", "start", hit[3]["herdrName"], env=launcher(hit[1]), timeout=90)
+    return {"ok": r.returncode == 0 and "FAILED" not in r.stdout, "out": (r.stdout or r.stderr).strip()[-300:]}
+
+def cmd_protocol(b):
+    hit = next(((port, d, t) for port, d, t in teams() if str(port) == str(b.get("port"))), None)
+    if not hit: die("no such team")
+    d = hit[1]; text = str(b.get("text", ""))
+    if len(text.strip()) < 200: die("the protocol is almost empty; not saved")
+    with locked(d):
+        try: keep(d, "PROTOCOL.md", open(f"{d}/PROTOCOL.md").read())
+        except Exception: pass
+        write(f"{d}/PROTOCOL.md", text)
+        open(f"{d}/people-log.jsonl", "a").write(json.dumps({"at": now(), "what": "protocol"}) + "\n")
+    return {"ok": True}
+
+def cmd_ask_remove(b):
+    hit = find(b.get("who", ""))
+    if not hit: die("no such person")
+    port, d, t, p = hit; lead = t.get("lead")
+    if p["herdrName"] == lead: die("the lead is not let go from here")
+    msg = (f"__OWNER__ asks you to let {p['name']} ({p['herdrName']}) go from the team. Do it properly: 1) check what they hold (`team-card ls`, open PRs, anything half done) and take it over or hand it to someone, "
+           f"2) make sure what they know is written down (their memory file, or a handover note in {short(d)}/handovers/), 3) then run `team-person remove {p['herdrName']} --as {lead}`. "
+           "It ends their session and takes them out of the office; their instructions and memory are kept. If there is a reason not to do it now, tell __OWNER__ with team-ask instead.")
+    r = sh(HC, "send", "--json", lead, "--", msg, timeout=60)
+    return {"ok": r.returncode == 0, "lead": lead, "error": (r.stderr or "").strip()[:200]}
+
+def cmd_remove(who, as_, force):
+    hit = find(who)
+    if not hit: sys.exit(f"{who} is not on any team")
+    port, d, t, p = hit; lead = t.get("lead")
+    if as_ != lead: sys.exit(f"only the team lead ({lead}) lets people go on {t.get('name')}")
+    if p["herdrName"] == lead: sys.exit("the lead cannot remove themselves; that is __OWNER__'s call")
+    try: cards = {k: v for k, v in json.load(open(f"{HOME}/.omniloy-team/cards.json")).items() if isinstance(v, dict) and v.get("owner") == p["herdrName"]}
+    except Exception: cards = {}
+    if cards and not force: sys.exit(f"{p['herdrName']} still holds {', '.join(sorted(cards))}. Hand those cards over first (team-card), or repeat with --force.")
+    with locked(d):
+        t = load(d); p = next(x for x in t["personas"] if x["slug"] == p["slug"])
+        sh(HC, "kill", p["herdrName"])
+        os.makedirs(f"{d}/former", exist_ok=True)
+        for ad in agent_dirs(t):
+            src = f"{ad}/{p['slug']}.md"
+            if os.path.exists(src): shutil.copy(src, f"{d}/former/{p['slug']}.md"); os.remove(src)
+        try: former = json.load(open(f"{d}/former.json"))
+        except Exception: former = []
+        former.append({**p, "removedAt": now(), "removedBy": as_}); write(f"{d}/former.json", json.dumps(former, indent=2, ensure_ascii=False))
+        t["personas"] = [x for x in t["personas"] if x["slug"] != p["slug"]]
+        save_team(d, t, {"what": "remove", "who": p["herdrName"], "by": as_})
+    print(f"{p['name']} has left {t.get('name')}. Their instructions are in {short(d)}/former/{p['slug']}.md and their memory in {short(d)}/memory/{p['slug']}.md. `team-person restore {p['herdrName']} --as {lead}` brings them back.")
+
+def cmd_restore(who, as_):
+    for port, d, t in teams():
+        try: former = json.load(open(f"{d}/former.json"))
+        except Exception: continue
+        x = next((f for f in reversed(former) if who in (f["herdrName"], f["slug"])), None)
+        if not x: continue
+        if as_ != t.get("lead"): sys.exit(f"only the team lead ({t.get('lead')}) can do that")
+        with locked(d):
+            t = load(d)
+            if any(p["herdrName"] == x["herdrName"] for p in t["personas"]): sys.exit("they are already on the team")
+            for ad in agent_dirs(t): shutil.copy(f"{d}/former/{x['slug']}.md", f"{ad}/{x['slug']}.md")
+            t["personas"].append({k: v for k, v in x.items() if k not in ("removedAt", "removedBy")})
+            former.remove(x); write(f"{d}/former.json", json.dumps(former, indent=2, ensure_ascii=False))
+            save_team(d, t, {"what": "restore", "who": x["herdrName"], "by": as_})
+        print(f"{x['name']} is back on {t.get('name')}. Start them with the team launcher."); return
+    sys.exit(f"nobody called {who} was let go")
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit(0)
+c = a[0]
+if c in ("json", "save", "add", "start", "protocol", "ask-remove"):
+    JSON_MODE = True
+    try:
+        b = json.loads(sys.stdin.read() or "{}") if c != "json" else {}
+        out = {"json": lambda: cmd_json(), "save": lambda: cmd_save(b), "add": lambda: cmd_add(b), "start": lambda: cmd_start(b), "protocol": lambda: cmd_protocol(b), "ask-remove": lambda: cmd_ask_remove(b)}[c]()
+    except SystemExit: raise
+    except Exception as e: die(f"{type(e).__name__}: {e}")
+    print(json.dumps(out, ensure_ascii=False))
+elif c == "ls":
+    for t in cmd_json(False)["teams"]:
+        print(f'\n{t["name"]}  (lead: {t["lead"]})')
+        for p in t["people"]: print(f'  {p["herdrName"]:9} {p["name"]:18} {p["role"]:32} {p["runtime"]:16} {p["model"] or "-":18} {"running" if p["running"] else ""}')
+elif c == "show":
+    hit = find(a[1]) if len(a) > 1 else None
+    if not hit: sys.exit("usage: team-person show <who>")
+    x = person(hit[1], hit[2], hit[3]); print(f'{x["name"]} · {x["role"]} · {x["runtime"]} · {x["model"]}\n{x["description"]}\n\nStart message: {x["kickoff"] or "(team default)"}\n\n{x["instructions"]}')
+elif c in ("remove", "restore"):
+    rest = a[1:]; as_ = rest[rest.index("--as") + 1] if "--as" in rest and rest.index("--as") + 1 < len(rest) else ""
+    who = next((x for i, x in enumerate(rest) if not x.startswith("--") and (i == 0 or rest[i - 1] != "--as")), "")
+    if not who or not as_: sys.exit(f"usage: team-person {c} <who> --as <lead>")
+    cmd_remove(who, as_, "--force" in rest) if c == "remove" else cmd_restore(who, as_)
+else: print(__doc__)

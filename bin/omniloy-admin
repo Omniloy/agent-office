@@ -1,0 +1,3 @@
+#!/bin/zsh
+# The superadmin (Zeus): same launcher, his own folder.  omniloy-admin start|stop|ls|runtime
+OMNILOY_TEAM_DIR="$HOME/.omniloy-admin" exec "$HOME/.local/bin/omniloy-team" "$@"

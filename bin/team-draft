@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""team-draft: the one list of outgoing messages the team has drafted for __OWNER__ (~/.omniloy-biz/drafts.json).
+__OWNER__ reads, edits and sends them from the Drafts popup in the business office. Nothing here sends anything.
+
+Agents (register EVERY message you propose in __OWNER__'s name, right after you create it):
+  team-draft add --from <you> --channel gmail|whatsapp|slack --to "Name <address or chat>" (--body-file FILE | --body "text")
+        [--subject ".."] [--cc ".."] [--client <client id>] [--why "one line: why this message, why now"]
+        gmail:    [--thread <gmail thread id>] [--draft-id <id of the Gmail draft you created>]
+        whatsapp: [--phone +34600111222] [--chat "name of the WhatsApp chat"]
+  team-draft ls [--from <you>] [--all]          open drafts (--all: sent and discarded too)
+  team-draft show <id>                          full text, __OWNER__'s edits, his questions
+  team-draft set <id> key=value ...             fix a field: to, cc, subject, client, why, thread, draftId, phone, chat
+  team-draft body <id> --body-file FILE         you rewrote the text yourself
+  team-draft synced <id> [--draft-id <new id>]  the external draft (Gmail/WhatsApp box) now matches the text here
+  team-draft note <id> --from <you> "text"      answer __OWNER__'s question about a draft, or tell him something about it
+  team-draft sent <id> | team-draft discard <id>
+
+__OWNER__ (the Drafts panel calls these; agents never do):
+  team-draft edit <id> --body-file FILE [--subject ".."]    his version; a Gmail draft is updated directly through the Gmail API
+  team-draft send <id> --by-owner                         sends the Gmail draft as it reads here, marks it sent, tells the author
+  team-draft sync                                           marks drafts he already sent (or deleted) in Gmail
+  team-draft ask <id> "question"                            goes to the author's terminal; the answer comes back with `note`
+"""
+import sys, os, json, fcntl, subprocess, datetime, urllib.parse, re
+D = os.path.expanduser("~/.omniloy-biz"); F = D + "/drafts.json"; HC = os.path.expanduser("~/.local/bin/hc")
+CHANNELS = ("gmail", "whatsapp", "slack")
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def load():
+    try: return json.load(open(F))
+    except Exception: return {"next": 1, "drafts": []}
+def save(d):
+    tmp = F + ".tmp"; json.dump(d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, F)
+def opts(args):
+    o, rest, i = {}, [], 0
+    while i < len(args):
+        if args[i].startswith("--"):
+            if i + 1 < len(args) and not args[i + 1].startswith("--"): o[args[i][2:]] = args[i + 1]; i += 2
+            else: o[args[i][2:]] = True; i += 1
+        else: rest.append(args[i]); i += 1
+    return o, rest
+def team():
+    try: return json.load(open(D + "/team.json"))
+    except Exception: return {}
+def people():
+    out = {}
+    for f in (D + "/team.json", os.path.expanduser("~/.omniloy-team/team.json")):
+        try:
+            for p in json.load(open(f)).get("personas", []): out[p["herdrName"]] = p
+        except Exception: pass
+    return out
+def get(d, i):
+    return next((x for x in d["drafts"] if str(x["id"]) == str(i).lstrip("#")), None) or sys.exit(f"no draft #{i}")
+def body_of(o):
+    if o.get("body-file"): return open(os.path.expanduser(o["body-file"])).read().strip()
+    if isinstance(o.get("body"), str): return o["body"].strip()
+    sys.exit("give the text with --body-file FILE or --body \"text\"")
+def link(x):
+    """Where __OWNER__ opens this draft in the real app."""
+    if x["channel"] == "gmail":
+        acct = team().get("gmailAccount"); base = "https://mail.google.com/mail/" + (f"?authuser={urllib.parse.quote(acct)}" if acct else "u/0/")
+        return base + (f"#all/{x['thread']}" if x.get("thread") else "#drafts")
+    if x["channel"] == "whatsapp":
+        digits = re.sub(r"\D", "", x.get("phone") or "")
+        return f"https://web.whatsapp.com/send?phone={digits}&text={urllib.parse.quote(x['body'])}" if digits else "https://web.whatsapp.com/"
+    return ""
+GMAIL = os.path.expanduser("~/.local/bin/team-gmail")
+def gmail(*args):
+    """Run the Gmail helper. Returns (ok, parsed json or error text)."""
+    r = subprocess.run([GMAIL, *args], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0: return False, (r.stderr or r.stdout).strip().split("\n")[-1]
+    try: return True, json.loads(r.stdout)
+    except Exception: return True, r.stdout
+def tmpfile(text):
+    import tempfile
+    f = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8"); f.write(text); f.close(); return f.name
+def normal(text):
+    ok, out = gmail("render", tmpfile(text), "--text")
+    return out.strip() if ok and isinstance(out, str) and out.strip() else text
+def push(x):
+    """Make the Gmail draft say what the list says. True when Gmail now matches."""
+    if x["channel"] != "gmail" or not x.get("draftId"): return False, "no Gmail draft is linked to this one"
+    ok, out = gmail("update", x["draftId"], tmpfile(x["body"]), x.get("subject") or "")
+    return ok, out
+def nudge(who, msg):
+    if who in people(): subprocess.run([HC, "send", who, msg], capture_output=True, timeout=20)
+def line(x):
+    flag = "" if x.get("synced", True) else "  [edited by __OWNER__, external draft not updated yet]"
+    q = sum(1 for t in x.get("talk", []) if t["who"] == "__OWNER_ID__" and not t.get("answered"))
+    return f'#{x["id"]:<3} {x["status"]:9} {x["channel"]:8} {x["from"]:7} to {x["to"][:34]:34} {(x.get("subject") or x["body"].splitlines()[0])[:50]}{flag}{"  [" + str(q) + " question(s) waiting]" if q else ""}'
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+os.makedirs(D, exist_ok=True); lock = open(F + ".lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)
+d = load(); cmd = a[0]; o, rest = opts(a[1:])
+
+if cmd == "add":
+    for k in ("from", "channel", "to"):
+        if not isinstance(o.get(k), str): sys.exit(f"--{k} is required")
+    if o["channel"] not in CHANNELS: sys.exit(f"--channel must be one of {CHANNELS}")
+    x = {"id": d["next"], "from": o["from"], "channel": o["channel"], "to": o["to"], "cc": o.get("cc") or "", "subject": o.get("subject") or "",
+         "body": body_of(o), "client": o.get("client") or "", "why": o.get("why") or "", "thread": o.get("thread") or "", "draftId": o.get("draft-id") or "",
+         "phone": o.get("phone") or "", "chat": o.get("chat") or "", "status": "open", "synced": True, "edited": False, "talk": [], "created": now(), "updated": now()}
+    d["next"] += 1; d["drafts"].append(x); save(d); print(f'draft #{x["id"]} registered; __OWNER__ sees it in the Drafts popup')
+elif cmd == "ls":
+    rows = [x for x in d["drafts"] if ("all" in o or x["status"] == "open") and (not isinstance(o.get("from"), str) or x["from"] == o["from"])]
+    print("\n".join(line(x) for x in rows) or "no drafts")
+elif cmd == "show":
+    x = get(d, rest[0]); print(json.dumps({**x, "link": link(x)}, indent=1, ensure_ascii=False))
+elif cmd == "json":   # for the office
+    rows = [{**x, "link": link(x)} for x in d["drafts"] if x["status"] == "open" or "all" in o]
+    try: sig = json.load(open(D + "/signature.json", encoding="utf-8"))
+    except Exception: sig = None
+    print(json.dumps({"drafts": rows, "signature": sig}, ensure_ascii=False))
+elif cmd == "set":
+    x = get(d, rest[0])
+    for kv in rest[1:]:
+        k, v = kv.split("=", 1)
+        if k not in ("to", "cc", "subject", "client", "why", "thread", "draftId", "phone", "chat"): sys.exit(f"unknown field {k}")
+        x[k] = v
+    x["updated"] = now(); save(d); print("ok")
+elif cmd == "body":
+    x = get(d, rest[0]); x["body"] = body_of(o); x["updated"] = now(); save(d); print("ok")
+elif cmd == "synced":
+    x = get(d, rest[0]); x["synced"] = True
+    if isinstance(o.get("draft-id"), str): x["draftId"] = o["draft-id"]
+    x["updated"] = now(); save(d); print("ok")
+elif cmd == "note":
+    x = get(d, rest[0]); who = o.get("from") if isinstance(o.get("from"), str) else sys.exit("--from is required")
+    for t in x.setdefault("talk", []):
+        if t["who"] == "__OWNER_ID__": t["answered"] = True
+    x["talk"].append({"who": who, "text": rest[1], "ts": now()}); x["updated"] = now(); save(d); print("ok")
+elif cmd in ("sent", "discard"):
+    x = get(d, rest[0]); x["status"] = "sent" if cmd == "sent" else "discarded"; x["updated"] = now(); save(d)
+    if "by-owner" in o: nudge(x["from"], f'__OWNER__ marked draft #{x["id"]} (to {x["to"]}) as {x["status"]}. ' + ("Record the contact where it belongs." if cmd == "sent" else "Do not propose it again unless something changes."))
+    print("ok")
+elif cmd == "edit":
+    x = get(d, rest[0]); x["body"] = body_of(o)
+    if isinstance(o.get("subject"), str): x["subject"] = o["subject"]
+    x["body"] = normal(x["body"]) if x["channel"] == "gmail" else x["body"]
+    x["edited"] = True; x["synced"] = x["channel"] == "whatsapp" and bool(x.get("phone")); x["updated"] = now()
+    if x["channel"] == "gmail" and x.get("draftId"):
+        ok, out = push(x); x["synced"] = ok
+        if not ok: x["syncError"] = str(out)
+        else: x.pop("syncError", None)
+    save(d)
+    if x["synced"] and x["channel"] == "gmail": nudge(x["from"], f'FYI: __OWNER__ edited draft #{x["id"]} (to {x["to"]}) and the app already updated the Gmail draft. Do nothing; do not create another draft.')
+    if not x["synced"]:
+        nudge(x["from"], f'__OWNER__ edited draft #{x["id"]} (to {x["to"]}). His text is final: read it with `team-draft show {x["id"]}` and make the {x["channel"]} draft match it word for word, without sending. Then run `team-draft synced {x["id"]}` (with --draft-id if the id changed). If an old draft is left over in Gmail, say so with `team-draft note {x["id"]} --from {x["from"]} "..."`.')
+    print("ok")
+elif cmd == "send":
+    if "by-owner" not in o: sys.exit("only __OWNER__ sends, from the Drafts panel. Agents never send.")
+    x = get(d, rest[0])
+    if x["status"] != "open": sys.exit(f'draft #{x["id"]} is already {x["status"]}')
+    if x["channel"] != "gmail" or not x.get("draftId"): sys.exit("only Gmail drafts linked to a real Gmail draft can be sent from here; open the app for this one")
+    if not x.get("synced", True):
+        ok, out = push(x)
+        if not ok: sys.exit(f"could not update the Gmail draft before sending: {out}")
+        x["synced"] = True
+    else:
+        ok, out = gmail("trick", x["draftId"])     # signature link separator from signature.json
+        if not ok: sys.exit(f"could not prepare the Gmail draft: {out}")
+    ok, out = gmail("send", x["draftId"])
+    if not ok: sys.exit(f"Gmail did not send it: {out}")
+    x["status"] = "sent"; x["sentAt"] = now(); x["sentMessage"] = out.get("messageId", ""); x["sentFrom"] = "app"; x["updated"] = now(); save(d)
+    nudge(x["from"], f'__OWNER__ sent draft #{x["id"]} (to {x["to"]}) from the Drafts panel. Record the contact where it belongs (biz-clients contact) and do not draft it again.')
+    print("sent")
+elif cmd == "sync":
+    last = d.get("lastSync", ""); 
+    if "force" not in o and last and (datetime.datetime.now() - datetime.datetime.fromisoformat(last)).total_seconds() < 45: print("recently synced"); sys.exit()
+    changed = 0
+    for x in d["drafts"]:
+        if x["status"] != "open" or x["channel"] != "gmail" or not x.get("draftId"): continue
+        ok, g = gmail("get", x["draftId"])
+        if not ok or not isinstance(g, dict) or g.get("exists"): continue
+        sent = False
+        if x.get("thread"):
+            ok2, s = gmail("sent-after", x["thread"], x["created"]); sent = bool(ok2 and isinstance(s, dict) and s.get("sent"))
+        x["status"] = "sent" if sent else "discarded"; x["updated"] = now(); x["sentFrom"] = "gmail" if sent else ""; changed += 1
+        if sent: x["sentAt"] = now()
+        nudge(x["from"], f'Draft #{x["id"]} (to {x["to"]}) was ' + ("sent by __OWNER__ from Gmail. Record the contact where it belongs." if sent else "deleted in Gmail by __OWNER__. Do not propose it again unless something changes."))
+    d["lastSync"] = now(); save(d); print(f"{changed} draft(s) updated")
+elif cmd == "ask":
+    x = get(d, rest[0]); x.setdefault("talk", []).append({"who": "__OWNER_ID__", "text": rest[1], "ts": now()}); x["updated"] = now(); save(d)
+    nudge(x["from"], f'__OWNER__ asks about draft #{x["id"]} (to {x["to"]}): "{rest[1]}". Answer with `team-draft note {x["id"]} --from {x["from"]} "your answer"` (he reads it in the Drafts popup). If the answer means the text should change, rewrite it with `team-draft body` and update the external draft.')
+    print("ok")
+else: print(__doc__); sys.exit(1)

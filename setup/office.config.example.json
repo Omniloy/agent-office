@@ -1,0 +1,13 @@
+{
+  "owner": { "name": "Ana", "id": "ana", "fullName": "Ana García" },
+  "language": "Spanish",
+  "runtimes": ["claude", "codex"],
+  "assign": { "kenji": "codex" },
+  "jira": { "site": "https://your-company.atlassian.net", "email": "you@your-company.com" },
+  "projects": [
+    { "id": "app", "name": "Our app", "jiraProject": "APP", "productBoard": null, "devBoard": null, "repos": ["your-org/app-api", "your-org/app-web"] }
+  ],
+  "gmailAccount": "you@your-company.com",
+  "signature": { "name": "Ana García", "title": "CTO, Your Company", "links": [ { "label": "Website", "url": "https://your-company.com" } ] },
+  "tailscale": { "host": "your-mac.your-tailnet.ts.net", "logins": ["you@your-company.com"] }
+}

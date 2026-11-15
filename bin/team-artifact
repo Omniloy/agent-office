@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""team-artifact: publish a page on the local artifacts server, so __OWNER__ can open it in a browser.
+
+  team-artifact new <file-or-folder> --from <you> --title "Short title" [--slug my-page]
+        <file>    one .html page, or one .mdx / .md document (rendered for you: headings, tables, code, JSX)
+        <folder>  a small site: must contain index.html, index.mdx or index.md; everything in it is published
+        The same --from and slug again replaces the page (that is how you update it).
+        Prints the link. Put that link in your answer as a markdown link: [Short title](http://127.0.0.1:4340/you/my-page/)
+  team-artifact ls [--from <name>] [--json]     what is published
+  team-artifact path <owner>/<slug>             the published folder, to look at it
+  team-artifact rm <owner>/<slug>               take one of YOUR OWN pages down (it goes to a trash folder for 7 days)
+
+<you> is your Herdr name (lucia, daniel, sara, alma, irene, zeus, ...). Store: ~/.omniloy-team/artifacts
+__OWNER__ deletes pages himself from the office when he is done with them; do not delete other people's."""
+import sys, os, json, re, shutil, datetime, time, unicodedata
+HOME = os.path.expanduser("~"); ROOT = f"{HOME}/.omniloy-team/artifacts"; BASE = "http://127.0.0.1:4340"
+SAFE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,80}$")
+def names():
+    out = set()
+    for d in (".omniloy-team", ".omniloy-biz", ".omniloy-admin"):
+        for f in ("team.json", "temps.json"):
+            try: x = json.load(open(f"{HOME}/{d}/{f}"))
+            except Exception: continue
+            for p in (x.get("personas", []) if isinstance(x, dict) else x): out.add(p.get("herdrName", ""))
+    out.discard(""); return out
+def opts(args):
+    d, pos, it = {}, [], iter(args)
+    for a in it:
+        if a == "--json": d["json"] = True
+        elif a.startswith("--"): d[a[2:]] = next(it, "")
+        else: pos.append(a)
+    return d, pos
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def slugify(s):
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:60] or "page"
+def items(owner=None):
+    out = []
+    for o in sorted(os.listdir(ROOT)) if os.path.isdir(ROOT) else []:
+        if o.startswith(".") or (owner and o != owner): continue
+        for s in sorted(os.listdir(f"{ROOT}/{o}")):
+            try: m = json.load(open(f"{ROOT}/{o}/{s}/meta.json"))
+            except Exception: continue
+            out.append({"owner": o, "slug": s, "title": m.get("title", s), "kind": m.get("kind", "html"), "created": m.get("created", ""), "updated": m.get("updated", ""), "url": f"{BASE}/{o}/{s}/"})
+    return out
+def trash(owner, slug):
+    src = f"{ROOT}/{owner}/{slug}"
+    if not os.path.isdir(src): sys.exit("not found")
+    os.makedirs(f"{ROOT}/.trash", exist_ok=True)
+    shutil.move(src, f"{ROOT}/.trash/{int(time.time())}-{owner}-{slug}")
+    for n in os.listdir(f"{ROOT}/.trash"):   # the trash empties itself after a week
+        try:
+            if time.time() - int(n.split("-")[0]) > 7 * 86400: shutil.rmtree(f"{ROOT}/.trash/{n}", ignore_errors=True)
+        except ValueError: pass
+def size(p): return sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(p) for f in fs) if os.path.isdir(p) else os.path.getsize(p)
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+c = a[0]; d, pos = opts(a[1:])
+if c == "new":
+    who = d.get("from") or sys.exit("--from <your Herdr name> is required")
+    if who not in names(): sys.exit(f"--from must be one of {sorted(names())}")
+    title = (d.get("title") or "").strip() or sys.exit('--title "Short title" is required')
+    if not pos or not os.path.exists(pos[0]): sys.exit("give the .html / .mdx / .md file, or the folder, to publish")
+    src = os.path.abspath(pos[0]); slug = d.get("slug") or slugify(title)
+    if not SAFE.match(slug): sys.exit("--slug: lowercase letters, digits and dashes only")
+    if size(src) > 60_000_000: sys.exit("too large (60 MB max): this is for pages, not for datasets or videos")
+    if os.path.isdir(src):
+        kind = next((k for k, n in (("html", "index.html"), ("mdx", "index.mdx"), ("md", "index.md")) if os.path.exists(f"{src}/{n}")), None) or sys.exit("the folder needs an index.html, index.mdx or index.md")
+    else:
+        kind = {".html": "html", ".htm": "html", ".mdx": "mdx", ".md": "md"}.get(os.path.splitext(src)[1].lower()) or sys.exit("one file must be .html, .mdx or .md (or pass a folder)")
+    dst = f"{ROOT}/{who}/{slug}"; old = {}
+    try: old = json.load(open(f"{dst}/meta.json"))
+    except Exception: pass
+    tmp = f"{ROOT}/{who}/.{slug}.new"; shutil.rmtree(tmp, ignore_errors=True); os.makedirs(os.path.dirname(tmp), exist_ok=True)
+    if os.path.isdir(src): shutil.copytree(src, tmp, ignore=shutil.ignore_patterns(".*", "node_modules", "meta.json"))
+    else: os.makedirs(tmp); shutil.copy(src, f"{tmp}/index.{kind}")
+    json.dump({"title": title[:140], "owner": who, "kind": kind, "created": old.get("created") or now(), "updated": now()}, open(f"{tmp}/meta.json", "w"), ensure_ascii=False, indent=1)
+    shutil.rmtree(dst, ignore_errors=True); os.replace(tmp, dst)
+    url = f"{BASE}/{who}/{slug}/"
+    print(url); print(f"{'updated' if old else 'published'}. Put this in your answer so __OWNER__ can open it:  [{title}]({url})", file=sys.stderr)
+elif c == "ls":
+    xs = items(d.get("from"))
+    if d.get("json"): print(json.dumps(xs, ensure_ascii=False))
+    else: print("\n".join(f'{x["owner"]}/{x["slug"]}  [{x["kind"]}]  {x["title"]}  {x["url"]}' for x in xs) or "nothing published")
+elif c in ("path", "rm"):
+    if not pos or pos[0].count("/") != 1: sys.exit("give <owner>/<slug>")
+    o, s = pos[0].split("/")
+    if not SAFE.match(o) or not SAFE.match(s): sys.exit("bad name")
+    if c == "path": print(f"{ROOT}/{o}/{s}") if os.path.isdir(f"{ROOT}/{o}/{s}") else sys.exit("not found")
+    else: trash(o, s); print("taken down (kept in the trash for 7 days)")
+else: print(__doc__); sys.exit(1)

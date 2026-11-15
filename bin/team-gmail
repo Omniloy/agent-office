@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""team-gmail: the few Gmail operations the Drafts panel needs, done directly with the Gmail API using the
+sign-in the Google Workspace connector already holds on this Mac. Used by `team-draft`; agents never call it.
+  team-gmail get <draftId>                      -> JSON {exists, to, cc, subject, threadId, messageId, html}
+  team-gmail update <draftId> <text file> [subject]   make the Gmail draft say this text (keeps thread, attachments, quoted mail)
+  team-gmail trick <draftId>                    only apply the signature link separator from signature.json
+  team-gmail send <draftId>                     sends that draft -> JSON {messageId, threadId}
+  team-gmail sent-after <threadId> <ISO time>   -> JSON {sent: bool, messageId}   (a message from me in the thread after that time)
+  team-gmail render <text file> [--text]        -> the HTML (or normalised text) for a message, signature per signature.json
+"""
+import sys, os, json, re, html, base64, glob, email, email.policy, urllib.request, urllib.parse, urllib.error, datetime
+BIZ = os.path.expanduser("~/.omniloy-biz")
+API = "https://gmail.googleapis.com/gmail/v1/users/me"
+
+def sig_cfg():
+    return json.load(open(BIZ + "/signature.json", encoding="utf-8"))
+def sig_text(sep=None):
+    c = sig_cfg(); sep = c["appSeparator"] if sep is None else sep
+    return [c["name"], c["title"], sep.join(f'{l["label"]}: {l["url"]}' for l in c["links"])]
+def sig_html():
+    c = sig_cfg()
+    return (f'<p><b>{html.escape(c["name"])}</b><br>{html.escape(c["title"])}<br>'
+            + html.escape(c["appSeparator"]).join(f'<a href="{html.escape(l["url"])}">{html.escape(l["label"])}</a>' for l in c["links"]) + "</p>")
+def squash(s): return re.sub(r"[\s|]+", " ", s).strip()
+def split_sig(text):
+    """(body, has_signature). The signature is accepted with either separator and always written the app way."""
+    lines = text.rstrip("\n").split("\n"); want = sig_text()
+    if len(lines) >= 3 and [squash(l) for l in lines[-3:]] == [squash(l) for l in want]: return "\n".join(lines[:-3]).strip(), True
+    return text.strip(), False
+def normal_text(text):
+    body, has = split_sig(text)
+    return body + ("\n\n" + "\n".join(sig_text()) if has else "")
+def render(text, strict=False):
+    body, has = split_sig(text)
+    if strict and "--no-dash-check" not in sys.argv and re.search("[—–]", text): sys.exit("REESCRIBIR: el texto contiene guion largo o medio. Sustituye por coma, dos puntos, parentesis o frase nueva.")
+    if strict and not has: sys.exit("FALTA LA FIRMA: el texto debe terminar exactamente con estas tres lineas:\n" + "\n".join(sig_text()))
+    def para(p):
+        rows = [html.escape(r) for r in p.split("\n")]
+        rows = [re.sub(r"(https?://[^\s<]+[^\s<.,;:)])", r'<a href="\1">\1</a>', r) for r in rows]
+        return "<p>" + "<br>".join(rows) + "</p>"
+    return "\n".join(para(p) for p in re.split(r"\n\s*\n", body) if p.strip()) + ("\n" + sig_html() if has else "")
+
+def creds():
+    account = json.load(open(BIZ + "/team.json")).get("gmailAccount", "")
+    for d in ("~/.cowork/google-workspace/credentials", "~/.google_workspace_mcp/credentials"):
+        f = os.path.expanduser(f"{d}/{account}.json")
+        if account and os.path.exists(f): return json.load(open(f))
+    sys.exit("no Google sign-in found for the team's Gmail account; open any Google Workspace tool once to sign in")
+_tok = None
+def token():
+    global _tok
+    if _tok: return _tok
+    c = creds()
+    data = urllib.parse.urlencode({"client_id": c["client_id"], "client_secret": c["client_secret"], "refresh_token": c["refresh_token"], "grant_type": "refresh_token"}).encode()
+    try: _tok = json.load(urllib.request.urlopen(urllib.request.Request(c.get("token_uri") or "https://oauth2.googleapis.com/token", data=data), timeout=20))["access_token"]
+    except urllib.error.HTTPError as e: sys.exit(f"Google refused the sign-in ({e.code}); sign in again through a Google Workspace tool")
+    return _tok
+def call(method, path, body=None, ok404=False):
+    req = urllib.request.Request(API + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": "Bearer " + token(), "Content-Type": "application/json"})
+    try: return json.load(urllib.request.urlopen(req, timeout=30))
+    except urllib.error.HTTPError as e:
+        if e.code == 404 and ok404: return None
+        sys.exit(f"Gmail error {e.code}: {e.read().decode(errors='replace')[:300]}")
+
+def raw_draft(did):
+    d = call("GET", f"/drafts/{did}?format=raw", ok404=True)
+    if d is None: return None, None
+    return d, email.message_from_bytes(base64.urlsafe_b64decode(d["message"]["raw"]), policy=email.policy.default)
+def html_part(msg):
+    if msg.is_multipart():
+        for p in msg.walk():
+            if p.get_content_type() == "text/html" and p.get_content_disposition() != "attachment": return p
+        return None
+    return msg if msg.get_content_type() == "text/html" else None
+def plain_part(msg):
+    for p in msg.walk():
+        if p.get_content_type() == "text/plain" and p.get_content_disposition() != "attachment": return p
+    return None
+SIG_END = re.compile(r'omniloy\.com/?"[^>]*>\s*Omniloy\s*</a>\s*(</p>|</div>)?', re.I)
+def put(did, d, msg):
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    return call("PUT", f"/drafts/{did}", {"message": {"raw": raw, "threadId": d["message"].get("threadId")}})
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+cmd = a[0]
+if cmd == "render":
+    t = open(a[1], encoding="utf-8").read()
+    print(normal_text(t) if "--text" in a else render(t, strict="--strict" in a))
+elif cmd == "get":
+    d, msg = raw_draft(a[1])
+    if d is None: print(json.dumps({"exists": False})); sys.exit()
+    hp = html_part(msg)
+    print(json.dumps({"exists": True, "to": str(msg.get("To", "")), "cc": str(msg.get("Cc", "")), "subject": str(msg.get("Subject", "")),
+                      "threadId": d["message"].get("threadId"), "messageId": d["message"].get("id"), "html": hp.get_content() if hp else "",
+                      "attachments": [p.get_filename() for p in msg.walk() if p.get_filename()]}, ensure_ascii=False))
+elif cmd in ("update", "trick"):
+    d, msg = raw_draft(a[1])
+    if d is None: sys.exit("that draft is no longer in Gmail")
+    hp = html_part(msg)
+    if hp is None: sys.exit("the Gmail draft has no HTML body; cannot update it safely")
+    old = hp.get_content()
+    if cmd == "trick":
+        c = sig_cfg(); labels = [l["label"] for l in c["links"]]
+        new = old
+        for x, y in zip(labels, labels[1:]):
+            new = re.sub(rf'(>\s*{re.escape(x)}\s*</a>)\s*\|?\s*(<a [^>]*>\s*{re.escape(y)}\s*</a>)', lambda m: m.group(1) + html.escape(c["appSeparator"]) + m.group(2), new)
+        if new == old: print(json.dumps({"changed": False})); sys.exit()
+    else:
+        text = open(a[2], encoding="utf-8").read()
+        m = SIG_END.search(old)
+        if not m and len(re.sub(r"<[^>]+>", "", old)) > len(text) + 400: sys.exit("the Gmail draft carries more than the text shown here (a forwarded or quoted mail) and no signature to anchor on; not replacing it")
+        new = render(text) + (old[m.end():] if m else "")
+        if len(a) > 3 and a[3] != str(msg.get("Subject", "")): del msg["Subject"]; msg["Subject"] = a[3]
+        pp = plain_part(msg)
+        if pp is not None: pp.set_content(normal_text(text), subtype="plain", charset="utf-8")
+    hp.set_content(new, subtype="html", charset="utf-8")
+    r = put(a[1], d, msg); print(json.dumps({"changed": True, "messageId": r["message"]["id"]}))
+elif cmd == "send":
+    if raw_draft(a[1])[0] is None: sys.exit("that draft is no longer in Gmail")
+    r = call("POST", "/drafts/send", {"id": a[1]}); print(json.dumps({"messageId": r.get("id"), "threadId": r.get("threadId")}))
+elif cmd == "sent-after":
+    t = call("GET", f"/threads/{a[1]}?format=minimal", ok404=True); since = datetime.datetime.fromisoformat(a[2]).timestamp() * 1000
+    hit = next((m for m in (t or {}).get("messages", []) if "SENT" in m.get("labelIds", []) and "DRAFT" not in m.get("labelIds", []) and int(m.get("internalDate", 0)) >= since - 120000), None)
+    print(json.dumps({"sent": bool(hit), "messageId": hit["id"] if hit else ""}))
+else: print(__doc__); sys.exit(1)

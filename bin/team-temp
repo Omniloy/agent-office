@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""team-temp: short-term copies of a teammate, hired by the team's Product lead for ONE task.
+
+  team-temp hire <who> --as <lead> --ticket KEY "what to do"   start a temp copy of <who> (e.g. daniel) for that card
+  team-temp ls [--all]                                         temps on every team (--all: also the ones let go)
+  team-temp done <temp> "one-line result"                      the temp says it finished; tells the lead
+  team-temp release <temp> --as <lead>                         let the temp go: ends its session, it leaves the office
+
+No handover, no exit: the temp keeps <team>/handovers/<KEY>-<temp>.md while it works (what it did, the state,
+everything it created such as users or test data and where the credentials are kept, what is left, what it learned).
+`done` refuses an incomplete one and posts it on the card; `release` refuses without it; the file stays for good
+and the person the temp copied is told to read it.
+
+<who> and <lead> are Herdr names. A temp gets its own name (daniel2, daniel3...), runs the same persona,
+model and tools as <who>, appears in the team's Herdr space and 3D office, and is gone after release.
+Only the team's lead can hire or release. At most `maxTemps` (team.json, default 2) at once per team."""
+import json, os, sys, subprocess, datetime, time, fcntl
+HOME = os.path.expanduser("~"); HC = f"{HOME}/.local/bin/hc"
+DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz"]
+def sh(*a): return subprocess.run(a, capture_output=True, text=True)
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def teams():
+    out = []
+    for d in DIRS:
+        try: out.append((d, json.load(open(f"{d}/team.json"))))
+        except Exception: pass
+    return out
+def temps(d):
+    try: return json.load(open(f"{d}/temps.json"))
+    except Exception: return []
+def save(d, lst):
+    tmp = f"{d}/temps.json.tmp"; json.dump(lst, open(tmp, "w"), indent=2, ensure_ascii=False); os.replace(tmp, f"{d}/temps.json")
+def log(d, x): open(f"{d}/temps-log.jsonl", "a").write(json.dumps(x, ensure_ascii=False) + "\n")
+def opts(args):
+    o, pos, i = {}, [], 0
+    while i < len(args):
+        if args[i].startswith("--"):
+            if i + 1 < len(args) and not args[i + 1].startswith("--"): o[args[i][2:]] = args[i + 1]; i += 2
+            else: o[args[i][2:]] = True; i += 1
+        else: pos.append(args[i]); i += 1
+    return o, pos
+def find_temp(name):
+    for d, t in teams():
+        for x in temps(d):
+            if x["herdrName"] == name: return d, t, x
+    sys.exit(f"no temp called {name} (team-temp ls)")
+def short(d): return d.replace(HOME, "~")
+# Handover: a temp cannot report done, or be released, without it. It is what the team keeps when the temp is gone.
+HEADS = ["## What I did", "## State", "## Things I created or changed", "## What is left", "## Things worth knowing"]
+TEMPLATE = """# Handover: {ticket} ({name}, temp copy of {of})
+
+## What I did
+<short account of the work>
+
+## State
+<card status, branch, PR link and its review/CI state, what is merged and what is not>
+
+## Things I created or changed
+<EVERYTHING that now exists because of you and is not in the PR: users and accounts (which system, username, role),
+test data, records in databases, env files, keychain entries, feature flags, services or containers left running,
+scheduled jobs, files outside the repo, worktrees. For each: where it is and how to remove it.
+Credentials: say WHERE they are kept (e.g. "Keychain, service omnicare-dev-admin, account admin@test"), never the secret itself.
+Write "Nothing" only if it is true.>
+
+## What is left
+<next steps, open review comments, failed checks, questions still open and with whom>
+
+## Things worth knowing
+<what you learned that the owner would not know: traps, commands that work, decisions and why>
+"""
+def hpath(d, x): return f'{d}/handovers/{x.get("ticket") or "task"}-{x["herdrName"]}.md'
+def hcheck(d, x):
+    try: s = open(hpath(d, x)).read()
+    except Exception: return f"no handover at {short(hpath(d, x))}"
+    miss = [h for h in HEADS if h not in s]
+    if miss: return "handover is missing sections: " + ", ".join(miss)
+    if "<" in s and ">" in s and any(m in s for m in ("<short account", "<card status", "<EVERYTHING", "<next steps", "<what you learned")): return "handover still has template placeholders; fill in every section"
+    if len(s) < 500: return "handover is too thin to be useful; say what you did, what you created and what is left"
+    return None
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit(0)
+cmd = a[0]; o, pos = opts(a[1:])
+
+if cmd == "ls":
+    any_ = False
+    for d, t in teams():
+        for x in temps(d):
+            any_ = True
+            print(f'{x["herdrName"]:10} {t.get("name", ""):14} copy of {x["of"]:8} {x.get("ticket") or "-":10} {x.get("state", "working"):8} since {x["hiredAt"]}  {x.get("task", "")[:60]}')
+        if o.get("all"):
+            try:
+                for l in open(f"{d}/temps-log.jsonl"):
+                    x = json.loads(l); print(f'{x["herdrName"]:10} {t.get("name", ""):14} copy of {x["of"]:8} {x.get("ticket") or "-":10} released {x.get("releasedAt", "")}  {x.get("result") or x.get("task", "")[:60]}')
+            except Exception: pass
+    if not any_: print("No temps right now.")
+
+elif cmd == "hire":
+    if len(pos) < 2 or not o.get("as") or not o.get("ticket"): sys.exit('usage: team-temp hire <who> --as <lead> --ticket KEY "what to do"')
+    who, task = pos[0], " ".join(pos[1:])
+    hit = [(d, t) for d, t in teams() if any(p["herdrName"] == who for p in t["personas"])]
+    if not hit: sys.exit(f"{who} is not on any team")
+    d, t = hit[0]; lead = t.get("lead")
+    if o["as"] != lead: sys.exit(f"only the team lead ({lead}) hires temps on {t.get('name')}")
+    if who == lead: sys.exit("the lead is not cloned; hire a copy of the person who would do the task")
+    base = next(p for p in t["personas"] if p["herdrName"] == who)
+    lock = open(f"{d}/.temps.lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)
+    cur = temps(d); cap = int(t.get("maxTemps", 2))
+    if len(cur) >= cap: sys.exit(f"{t.get('name')} already has {len(cur)} temps (limit {cap}). Release one first, or ask __OWNER__ to raise maxTemps.")
+    if any(x.get("ticket") == o["ticket"] for x in cur): sys.exit(f"a temp is already on {o['ticket']}")
+    taken = {p["herdrName"] for _, tt in teams() for p in tt["personas"]} | {x["herdrName"] for dd, _ in teams() for x in temps(dd)}
+    n = 2
+    while f"{who}{n}" in taken: n += 1
+    name = f"{who}{n}"; first = base["name"].split(" ")[0]; lead_p = next(p for p in t["personas"] if p["herdrName"] == lead)
+    x = {"slug": f'{base["slug"]}-temp{n}', "agentSlug": base["slug"], "herdrName": name, "name": f"{first} {n} (temp)", "role": f'{base["role"]} · temp',
+         "label": None, "color": base["color"], "runtime": base["runtime"], "temp": True, "of": who, "ticket": o["ticket"], "task": task,
+         "hiredBy": lead, "hiredAt": now(), "state": "working"}
+    os.makedirs(f"{d}/handovers", exist_ok=True)
+    if not os.path.exists(hpath(d, x)): open(hpath(d, x), "w").write(TEMPLATE.format(ticket=o["ticket"], name=name, of=who))
+    td = short(d)
+    kickoff = (f"You are a TEMP: a short-term copy of {base['name']}, hired by {lead_p['name'].split(' ')[0]} ({lead}) for ONE task and nothing else.\n"
+        f"Task: {o['ticket']}: {task}\n"
+        f"Your Herdr name is `{name}` (use it for `team-ask --from {name}` and when others `hc send` you). In Jira you are __OWNER__ like everyone else: no signature, no names, nothing that says a temp or an agent did the work.\n"
+        f"1. Read {td}/PROTOCOL.md (the Temps section is yours) and {td}/team.json. Read {td}/memory/{base['slug']}.md for how things work here, but never edit it; keep your own notes in {td}/work/temps/{name}.md.\n"
+        f"2. Do NOT run the Jira sweep and do NOT touch any card other than {o['ticket']} (and cards you create for it). The real {first} is working in parallel on other things.\n"
+        f"3. Never work in {first}'s checkouts. For code, use your own copy: `git -C {td}/work/<repo> worktree add {td}/work/temps/{name}/<repo> -b {o['ticket']}-<slug> origin/<default branch>` (clone first if the repo is not there). Do not start or stop shared local stacks without checking who is using them.\n"
+        f"4. Same flow and guardrails as {first}: validate first, plan, wait for APPROVED from {lead_p['name'].split(' ')[0]}, PR only, no merge/deploy/production.\n"
+        f"5. HANDOVER, mandatory: when you leave, everything you know leaves with you unless it is written down. Keep {td}/handovers/{o['ticket']}-{name}.md up to date AS YOU WORK, not at the end: every time you create or change something outside the PR (an admin user, test data, a keychain entry, an env file, a service left running), add it there at once with where it is and where its credentials are kept (the location, e.g. the Keychain service name, never the secret). \n"
+        f"6. When the task is finished (or you are blocked for good), complete every section of that file, remove your worktrees, then run: team-temp done {name} \"one-line result\". It refuses if the handover is incomplete, and it posts the handover on {o['ticket']} for you. {lead_p['name'].split(' ')[0]} reads it and lets you go; stay available for questions until then. Start now by reading {o['ticket']}.")
+    rt = t["runtimes"][base["runtime"]]
+    argv = [s.replace("{slug}", base["slug"]).replace("{teamDir}", d) for s in rt["argv"]]
+    if rt.get("promptFromFile"):
+        body = open(f'{HOME}/.claude/agents/{base["slug"]}.md').read().split("---", 2)[2]
+        argv.append(body.strip() + "\n\n" + kickoff)
+    else: argv.append(kickoff)
+    prefix = t.get("tabPrefix", "team-")
+    ls = json.loads(sh("herdr-app", "ls").stdout or "{}")
+    sp = [s for s in ls.get("spaces", []) if any(tb["id"].startswith(prefix) for tb in s.get("tabs", []))] or [s for s in ls.get("spaces", []) if s.get("name") == t.get("space")]
+    labels = ["--label", f"herdr.tab={prefix}{name}", "--label", f'team.persona={base["slug"]}', "--label", "team.temp=1"]
+    if sp: labels = ["--label", f'herdr.space={sp[0]["id"]}'] + labels
+    os.makedirs(f"{d}/work/temps", exist_ok=True)
+    res = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", d, *labels, "--", *argv)
+    if res.returncode != 0: sys.exit("could not start the temp: " + res.stderr.strip()[:300])
+    cur.append(x); save(d, cur)
+    time.sleep(2); sh("herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": f"{first} {n} · temp"}))
+    sh(f"{HOME}/.local/bin/team-card", "take", o["ticket"], "--as", name)   # the card is the temp's to move
+    sh(HC, "send", who, f"FYI from {lead}: {o['ticket']} is being done by a temp copy of you, `{name}`. Leave that card alone unless {lead} says otherwise; if `{name}` asks you something, answer briefly.")
+    print(f"hired {name} (copy of {who}) for {o['ticket']}. Talk to it with: hc send {name} \"...\". Let it go with: team-temp release {name} --as {lead}")
+
+elif cmd == "done":
+    if not pos: sys.exit('usage: team-temp done <temp> "one-line result"')
+    d, t, x = find_temp(pos[0]); result = " ".join(pos[1:]) or "finished"
+    bad = hcheck(d, x)
+    if bad: sys.exit(f"not done yet: {bad}. Complete {short(hpath(d, x))} and run this again.")
+    if x.get("ticket"):
+        r = sh(f"{HOME}/.local/bin/team-jira", "comment", x["ticket"], "Handover notes\n\n" + open(hpath(d, x)).read().split("\n", 1)[1].lstrip())
+        print("handover posted on " + x["ticket"] if r.returncode == 0 else f"could not post the handover on {x['ticket']} ({(r.stderr or r.stdout).strip()[:120]}); paste it there yourself")
+    cur = temps(d)
+    for y in cur:
+        if y["herdrName"] == x["herdrName"]: y["state"] = "done"; y["result"] = result; y["doneAt"] = now()
+    save(d, cur)
+    sh(HC, "send", x["hiredBy"], f'Temp {x["herdrName"]} says {x.get("ticket")} is finished: "{result}". Read the handover at {short(hpath(d, x))} (also posted on the card). Check it says what was created (users, test data, credentials and where they are kept) and what is left; ask the temp for anything missing BEFORE releasing, afterwards nobody can answer. If it is right, let the temp go with: team-temp release {x["herdrName"]} --as {x["hiredBy"]}. If not, tell it what is missing (hc send {x["herdrName"]} "...").')
+    print(f'told {x["hiredBy"]}. Stay available until you are released.')
+
+elif cmd == "release":
+    if not pos: sys.exit("usage: team-temp release <temp> --as <lead>")
+    d, t, x = find_temp(pos[0])
+    if o.get("as") not in (t.get("lead"), "__OWNER_ID__"): sys.exit(f"only the team lead ({t.get('lead')}) or __OWNER__ releases temps")
+    bad = hcheck(d, x)
+    if (bad or x.get("state") != "done") and not o.get("no-handover"):
+        why = bad or "the temp has not reported done"
+        sys.exit(f'not released: {why}. Ask it to finish its handover (hc send {x["herdrName"]} "Complete your handover and run team-temp done"). If the temp is broken and cannot write one, write what you know in {short(hpath(d, x))} yourself and use --no-handover "reason".')
+    if o.get("no-handover"): x["noHandover"] = o["no-handover"] if isinstance(o["no-handover"], str) else "no reason given"
+    x["handover"] = short(hpath(d, x))
+    sh(HC, "send", x["of"], f'Your temp {x["herdrName"]} has finished {x.get("ticket")} and is leaving. Its handover is at {x["handover"]}: read it now and copy into your memory file what you will need later (what it created, where credentials are kept, what is left). The card is yours again.')
+    held = json.loads(sh(f"{HOME}/.local/bin/team-card", "ls", "--owner", x["herdrName"], "--json").stdout or "{}")
+    for k in held: sh(f"{HOME}/.local/bin/team-card", "take", k, "--as", x["of"])   # anything the temp still held goes back to the owner
+    sh(HC, "kill", x["herdrName"]); time.sleep(1); sh(HC, "rm", x["herdrName"])
+    save(d, [y for y in temps(d) if y["herdrName"] != x["herdrName"]])
+    x["releasedAt"] = now(); x["releasedBy"] = o["as"]; log(d, x)
+    print(f'{x["herdrName"]} released.')
+else: print(__doc__)

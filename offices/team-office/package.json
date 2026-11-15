@@ -1,0 +1,13 @@
+{
+  "name": "team-office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Live 3D office for the Omniloy agent team (reads Herdr, local only)",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  }
+}
