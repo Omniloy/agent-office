@@ -24,10 +24,21 @@ const refOf = (u) => { // a GitHub or Jira address reads as what it is: "PR #412
   m = /^https?:\/\/[^/\s]+\.atlassian\.net\/browse\/([A-Z][A-Z0-9]+-\d+)/.exec(u);
   return m ? m[1] : '';
 };
+// A page on the artifacts server (port 4340) is written by agents as a 127.0.0.1 address: from the phone it must go
+// through the same door as this page, and it reads as a button with the page's name, not as a raw address.
+const ART_URL = /^https?:\/\/(?:127\.0\.0\.1|localhost):4340(\/[^\s<)]*)?$/;
+const artHref = (p) => (/^(127\.0\.0\.1|localhost)$/.test(location.hostname) ? 'http://127.0.0.1:4340' : `https://${location.hostname}:4340`) + (p || '/');
+const artName = (p) => { const seg = String(p || '').split(/[?#]/)[0].split('/').filter(Boolean); const t = (seg[1] || seg[0] || '').replace(/[-_]+/g, ' ').trim(); return t ? t[0].toUpperCase() + t.slice(1) : 'Open page'; };
+if (!document.getElementById('art-link-css')) { const st = document.createElement('style'); st.id = 'art-link-css'; st.textContent = 'a.artl { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 7px; margin: 2px 0; border-radius: 9px; background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.18); color: inherit; text-decoration: none; font-weight: 600; } a.artl svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; }'; document.head.append(st); }
+const ART_ICON = '<svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z"/><path d="M14 3.5V8h4M10 12.5h5M10 16h5"/></svg>';
 function rich(s) {
   const held = [];
   const hold = (html) => `\u0000${held.push(html) - 1}\u0000`;
-  const link = (url, label, cls = '') => hold(`<a${cls} href="${url}" target="_blank" rel="noopener">${label}</a>`);
+  const link = (url, label, cls = '') => {
+    const a = ART_URL.exec(url.replace(/&amp;/g, '&'));
+    if (a) return hold(`<a class="artl" href="${esc(artHref(a[1]))}" target="_blank" rel="noopener">${ART_ICON}${label && !/^https?:|…$/.test(label) && !/:4340/.test(label) ? label : esc(artName(a[1]))}</a>`);
+    return hold(`<a${cls} href="${url}" target="_blank" rel="noopener">${label}</a>`);
+  };
   const short = (u) => { const t = u.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''); return t.length > 46 ? `${t.slice(0, 44)}…` : t; };
   let h = esc(s)
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, text, url) => link(url, text))
