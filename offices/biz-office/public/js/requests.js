@@ -46,7 +46,7 @@ function render(d) {
   const card = (x) => `<div class="rq" data-id="${x.id}">
     <div class="who"><i style="background:${esc(x.color)}"></i><b>${esc(x.name)}</b><span>${esc(x.role)}${x.via ? ` · via ${esc(lead || 'the coordinator')}` : ''} · ${ago(x.created)}</span>
       ${x.ticket && site ? `<a href="${esc(site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
-    <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).rich || esc)(x.body)}</div>` : ''}
+    <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
     ${EMBED ? '' : x.kind === 'request'
       ? `<div class="acts">${x.options.map((o, i) => `<button class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>
          <div class="acts"><input placeholder="Write an answer…"><button data-send>Send</button></div>`

@@ -26,7 +26,7 @@ const tool = (name, args, input) => new Promise((resolve) => {
   if (input !== undefined) c.stdin.end(typeof input === 'string' ? input : JSON.stringify(input)); else c.stdin.end();
 });
 
-export function createPeers({ port, agents, OFFICES, APP }) {
+export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
   const mine = OFFICES.find((o) => o.port === port) || OFFICES[0];
   const peersFile = () => readJson(path.join(SHARED, 'peers.json'), { peers: {} });
   const seenFile = () => readJson(path.join(SHARED, 'peers-seen.json'), {});
@@ -66,7 +66,7 @@ export function createPeers({ port, agents, OFFICES, APP }) {
     for (const p of Object.values(d.peers || {})) {
       const known = (seen[p.id] || {}).floors || [], info = known.length ? await peerInfo(p.id, known) : null;
       const floors = known.map((k) => { const live = info && (info.floors || []).find((x) => x.port === k.port); return { ...k, ...(live || {}), local: undefined, door: k.door || k.local }; });
-      out.push({ id: p.id, name: (info && info.name) || p.name, owner: (info && info.owner) || p.owner || '', machine: p.machine || '', online: !!info, status: p.status || 'none', pausedBy: p.pausedBy || '', ask: !!p.ask,
+      out.push({ id: p.id, name: (info && info.name) || p.name, owner: (info && info.owner) || p.owner || '', machine: p.machine || '', online: !!info, status: p.status || 'none', pausedBy: p.pausedBy || '', ask: !!p.ask, chats: !!p.chats,
         floors, myFloors: OFFICES.map((o) => ({ port: o.port, name: o.name, on: ((p.my || {})[o.port] || {}).on !== false, share: !!((p.my || {})[o.port] || {}).share })) });
     }
     return { me: d.me || {}, buildings: out };
@@ -85,7 +85,7 @@ export function createPeers({ port, agents, OFFICES, APP }) {
       if (['request', 'accept', 'decline', 'disconnect'].includes(verb)) r = await tool('team-peer', [verb, id]);
       else if (verb === 'pause') r = await tool('team-peer', [b.paused === false ? 'resume' : 'pause', id]);
       else if (verb === 'floor') r = await tool('team-peer', ['floor', id, String(Number(b.port) || 0), ...(b.on === undefined ? [] : [b.on ? 'on' : 'off']), ...(b.share === undefined ? [] : [b.share ? 'share' : 'noshare'])]);
-      else if (verb === 'ask') r = await tool('team-peer', ['ask', id, b.on ? 'on' : 'off']);
+      else if (verb === 'ask' || verb === 'chats') r = await tool('team-peer', [verb, id, b.on ? 'on' : 'off']);
       else { json(res, 404, { error: 'not found' }); return true; }
       cache.clear();
       json(res, r.ok ? 200 : 400, r.ok ? { ok: true, note: r.out } : { error: r.err || r.out || 'it did not work' });
@@ -169,7 +169,7 @@ export function createPeers({ port, agents, OFFICES, APP }) {
       if (p === '/' || p === '/index.html') {
         const peer = await who(req), c = await floorCard(mine), me = (await peersFile()).me || {};
         const info = { building: me.name || '', owner: me.owner || '', floor: mine.name, lead: c ? c.lead : {}, viewer: peer ? { id: peer.id, name: peer.name, user: String(req.headers['x-peer-user'] || peer.owner || '') } : null,
-          share: !!(peer && ((peer.my || {})[port] || {}).share), back: String(req.headers['x-peer-back'] || '') };
+          share: !!(peer && ((peer.my || {})[port] || {}).share), chats: !!(peer && peer.chats && peer.status === 'on'), back: String(req.headers['x-peer-back'] || '') };
         const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest')
           .replace('</head>', `<script>window.__GUEST__ = ${JSON.stringify(info).replace(/</g, '\\u003c')};</script><script type="module" src="/js/guest.js"></script></head>`);
         res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' }); return res.end(html);
@@ -201,6 +201,13 @@ export function createPeers({ port, agents, OFFICES, APP }) {
         const b = await readBody(req), text = String(b.text || '').trim(); if (!text || !Number(b.id)) return json(res, 400, { error: 'empty answer' });
         const r = await tool('team-ask', ['answer', String(Number(b.id)), `${text} (answered by ${String(req.headers['x-peer-user'] || peer.owner || 'someone')} from ${peer.name})`]);
         return json(res, r.ok ? 200 : 400, r.ok ? { ok: true } : { error: r.err || r.out });
+      }
+      if (p === '/api/chat' || p === '/api/chat/status') { // reading a person's chat: only for a connected building this owner switched it on for (team-peer chats)
+        const name = url.searchParams.get('name') || '', a = name && (agents() || []).find((x) => x.herdrName === name);
+        if (req.method !== 'GET' || !peer || !peer.chats || peer.status !== 'on' || !a || !chatLog) return json(res, 404, { error: 'not for visitors' });
+        const person = { herdrName: a.herdrName, name: String(a.name || a.herdrName).split(' ')[0], role: a.role || '', color: a.color || '#888' };
+        if (p === '/api/chat/status') return json(res, 200, { person, live: a.status !== 'offline', working: a.status === 'working' });
+        return json(res, 200, { ...(await chatLog(a.herdrName, Number(url.searchParams.get('pos')) || 0, url.searchParams.get('file') || '')), person });
       }
       if (p.startsWith('/api/chat/')) return json(res, 404, { error: 'not for visitors' });
       if (req.method === 'GET') return json(res, 200, p === '/api/attention' ? { here: port, items: [], offices: [] } : p === '/api/artifacts' ? { port: 0, items: [] } : p === '/api/voice' ? { ready: false } : {});

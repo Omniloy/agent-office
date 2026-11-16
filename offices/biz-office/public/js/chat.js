@@ -38,6 +38,8 @@ html.phone #chat textarea { min-height: 42px; padding: 9px 12px; }
 #chat .back, #chat .dots { display: none; }
 html.phone #chat .back { display: block; } html.phone #chat .x { display: none; }
 #chat.person .dots { display: block; }
+#chat.ro form, #chat.ro .stop, #chat.ro .dots, #chat.ro .need { display: none !important; } /* a visitor from another building: read only */
+html.phone #chat.ro .log { padding-bottom: 230px; } /* the box for writing to the lead sits over the end of the chat */
 /* on a computer a person's chat takes the place of their side panel (same size, the room stays visible beside it) */
 html:not(.phone) #chat.person { top: calc(var(--bar, 44px) + 12px); right: 12px; bottom: 12px; width: var(--panel-w, min(560px, 100vw)); border: 1px solid var(--line, rgba(255,255,255,.12)); border-radius: 16px; overflow: hidden; }
 html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; }
@@ -306,7 +308,8 @@ body.embed #chat { display: none !important; }`;
   });
   log.addEventListener('pointerdown', () => menu.classList.remove('on'));
   if (PHONE) { try { const f = Number(localStorage.getItem('office.chat.h')); if (f > 0.1 && f < 1) root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`); } catch { /* no storage: the usual height */ } } // the height you left it at (drag its top edge)
-  if (panel && !window.__GUEST__) { // picking someone opens their chat; their panel stays underneath for the sections
+  if (panel && (!window.__GUEST__ || window.__GUEST__.chats)) { // a visitor reads chats only where that building allows it
+    if (window.__GUEST__) box.classList.add('ro'); // picking someone opens their chat; their panel stays underneath for the sections
     const openFor = () => { const o = office(), slug = o.selected && o.selected(), a = slug && (o.agents ? o.agents() : []).find((x) => x.slug === slug); if (a && a.herdrName) show(a.herdrName); };
     let was = panel.classList.contains('open'), last = '';
     new MutationObserver(() => {

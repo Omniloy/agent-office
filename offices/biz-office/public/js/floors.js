@@ -663,3 +663,23 @@ body.embed #floors { display: none !important; }`;
   }, 180);
   window.office && (window.office.floors = { show: () => show(true), hide: back, refresh: pollCity, view: (m, id) => { if (m && city) { const b = city.list.findIndex((t) => t.b.id === id); setMode(m === 'peer' && b < 0 ? 'city' : m, b); } return mode; } }); // for tests, and for the Connections sheet
 }
+
+// ---------------------------------------------------------------- the top bar on a computer
+// Floors and Buildings are one click away in the bar; Voice, Connections and the superadmin's chat live under More,
+// as on the phone. (The other files add their own buttons to the bar; they are moved as they appear.)
+(() => {
+  const root = document.documentElement;
+  if (root.classList.contains('phone') || window.__GUEST__) return;
+  const tools = document.querySelector('.tools'), more = document.getElementById('more'), moreBtn = document.getElementById('btn-more');
+  if (!tools || !more || !moreBtn) return;
+  const fl = () => (window.office || {}).floors;
+  const add = (id, text, title, fn) => { const b = document.createElement('button'); b.type = 'button'; b.id = id; b.textContent = text; b.title = title; b.onclick = fn; tools.insertBefore(b, moreBtn); return b; };
+  add('btn-floors', 'Floors', 'The whole building: every floor and who is working', () => { const f = fl(); if (f) { f.show(); f.view('home'); } });
+  const city = add('btn-city', 'Buildings', 'The other buildings (other computers that run an office)', () => { const f = fl(); if (!f) return; f.show(); let n = 0; const go = () => { if (f.view('city') !== 'city' && n++ < 12) setTimeout(go, 250); }; go(); });
+  city.hidden = true;
+  const ORDER = ['btn-chat', 'btn-voice', 'btn-peers'];
+  const move = () => { for (const id of [...ORDER].reverse()) { const b = document.getElementById(id); if (b && b.parentNode === tools) more.insertBefore(b, more.firstElementChild); } };
+  move(); new MutationObserver(move).observe(tools, { childList: true });
+  const look = async (n = 0) => { const o = window.office || {}; if (!o.api) { if (n < 40) setTimeout(() => look(n + 1), 400); return; } try { const d = await o.api('/api/buildings'); city.hidden = !((d.buildings || []).length); } catch { if (n < 6) setTimeout(() => look(n + 1), 5000); } }; // a busy computer answers late: ask again a few times
+  look(); setInterval(look, 60000);
+})();

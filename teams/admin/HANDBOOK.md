@@ -156,6 +156,12 @@ in the city view (zoom out past the building view), and their floors can be visi
   answer given here travels back, closes their request and reaches the agent's terminal. `team-peer home none` undoes it.
   The receiving building must allow it: Connections > "Its agents can open requests to you" (`team-peer ask <building> on`,
   off by default); without it the request stays in the sender's building.
+- **Reading chats in another building.** A visitor never sees chats unless that building switches it on for the
+  visitor's building: Connections > "Its owner can read your people's chats" (`team-peer chats <building> on`, set on
+  the building being visited). It is read only: picking a person there opens their chat without the box to write
+  (`peers.mjs` serves `/api/chat` to that building only; `chat.js` adds the class `ro`).
+- **Top bar on a computer** (end of `floors.js`): Floors and Buildings are buttons in the bar; Voice, Connections and
+  your chat are moved under More. Picking a person opens their chat in place of the side panel (`chat.js`).
 - **Screens.** `floors.js` draws the city, `peers.js` is the Connections screen (under More on the phone, in the top
   bar elsewhere; `/api/buildings`, `/api/peers/*`), `travel.js` + `world.js` (`teleportOut`, `teleportBack`,
   `visitor`) draw teleports from `/api/visits`. Messages to a person on another floor of this building are detected

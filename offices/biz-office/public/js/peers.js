@@ -103,7 +103,7 @@ body.embed #peers { display: none !important; }`;
     const isSure = sure === String(b.id);
     const hint = n ? n[0] : isSure ? 'Their agents and yours stop talking, and shared requests go away. Press again to disconnect.'
       : s === 'in' ? 'They ask to connect their agents with yours.' : s === 'out' ? 'Waiting for them to accept.' : s === 'paused' ? 'Nothing is exchanged until you resume.' : off && !linked ? 'This building is offline right now.' : '';
-    const ask = linked ? `<div class="fls"><p>Requests to you</p><div class="fr"><b>${esc(b.name || 'This building')}</b><label class="sw"><input type="checkbox" data-k="ask" ${b.ask ? 'checked' : ''}><u></u><span>Its agents can open requests to you</span></label></div></div>` : '';
+    const ask = linked ? `<div class="fls"><p>What ${esc(b.name || 'this building')} may do here</p><div class="fr"><b>Requests</b><label class="sw"><input type="checkbox" data-k="ask" ${b.ask ? 'checked' : ''}><u></u><span>Its agents can open requests to you</span></label></div><div class="fr"><b>Chats</b><label class="sw"><input type="checkbox" data-k="chats" ${b.chats ? 'checked' : ''}><u></u><span>Its owner can read your people's chats</span></label></div></div>` : '';
     const floors = linked && (b.myFloors || []).length ? `<div class="fls"><p>Your floors with this building</p>${b.myFloors.map((f) => `<div class="fr"><b>${esc(f.name || f.port)}</b>${sw(b, f, 'on', 'Agents can talk')}${sw(b, f, 'share', 'Share this floor\'s requests')}</div>`).join('')}</div>` : '';
     return `<section class="bd" data-id="${esc(b.id)}">
       <div class="hd"><i class="${st}"></i><b>${esc(b.name || 'Building')}</b><span>${esc([b.owner, b.machine].filter(Boolean).join(' · '))}</span><em class="${st}">${WORD[st] || WORD.none}</em></div>
@@ -138,10 +138,10 @@ body.embed #peers { display: none !important; }`;
   }
   async function flip(input) {
     const sec = input.closest('.bd'), b = sec && find(sec.dataset.id); if (!b) return;
-    if (input.dataset.k === 'ask') { // the whole building: may its agents ask you directly
-      const v = input.checked; b.ask = v; notes.delete(String(b.id)); busy = true;
-      try { const r = await api('/api/peers/ask', { id: b.id, on: v }); if (r && r.error) throw new Error(r.error); changed(); }
-      catch (e) { b.ask = !v; notes.set(String(b.id), [e.message || 'That did not work.', true]); busy = false; return render(); }
+    if (input.dataset.k === 'ask' || input.dataset.k === 'chats') { // the whole building: may its agents ask you directly, may its owner read chats here
+      const v = input.checked, kk = input.dataset.k; b[kk] = v; notes.delete(String(b.id)); busy = true;
+      try { const r = await api(`/api/peers/${kk}`, { id: b.id, on: v }); if (r && r.error) throw new Error(r.error); changed(); }
+      catch (e) { b[kk] = !v; notes.set(String(b.id), [e.message || 'That did not work.', true]); busy = false; return render(); }
       busy = false; return;
     }
     const f = (b.myFloors || []).find((x) => String(x.port) === input.dataset.port), k = input.dataset.k, v = input.checked; if (!f) return;

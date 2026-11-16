@@ -50,10 +50,27 @@ function rich(s) {
   h = h.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
   return h.replace(/\u0000(\d+)\u0000/g, (_m, i) => held[i]);
 }
-const md = (s) => rich(s)
+const mdText = (s) => rich(s)
   .replace(/^#{1,3}\s*(.+)$/gm, '<b>$1</b>')
   .replace(/^\s*[-*]\s+/gm, '• ')
   .replace(/\n/g, '<br>');
+if (!document.getElementById('md-table-css')) { const st = document.createElement('style'); st.id = 'md-table-css'; st.textContent = '.mdtw { overflow-x: auto; margin: 6px 0; white-space: normal; -webkit-overflow-scrolling: touch; } .mdtw table { border-collapse: collapse; font-size: .92em; line-height: 1.35; } .mdtw th, .mdtw td { border: 1px solid var(--line, rgba(255,255,255,.18)); padding: 4px 8px; text-align: left; vertical-align: top; max-width: 260px; overflow-wrap: normal; word-break: normal; } .mdtw th { background: rgba(255,255,255,.07); font-weight: 600; }'; document.head.append(st); }
+function md(s) { // tables become real tables (a text cut short may end in half a row: it is drawn as far as it goes)
+  const L = String(s == null ? '' : s).split('\n'), out = []; let buf = [];
+  const isRow = (l) => /^\s*\|/.test(l || ''), isSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l || '') && (l || '').includes('-');
+  const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+  const flush = () => { if (buf.length) { out.push(mdText(buf.join('\n'))); buf = []; } };
+  for (let i = 0; i < L.length; i++) {
+    if (isRow(L[i]) && isSep(L[i + 1])) {
+      flush();
+      let h = `<div class="mdtw"><table><tr>${cells(L[i]).map((c) => `<th>${rich(c)}</th>`).join('')}</tr>`;
+      for (i += 2; i < L.length && isRow(L[i]); i++) h += `<tr>${cells(L[i]).map((c) => `<td>${rich(c)}</td>`).join('')}</tr>`;
+      i--; out.push(`${h}</table></div>`);
+    } else buf.push(L[i]);
+  }
+  flush();
+  return out.join('');
+}
 
 let state = null, selected = null, tab = 'overview', booted = false, termTimer = null, sound = (() => { try { return localStorage.getItem('office.sound') === '1'; } catch { return false; } })(), lightMode = 'auto';
 const seenFeed = new Set();
@@ -519,7 +536,7 @@ function away(isAway) {
 }
 document.addEventListener('visibilitychange', () => away(document.hidden));
 window.office.pause = (p) => { world.setPaused(!!p); away(!!p); };
-Object.assign(window.office, { rich, selected: () => selected, zap: runZap, api, openCard, closeCard, boardSets, personName, agoOf, toast, chime, select, applyAsks, state: () => state, agents: () => (state ? state.agents : []), refreshAsks: () => { asksSig = ''; pollAsks(); } }); // for inbox.js
+Object.assign(window.office, { rich, md, selected: () => selected, zap: runZap, api, openCard, closeCard, boardSets, personName, agoOf, toast, chime, select, applyAsks, state: () => state, agents: () => (state ? state.agents : []), refreshAsks: () => { asksSig = ''; pollAsks(); } }); // for inbox.js
 window.office.recap = (sinceMs) => setTimeout(() => recap(sinceMs), 2500); // after a fresh page: let the first state and questions arrive
 
 // ------------------------------------------------------------------ state stream

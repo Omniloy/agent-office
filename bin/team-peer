@@ -10,6 +10,7 @@
   team-peer floor <building> <your floor port> [on|off] [share|noshare]
                                                  per floor of yours: may its agents talk with that building; are its requests shared with it
   team-peer ask <building> [on|off]              may that building's agents open requests straight to YOUR owner (off unless switched on)
+  team-peer chats <building> [on|off]            may that building's OWNER read your people's chats when visiting (read only; off unless switched on)
   team-peer me [--name "Building name"] [--owner Name]       this building's name card
   team-peer home [<building>|none]               the building where your owner reads requests. With it set, every request or
                                                  note to the owner (team-ask ... --to __OWNER_ID__) also lands in their box there,
@@ -123,11 +124,11 @@ elif c == "floor":
             if w in ("on", "off"): m["on"] = w == "on"
             elif w in ("share", "noshare"): m["share"] = w == "share"
         print(json.dumps(m))
-elif c == "ask":
+elif c in ("ask", "chats"):
     with Box() as d:
         p = find(d, pos[0] if pos else sys.exit("which building?"))
-        if len(pos) > 1: p["ask"] = pos[1] == "on"
-        print(f'{p["name"]}: its agents {"can" if p.get("ask") else "cannot"} open requests to the owner here')
+        if len(pos) > 1: p[c] = pos[1] == "on"
+        print(f'{p["name"]}: its agents {"can" if p.get("ask") else "cannot"} open requests to the owner here; its owner {"can" if p.get("chats") else "cannot"} read chats here')
 elif c == "home":
     with Box() as d:
         if pos: d["home"] = "" if pos[0] == "none" else find(d, pos[0])["id"]

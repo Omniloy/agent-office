@@ -106,7 +106,7 @@ function render(force) {
     body.innerHTML = items.length ? items.map((x) => `
       <div class="it ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}" style="--c:${esc(x.color)}">
         <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc(x.name)}</button><i>${x.kind === 'request' ? 'needs your answer' : 'message'}</i><time>${esc(ago(x.created))}</time></div>
-        <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).rich || esc)(x.body)}</div>` : ''}
+        <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
         ${x.kind === 'request'
           ? `${(x.options || []).length ? `<div class="acts">${x.options.map((o, i) => `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
              <div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>`
