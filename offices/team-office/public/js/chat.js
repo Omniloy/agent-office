@@ -38,6 +38,13 @@ html.phone #chat textarea { min-height: 42px; padding: 9px 12px; }
 #chat .back, #chat .dots { display: none; }
 html.phone #chat .back { display: block; } html.phone #chat .x { display: none; }
 #chat.person .dots { display: block; }
+/* on a computer there is room: the sections are tabs under the name, not a menu */
+html:not(.phone) #chat.person .dots { display: none; }
+html:not(.phone) #chat.person .menu { position: static; display: flex; flex-direction: row; flex: none; gap: 2px; min-width: 0; padding: 0 10px; border: 0; border-bottom: 1px solid var(--line, rgba(255,255,255,.1)); border-radius: 0; background: transparent; box-shadow: none; overflow-x: auto; }
+html:not(.phone) #chat.person .menu button { display: block; flex: none; min-height: 38px; padding: 0 12px; border-radius: 0; border-bottom: 2px solid transparent; font-size: 13.5px; color: var(--muted, #9aa3b8); cursor: pointer; }
+html:not(.phone) #chat.person .menu button:hover { color: var(--text, #e8eaf2); }
+html:not(.phone) #chat.person:not([data-sec]) .menu .chat, html:not(.phone) #chat.person[data-sec=""] .menu .chat, html:not(.phone) #chat.person[data-sec="overview"] .menu [data-tab="overview"], html:not(.phone) #chat.person[data-sec="activity"] .menu [data-tab="activity"], html:not(.phone) #chat.person[data-sec="terminal"] .menu [data-tab="terminal"], html:not(.phone) #chat.person[data-sec="notes"] .menu [data-tab="notes"] { color: var(--text, #e8eaf2); border-bottom-color: var(--accent, #7c9cff); }
+html:not(.phone) #chat.ro .menu { display: none; }
 #chat.ro form, #chat.ro .stop, #chat.ro .dots, #chat.ro .need { display: none !important; } /* a visitor from another building: read only */
 html.phone #chat.ro .log { padding-bottom: 230px; } /* the box for writing to the lead sits over the end of the chat */
 /* on a computer a person's chat takes the place of their side panel (same size, the room stays visible beside it) */
@@ -244,7 +251,7 @@ body.embed #chat { display: none !important; }`;
     if (tab === 'artifacts') { if (asks && body && comp && body.parentNode === holder) { comp.before(asks); comp.before(body); } }
     else if (tab && asks && body) { holder.append(asks, body); const b = document.querySelector(`#tabs [data-tab="${tab}"]`); if (b) b.click(); }
     else { tab = ''; if (asks && body && comp && body.parentNode === holder) { comp.before(asks); comp.before(body); } }
-    sec = tab; asking = ''; box.classList.toggle('sec', !!sec && sec !== 'artifacts'); box.classList.toggle('art', sec === 'artifacts'); if (sec === 'artifacts') { paintArts(); loadArts(); } sub.textContent = sec ? SEC[sec] : status; if (sec) sub.classList.remove('work');
+    sec = tab; box.dataset.sec = sec; asking = ''; box.classList.toggle('sec', !!sec && sec !== 'artifacts'); box.classList.toggle('art', sec === 'artifacts'); if (sec === 'artifacts') { paintArts(); loadArts(); } sub.textContent = sec ? SEC[sec] : status; if (sec) sub.classList.remove('work');
     if (!sec && open) log.scrollTop = log.scrollHeight;
   }
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, innerHeight * 0.4)}px`; };
