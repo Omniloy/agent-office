@@ -30,13 +30,14 @@ const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return
 const b64u = (b) => Buffer.from(b).toString('base64url');
 
 // ---------------------------------------------------------------- who works where
+const shortName = (n) => { const m = /^(\S+) (\d+) \(temp\)/.exec(String(n)); return m ? `${m[1]} ${m[2]}` : String(n).split(' ')[0]; }; // a temp keeps its number: "Nora 3"
 let people = { at: 0, by: {} };
 async function whoIsWho() {
   if (Date.now() - people.at < 30_000) return people.by;
   const by = {};
   for (const o of OFFICES) {
     const team = await readJson(path.join(HOME, o.dir, 'team.json'), null), temps = await readJson(path.join(HOME, o.dir, 'temps.json'), []);
-    for (const p of [...((team && team.personas) || []), ...(Array.isArray(temps) ? temps : [])]) if (p && p.herdrName && !by[p.herdrName]) by[p.herdrName] = { port: o.port, name: String(p.name || p.herdrName).split(' ')[0], color: p.color || '#888' };
+    for (const p of [...((team && team.personas) || []), ...(Array.isArray(temps) ? temps : [])]) if (p && p.herdrName && !by[p.herdrName]) by[p.herdrName] = { port: o.port, name: shortName(p.name || p.herdrName), color: p.color || '#888' };
   }
   people = { at: Date.now(), by };
   return by;
@@ -153,7 +154,7 @@ export function createHub({ port, stuck, agents }) {
     for (const a of list) if (!since.has(a.herdrName)) since.set(a.herdrName, Date.now());
     const items = list.filter((a) => Date.now() - since.get(a.herdrName) > 15_000).map((a) => { // a short stop is not a wait
       const t = since.get(a.herdrName);
-      return { id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: String(a.name || a.herdrName).split(' ')[0], from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() };
+      return { id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() };
     });
     let all = []; try { all = (agents ? agents() : []) || []; } catch { all = []; }
     await writeJson(path.join(PUSH, `local-${port}.json`), { ts: Date.now(), items, people: all.length, working: all.filter((a) => a.status === 'working').length }); // the head count is what the building view shows

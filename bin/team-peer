@@ -10,6 +10,9 @@
   team-peer floor <building> <your floor port> [on|off] [share|noshare]
                                                  per floor of yours: may its agents talk with that building; are its requests shared with it
   team-peer me [--name "Building name"] [--owner Name]       this building's name card
+  team-peer home [<building>|none]               the building where your owner reads requests. With it set, every request or
+                                                 note to the owner (team-ask ... --to __OWNER_ID__) also lands in their box there,
+                                                 and their answer comes back and closes it here. Only the owner sets this.
 
 <building> is its id or the start of its name. Store: ~/.omniloy-team/peers.json (connections), peers-seen.json (what was found)."""
 import sys, os, json, time, secrets, subprocess, urllib.request, urllib.error, fcntl, re, socket
@@ -119,6 +122,20 @@ elif c == "floor":
             if w in ("on", "off"): m["on"] = w == "on"
             elif w in ("share", "noshare"): m["share"] = w == "share"
         print(json.dumps(m))
+elif c == "home":
+    with Box() as d:
+        if pos: d["home"] = "" if pos[0] == "none" else find(d, pos[0])["id"]
+        h = d["peers"].get(d.get("home") or "")
+        print(f'requests to the owner also go to {h["name"]} ({status_line(h)})' if h else "requests to the owner stay in this building")
+elif c == "forward":   # called by team-ask for a request or note to the owner; the item as JSON on stdin
+    x = json.load(sys.stdin)
+    with Box() as d: p = d["peers"].get(d.get("home") or ""); me = d["me"]
+    if not p: sys.exit(0)
+    if p.get("status") != "on": sys.exit(f'not sent to {p["name"]} ({status_line(p)}): it waits here until the owner looks in this building')
+    port, fl, me_p = person(x["from"])
+    r = call(p["id"], "/peer/message", {"to": "owner", "text": x["title"], "body": x.get("body", ""), "options": x.get("options") or [], "note": x.get("kind") == "note",
+                                        "agent": x["from"], "name": str(x.get("name") or x["from"]).split(" ")[0], "building": me["name"], "fromFloor": fl["name"] if fl else "", "fromPort": int(port) if port else 0, "local": x["id"]})
+    print(f'also in the owner\'s box at {p["name"]}; the answer will arrive in your terminal' if r.get("ok") else f'could not reach {p["name"]} now ({r.get("error", "no answer")}): it waits here')
 elif c == "send":
     who = o.get("from") or sys.exit("--from <your Herdr name> is required")
     if len(pos) < 3: sys.exit('team-peer send <building> <floor> "text" --from <you>')
@@ -163,6 +180,17 @@ elif c == "incoming":   # called by the office server for what arrives from anot
         print(json.dumps({"ok": True}))
     elif kind == "message":   # a person or an agent of another building writes to the lead of one of our floors
         d = load(F, {}); p = d.get("peers", {}).get(pid)
+        if b.get("to") == "owner":   # an agent of a connected building asks our owner directly (their building's `team-peer home` points here)
+            if not p or p.get("status") != "on": sys.exit(json.dumps({"error": "the buildings are not connected"}))
+            who = f'{b.get("name") or "Someone"} · {b.get("building") or p.get("name") or "another building"}'
+            text = " ".join(str(b.get("text") or "").split()); body = str(b.get("body") or "")[:8000]
+            if not text: sys.exit(json.dumps({"error": "empty message"}))
+            if len(text) > 140: body = (text + "\n\n" + body).strip()
+            op = ",".join(str(o).replace(",", " ") for o in (b.get("options") or [])[:6])
+            r = ask("external", "--to", "owner", "--name", who, "--peer", pid, "--ref", json.dumps({"agent": b.get("agent") or "", "fromPort": b.get("fromPort"), "local": b.get("local")}),
+                    *(["--note"] if b.get("note") else []), *(["--options", op] if op else []), *(["--body", body] if body else []), text[:140])
+            if r.returncode: sys.exit(json.dumps({"error": (r.stderr or r.stdout).strip()[:200]}))
+            print(json.dumps({"ok": True, "id": r.stdout.strip().split("\n")[-1]})); sys.exit()
         fl = teams().get(str(b.get("floor"))) or sys.exit(json.dumps({"error": "no such floor"}))
         lead = fl["team"].get("lead"); agent = b.get("agent")
         if agent:   # agents only talk when both owners agreed and neither floor is switched off
@@ -178,6 +206,9 @@ elif c == "incoming":   # called by the office server for what arrives from anot
         print(json.dumps({"ok": True, "id": r.stdout.strip().split("\n")[-1], "lead": lead}))
     elif kind == "answer":   # the lead over there answered something that left from here
         ref = b.get("ref") or {}; who = b.get("lead") or "The lead"; nm = (load(F, {}).get("peers", {}).get(pid) or {}).get("name", "the other building")
+        if ref.get("local"):   # it was a request to the owner opened here: closing it tells the agent and frees their card
+            r = ask("answer", str(int(ref["local"])), str(b.get("text", "")))
+            print(json.dumps({"ok": r.returncode == 0, **({} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[:200]})})); sys.exit()
         msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
         if ref.get("agent") and hc("send", ref["agent"], msg).returncode == 0: print(json.dumps({"ok": True})); sys.exit()
         ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])

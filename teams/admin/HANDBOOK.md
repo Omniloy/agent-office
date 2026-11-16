@@ -149,6 +149,11 @@ in the city view (zoom out past the building view), and their floors can be visi
 - **Messages.** A person visiting writes to the lead; an agent uses `team-peer send <building> <floor> "..." --from
   <name>` (needs status `on` and both floors switched on). Either becomes a request for that lead
   (`team-ask external`), and the lead's `team-ask answer` travels back (`team-peer answered`).
+- **Requests to the owner from another building.** A building whose owner reads requests elsewhere points at that
+  building with `team-peer home "<building>"`. From then on every request or
+  note to the owner opened there (`team-ask request --from <you> --to <owner> ...`) also lands in the owner's box
+  here as "<name> · <their building>" (it shows on every floor's waiting list and opens on the Dev floor), and the
+  answer given here travels back, closes their request and reaches the agent's terminal. `team-peer home none` undoes it.
 - **Screens.** `floors.js` draws the city, `peers.js` is the Connections screen (under More on the phone, in the top
   bar elsewhere; `/api/buildings`, `/api/peers/*`), `travel.js` + `world.js` (`teleportOut`, `teleportBack`,
   `visitor`) draw teleports from `/api/visits`. Messages to a person on another floor of this building are detected

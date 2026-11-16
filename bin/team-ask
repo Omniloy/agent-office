@@ -110,6 +110,9 @@ if c in ("request", "note"):
              "options": [o.strip() for o in d.get("options", "").split(",") if o.strip()] if c == "request" else [],
              "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to}
         b["next"] += 1; b["items"].append(x); print(x["id"])
+    if to == "__OWNER_ID__":   # the owner sits in another building (team-peer home): the request also lands in their own box there
+        r = subprocess.run([os.path.expanduser("~/.local/bin/team-peer"), "forward"], input=json.dumps({**x, "name": NAMES[who]["name"]}), capture_output=True, text=True)
+        if (r.stdout + r.stderr).strip(): print((r.stdout + r.stderr).strip()[:200], file=sys.stderr)
     if c == "request" and x["ticket"]:   # the card waits on this request until it is answered (team-card)
         subprocess.run([os.path.expanduser("~/.local/bin/team-card"), "wait", x["ticket"], "--as", who, "--req", str(x["id"]), f'request #{x["id"]} to {to}'], capture_output=True)
     if to != "__OWNER_ID__" and c == "request":

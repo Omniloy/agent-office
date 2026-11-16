@@ -193,7 +193,7 @@ export function createPeers({ port, agents, OFFICES, APP }) {
       if (p === '/api/requests') { // this floor's open questions, only when its owner shares them with that building
         if (!shared) return json(res, 200, { items: [], withLead: 0, site: '' });
         const names = new Set((agents() || []).map((a) => a.herdrName)), all = (await readJson(path.join(SHARED, 'requests.json'), { items: [] })).items || [];
-        return json(res, 200, { site: '', withLead: 0, items: all.filter((x) => x.status === 'open' && names.has(x.from) && (x.to || '__OWNER_ID__') !== x.from && !names.has(x.to)).map((x) => { const a = (agents() || []).find((y) => y.herdrName === x.from) || {}; return { ...x, name: (a.name || x.from).split(' ')[0], color: a.color || '#888' }; }) });
+        return json(res, 200, { site: '', withLead: 0, items: all.filter((x) => x.status === 'open' && names.has(x.from) && (x.to || '__OWNER_ID__') !== x.from && !names.has(x.to)).map((x) => { const a = (agents() || []).find((y) => y.herdrName === x.from) || {}; const m = /^(\S+) (\d+) \(temp\)/.exec(a.name || ''); return { ...x, name: m ? `${m[1]} ${m[2]}` : (a.name || x.from).split(' ')[0], color: a.color || '#888' }; }) });
       }
       if (p === '/api/requests/answer' && req.method === 'POST') {
         if (!shared) return json(res, 403, { error: 'This floor does not share its requests with your building.' });

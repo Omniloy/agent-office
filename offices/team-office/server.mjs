@@ -9,7 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createHub } from './hub.mjs';
+import { createHub, OFFICES } from './hub.mjs';
 
 const HOME = os.homedir();
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -677,6 +677,7 @@ function readBody(req) {
 }
 // Pending requests for __OWNER__ (written by `team-ask`); the office shows them and can answer.
 const TEAM_ASK = bin('team-ask');
+const shortName = (n) => { const m = /^(\S+) (\d+) \(temp\)/.exec(String(n)); return m ? `${m[1]} ${m[2]}` : String(n).split(' ')[0]; }; // a temp keeps its number: "Nora 3"
 async function loadRequests() {
   let items = [];
   // every team shares one requests store (team-ask); another team's office shows only its own people's
@@ -684,12 +685,16 @@ async function loadRequests() {
   const team = await loadTeam();
   if (process.env.TEAM_DIR) { const mine = new Set(team.personas.map((p) => p.herdrName)); items = items.filter((x) => mine.has(x.from)); }
   const open = items.filter((x) => x.status === 'open');
+  const elsewhere = {}; // people of the other floors (this floor lists everyone's requests)
+  if (!process.env.TEAM_DIR) for (const o of OFFICES) for (const f of ['team.json', 'temps.json']) {
+    try { const d = JSON.parse(await fs.readFile(path.join(HOME, o.dir, f), 'utf8')); for (const q of (Array.isArray(d) ? d : d.personas) || []) if (q && q.herdrName && !elsewhere[q.herdrName]) elsewhere[q.herdrName] = q; } catch { /* no such file on that floor */ }
+  }
   return {
     site: team.jira && team.jira.site,
     withLucia: open.filter((x) => x.to === (team.lead || 'lucia')).length,
     items: open.filter((x) => (x.to || '__OWNER_ID__') === '__OWNER_ID__').map((x) => {
-      const p = team.personas.find((q) => q.herdrName === x.from) || {};
-      return { id: x.id, kind: x.kind, from: x.from, name: (p.name || x.from).split(' ')[0], role: p.role || '', color: p.color || '#888', via: x.via || '',
+      const p = team.personas.find((q) => q.herdrName === x.from) || elsewhere[x.from] || {};
+      return { id: x.id, kind: x.kind, from: x.from, name: x.ext ? x.from : shortName(p.name || x.from), role: p.role || '', color: p.color || '#888', via: x.via || '',
         title: x.title, body: x.body, ticket: x.ticket, options: x.options || [], created: x.created };
     }),
   };

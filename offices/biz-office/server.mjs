@@ -440,6 +440,7 @@ const TEAM_ASK = bin('team-ask');
 const TEAM_DRAFT = bin('team-draft');
 // Drafts sent or deleted in Gmail itself drop off the list on their own.
 setInterval(() => { run(TEAM_DRAFT, ['sync'], { timeout: 60000 }).catch(() => {}); }, 60000).unref();
+const shortName = (n) => { const m = /^(\S+) (\d+) \(temp\)/.exec(String(n)); return m ? `${m[1]} ${m[2]}` : String(n).split(' ')[0]; }; // a temp keeps its number: "Nora 3"
 async function loadRequests() {
   let items = [];
   try { items = JSON.parse(await fs.readFile(REQUESTS_FILE, 'utf8')).items || []; } catch { /* none yet */ }
@@ -453,7 +454,7 @@ async function loadRequests() {
     withLead: lead ? open.filter((x) => x.to === lead.herdrName).length : 0,
     items: open.filter((x) => (x.to || '__OWNER_ID__') === '__OWNER_ID__').map((x) => {
       const p = team.personas.find((q) => q.herdrName === x.from) || {};
-      return { id: x.id, kind: x.kind, from: x.from, name: (p.name || x.from).split(' ')[0], role: p.role || '', color: p.color || '#888', via: x.via || '',
+      return { id: x.id, kind: x.kind, from: x.from, name: x.ext ? x.from : shortName(p.name || x.from), role: p.role || '', color: p.color || '#888', via: x.via || '',
         title: x.title, body: x.body, ticket: x.ticket, options: x.options || [], created: x.created };
     }),
   };
