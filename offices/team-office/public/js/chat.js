@@ -37,7 +37,10 @@ html.phone #chat form button { width: 42px; height: 42px; }
 html.phone #chat textarea { min-height: 42px; padding: 9px 12px; }
 #chat .back, #chat .dots { display: none; }
 html.phone #chat .back { display: block; } html.phone #chat .x { display: none; }
-html.phone #chat.person .dots { display: block; }
+#chat.person .dots { display: block; }
+/* on a computer a person's chat takes the place of their side panel (same size, the room stays visible beside it) */
+html:not(.phone) #chat.person { top: calc(var(--bar, 44px) + 12px); right: 12px; bottom: 12px; width: var(--panel-w, min(560px, 100vw)); border: 1px solid var(--line, rgba(255,255,255,.12)); border-radius: 16px; overflow: hidden; }
+html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; }
 #chat .menu { position: absolute; right: 8px; top: 54px; z-index: 2; display: none; flex-direction: column; min-width: 190px; padding: 6px; border-radius: 14px; background: var(--panel, #171b28); border: 1px solid var(--line, rgba(255,255,255,.16)); box-shadow: 0 14px 40px rgba(0, 0, 0, .5); }
 #chat .menu.on { display: flex; }
 #chat .menu button { min-height: 44px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: inherit; font: 500 15px var(--sans, system-ui, sans-serif); text-align: left; }
@@ -225,12 +228,12 @@ body.embed #chat { display: none !important; }`;
     box.dataset.who = name;
     if (name !== target) { status = ''; target = name; who = ''; file = ''; pos = 0; pending = []; lastStep = null; log.innerHTML = ''; nm.textContent = ''; sub.textContent = ''; av.textContent = ''; av.style.background = 'transparent'; err.textContent = ''; need.classList.remove('on'); box.classList.remove('working'); }
     box.classList.toggle('person', !!target); box.classList.toggle('admin', !target); paintArts();
-    open = true; box.classList.add('on'); root.classList.add('chat-on'); dispatchEvent(new Event('office-chat'));
+    open = true; box.classList.add('on'); root.classList.add('chat-on'); root.classList.toggle('chat-person', !!target); dispatchEvent(new Event('office-chat'));
     clearTimeout(timer); poll(++run);
-    if (!PHONE) ta.focus();
+    if (!PHONE && !target) ta.focus(); // with a person the keys still pick people (1-9) until you click the box
   }
-  function hide() { section(''); open = false; run++; clearTimeout(timer); box.classList.remove('on'); menu.classList.remove('on'); root.classList.remove('chat-on'); dispatchEvent(new Event('office-chat')); }
-  function close() { const person = !!target; hide(); if (person && PHONE && office().select) office().select(null); }
+  function hide() { section(''); open = false; run++; clearTimeout(timer); box.classList.remove('on'); menu.classList.remove('on'); root.classList.remove('chat-on', 'chat-person'); dispatchEvent(new Event('office-chat')); }
+  function close() { const person = !!target; hide(); if (person && office().select) office().select(null); }
   // "…" > a section: the same sheet shows that part of the person (what the old side panel had) instead of the messages.
   // The page keeps drawing into the same two boxes; they only move in here and back.
   function section(tab) {
@@ -303,7 +306,7 @@ body.embed #chat { display: none !important; }`;
   });
   log.addEventListener('pointerdown', () => menu.classList.remove('on'));
   if (PHONE) { try { const f = Number(localStorage.getItem('office.chat.h')); if (f > 0.1 && f < 1) root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`); } catch { /* no storage: the usual height */ } } // the height you left it at (drag its top edge)
-  if (PHONE && panel) { // tapping someone opens their chat; their sheet stays underneath for the sections
+  if (panel && !window.__GUEST__) { // picking someone opens their chat; their panel stays underneath for the sections
     const openFor = () => { const o = office(), slug = o.selected && o.selected(), a = slug && (o.agents ? o.agents() : []).find((x) => x.slug === slug); if (a && a.herdrName) show(a.herdrName); };
     let was = panel.classList.contains('open'), last = '';
     new MutationObserver(() => {
@@ -311,7 +314,7 @@ body.embed #chat { display: none !important; }`;
       if (!on) { if (was && open && target) hide(); }
       else if (!was || slug !== last) openFor();
       was = on; last = slug || '';
-    }).observe(panel, { attributes: true, attributeFilter: ['class'] });
+    }).observe(panel, PHONE ? { attributes: true, attributeFilter: ['class'] } : { attributes: true, attributeFilter: ['class'], childList: true, subtree: true }); // on a computer you can pick another person while one is open
   }
   $('.stop', box).onclick = async () => { try { await api('/api/chat/stop', { name: target }); } catch (e) { err.textContent = e.message || 'Could not stop them.'; } };
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && open && document.activeElement !== ta) close(); });
