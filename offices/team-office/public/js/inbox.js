@@ -51,6 +51,7 @@ style.textContent = `
 #inbox .it .m { margin-top: 3px; color: var(--dim, #7f8aa3); font-size: 12px; overflow-wrap: anywhere; }
 #inbox .it .b { margin-top: 5px; color: var(--muted, #a9b3c9); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 170px; overflow: auto; }
 #inbox .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#inbox .acts button[data-answer] { max-width: 100%; white-space: normal; text-align: left; line-height: 1.3; overflow-wrap: anywhere; }
 #inbox .acts button, #inbox .acts a { font: inherit; font-size: 12.5px; padding: 5px 11px; border-radius: 7px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.07); color: var(--text, #e8ecf5); cursor: pointer; text-decoration: none; }
 #inbox .acts button:hover, #inbox .acts a:hover { background: rgba(255,255,255,.14); }
 #inbox .acts .pri { background: var(--accent, #7c9cff); border-color: var(--accent, #7c9cff); color: var(--on-accent, #0b1022); font-weight: 600; }

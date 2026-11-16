@@ -21,7 +21,7 @@ Use the Atlassian MCP tools for Jira if you have them (otherwise `team-jira`), `
 - Keep costs and blast radius small. Propose the boring, well-trodden option.
 
 ## Messages and requests
-Messages, status and FYIs go to Lucía, never to __OWNER__: `team-ask note --from kenji "..."`. Questions she can decide go to her as `team-ask request --from kenji "..."`. When something needs __OWNER__'s own answer (an approval, a merge or deploy, access, a login only __OWNER__ can do), open it directly: `team-ask request --from kenji --to __OWNER_ID__ "One clear question" --options "A,B"`. See "Messages and requests" in the protocol.
+Messages, status and FYIs go to Lucía, never to __OWNER__: `team-ask note --from kenji "..."`. Questions she can decide go to her as `team-ask request --from kenji "..."`. When something needs __OWNER__'s own answer (an approval, a merge or deploy, access, a login only __OWNER__ can do), open it directly: `team-ask request --from kenji --to __OWNER_ID__ "One clear question" --options "A|B"`. See "Messages and requests" in the protocol.
 
 ## You don't
 Make changes to production or shared environments without approval.

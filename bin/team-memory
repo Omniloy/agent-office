@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""team-memory: keeps each person's notes file (memory/<slug>.md) small. Everyone reads their whole file at
+every start and the 3D office shows it under Notes, so a file used as a diary costs time and money forever.
+
+  team-memory status           every notes file, its size, and who is over the limit
+  team-memory check [--dry]    for each person over the limit who is running and not working: save a full
+                               copy, then send them ONE message asking them to rewrite the file (the watchdog
+                               runs this every ten minutes; nobody is reminded more than once per `repeatAfter`)
+  team-memory archive <name>   save a full copy of that person's file now
+
+Nothing is ever deleted here: the copy goes to memory/archive/<slug>-<date>-<time>.md and the person rewrites
+their own file. Sizes are in tokens, estimated as characters / charsPerToken.
+Config ~/.omniloy-team/memory-config.json (all optional): {"limitTokens": 20000, "targetTokens": 10000,
+"charsPerToken": 4, "repeatAfter": 21600 (seconds between reminders to the same person), "off": false}.
+State ~/.omniloy-team/memory-watch.json. Local reads only."""
+import json, os, sys, subprocess, time, datetime, hashlib, shutil, glob
+HOME = os.path.expanduser("~"); T = f"{HOME}/.omniloy-team"; STATE = f"{T}/memory-watch.json"; HC = f"{HOME}/.local/bin/hc"
+DIRS = sorted(os.path.dirname(f) for f in glob.glob(f"{HOME}/.omniloy-*/team.json"))   # every team folder on this machine
+DEF = {"limitTokens": 20000, "targetTokens": 10000, "charsPerToken": 4, "repeatAfter": 6 * 3600, "off": False}
+def rj(p, d):
+    try: return json.load(open(p))
+    except Exception: return d
+def cfg(): return {**DEF, **rj(f"{T}/memory-config.json", {})}
+def people():
+    out = {}
+    for d in DIRS:
+        tj = rj(f"{d}/team.json", None)
+        if not tj: continue
+        for p in tj["personas"]:
+            f = f"{d}/memory/{p['slug']}.md"
+            out[p["herdrName"]] = {"name": p["name"].split(" ")[0], "slug": p["slug"], "file": f, "dir": d, "team": tj.get("name", ""),
+                                   "size": toks(f)}
+    return out
+def toks(f):
+    try: return int(len(open(f, encoding="utf-8", errors="replace").read()) / max(1, cfg()["charsPerToken"]))
+    except Exception: return 0
+def kb(n): return f"{n:,} tokens"
+def archive(p, st):
+    """A full copy, once per version of the file."""
+    raw = open(p["file"], "rb").read(); h = hashlib.sha1(raw).hexdigest()
+    s = st.setdefault(p["slug"], {})
+    if s.get("hash") == h and os.path.exists(s.get("copy", "")): return s["copy"]
+    os.makedirs(f"{p['dir']}/memory/archive", exist_ok=True)
+    dst = f"{p['dir']}/memory/archive/{p['slug']}-{datetime.datetime.now():%Y%m%d-%H%M}.md"
+    shutil.copy2(p["file"], dst); s["hash"], s["copy"] = h, dst
+    return dst
+def save(st):
+    tmp = STATE + ".tmp"; json.dump(st, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STATE)
+def check(dry=False):
+    c = cfg(); now = time.time(); P = people(); st = rj(STATE, {})
+    if c.get("off"): return []
+    over = {n: p for n, p in P.items() if p["size"] > c["limitTokens"]}
+    for p in P.values():   # back under the limit: forget the reminders
+        if p["size"] <= c["limitTokens"] and p["slug"] in st: st[p["slug"]].pop("last", None); st[p["slug"]].pop("pings", None)
+    if over:
+        try: terms = {t["name"]: t for t in json.loads(subprocess.run([HC, "ls", "--json"], capture_output=True, text=True, timeout=20).stdout)["terminals"] if t.get("name") and t.get("state") == "live"}
+        except Exception as e: print("hc ls failed:", e); return []
+    told = []
+    for n, p in over.items():
+        s = st.setdefault(p["slug"], {})
+        if n not in terms or terms[n].get("status") == "working": continue      # not running, or busy: next time
+        if now - s.get("last", 0) < c["repeatAfter"]: continue
+        told.append(n)
+        print(f'{datetime.datetime.now():%H:%M:%S} MEMORY {n}: {kb(p["size"])} (limit {kb(c["limitTokens"])})')
+        if dry: continue
+        copy = archive(p, st); s["last"] = now; s["pings"] = s.get("pings", 0) + 1
+        msg = (f"Memory check: your notes file {p['file']} is about {kb(p['size'])} and the limit is {kb(c['limit'])}. You read all of it at every start and __OWNER__ reads it on his phone, "
+               f"so every extra line costs time and money each time. A full copy was just saved at {copy}: nothing is lost, and you can look things up there later (search it, do not read it whole). "
+               f"Rewrite the file now, in place, under {kb(c['target'])}, with only two sections. "
+               f"1) Open now: one line per thing in progress, with its state and who you are waiting on. Remove the line when it closes. "
+               f"2) How things work here: reusable lessons only, at most about 25 short bullets; merge or drop bullets instead of adding. "
+               f"Nothing else: no dated entries, no history of finished work, no pasted output, tables or long explanations. A detail you still need stays where it already lives "
+               f"(the ticket or pull request, the experiment folder, a report, the saved copy) and the notes keep a one-line pointer to it. No secrets. "
+               f"From now on edit lines in place instead of appending. When it is done, carry on with your work; do not answer this message.")
+        subprocess.run([HC, "send", n, msg], capture_output=True)
+    if not dry: save(st)
+    return told
+a = sys.argv[1:] or ["status"]
+if a[0] == "status":
+    c = cfg(); st = rj(STATE, {})
+    for n, p in sorted(people().items(), key=lambda x: -x[1]["size"]):
+        s = st.get(p["slug"], {})
+        print(f'  {n:9} {kb(p["size"]):>14}  {"OVER the limit" if p["size"] > c["limitTokens"] else "ok"}' + (f', reminded {s["pings"]}x, last {datetime.datetime.fromtimestamp(s["last"]):%d %b %H:%M}' if s.get("last") else ""))
+    print(f'limit {kb(c["limitTokens"])}, target {kb(c["targetTokens"])}' + (" (reminders off)" if c.get("off") else ""))
+elif a[0] == "check": print("told:", ", ".join(check(dry="--dry" in a)) or "nobody")
+elif a[0] == "archive" and len(a) > 1:
+    P = people(); st = rj(STATE, {})
+    if a[1] not in P or not P[a[1]]["size"]: sys.exit(f"no notes file for {a[1]}")
+    print(archive(P[a[1]], st)); save(st)
+else: print(__doc__)

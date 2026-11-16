@@ -29,6 +29,7 @@ body.clients-open #requests { right: auto; left: 296px; top: 74px; }
 #requests .t { margin: 4px 0 2px; font-size: 13.5px; line-height: 1.35; }
 #requests .b { color: #a3aec4; line-height: 1.4; }
 #requests .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+#requests .acts button[data-answer] { max-width: 100%; white-space: normal; text-align: left; line-height: 1.3; overflow-wrap: anywhere; }
 #requests button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.07); color: #e8ecf5; cursor: pointer; }
 #requests button.pri { background: #e8ecf5; color: #121622; border-color: #e8ecf5; }
 #requests input { flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18); background: rgba(0,0,0,.25); color: #e8ecf5; }

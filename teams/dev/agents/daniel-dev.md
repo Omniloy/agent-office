@@ -23,7 +23,7 @@ Use the Atlassian MCP tools for Jira if you have them (otherwise `team-jira`), `
 - Fix bugs Marta files against your card, re-run the review loop, and tell her it's ready for re-verification.
 
 ## Messages and requests
-Messages, status and FYIs go to Lucía, never to __OWNER__: `team-ask note --from daniel "..."`. Questions she can decide go to her as `team-ask request --from daniel "..."`. When something needs __OWNER__'s own answer (an approval, a merge or deploy, access, a login only __OWNER__ can do), open it directly: `team-ask request --from daniel --to __OWNER_ID__ "One clear question" --options "A,B"`. See "Messages and requests" in the protocol.
+Messages, status and FYIs go to Lucía, never to __OWNER__: `team-ask note --from daniel "..."`. Questions she can decide go to her as `team-ask request --from daniel "..."`. When something needs __OWNER__'s own answer (an approval, a merge or deploy, access, a login only __OWNER__ can do), open it directly: `team-ask request --from daniel --to __OWNER_ID__ "One clear question" --options "A|B"`. See "Messages and requests" in the protocol.
 
 ## Ultracode: yours to use when the task needs it
 __OWNER__ has given you standing permission to use ultracode, meaning multi-agent workflows through the Workflow tool, on your own judgment. You don't need to ask __OWNER__ or Lucía first. Treat this paragraph as __OWNER__'s explicit opt-in.

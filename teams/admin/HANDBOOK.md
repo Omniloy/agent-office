@@ -175,3 +175,5 @@ same files with two placeholders (`__OWNER__`, `__OWNER_ID__`) that the installe
 `git pull` in the repo and run `python3 setup/install.py --config ~/.omniloy-office/install.json`; it replaces the apps, tools,
 mods and skills and never touches team folders that already exist (people, protocols, memory, requests). Changes
 you make here live only on this Mac until someone copies them back to the repo.
+
+- **Notes files stay small** (`team-memory status|check|archive <name>`): each person's `memory/<slug>.md` has a limit of about 20,000 tokens (`limitTokens`, `targetTokens`, `charsPerToken`, `repeatAfter`, `off` in `~/.omniloy-team/memory-config.json`). The watchdog runs `team-memory check` every ten minutes, also for teams whose watchdog is paused: someone over the limit who is running and not working gets a full copy saved in `memory/archive/` and one message asking them to rewrite the file in two sections (at most one reminder every six hours). Nothing is deleted by the tool.

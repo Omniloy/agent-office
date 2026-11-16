@@ -5,15 +5,15 @@ __OWNER__'s own answer can be opened directly to him with --to __OWNER_ID__; any
 decide goes to her.
 Daniel, Marta, Kenji:
   team-ask note --from <you> "Short message" [--body ..] [--ticket KEY]     FYI: always goes to Lucía
-  team-ask request --from <you> "Short question" [--body ..] [--ticket KEY] [--options "A,B"]
+  team-ask request --from <you> "Short question" [--body ..] [--ticket KEY] [--options "A|B"]
                                      a question for Lucía (she is nudged). Prints its id.
-  team-ask request --from <you> --to __OWNER_ID__ "Short question" [--options "A,B"] ...
+  team-ask request --from <you> --to __OWNER_ID__ "Short question" [--options "A|B"] ...
                                      a request straight to __OWNER__: only when it needs him
   team-ask ls --from <you> [--all]   yours, with answers
 Lucía:
   team-ask ls --to lucia             what the team left for you
   team-ask answer <id> "text" --as lucia     answer a teammate yourself
-  team-ask escalate <id> ["Rewritten short question"] [--body ..] [--options "A,B"]
+  team-ask escalate <id> ["Rewritten short question"] [--body ..] [--options "A|B"]
                                      pass a teammate's request on to __OWNER__ (keeps who asked)
   team-ask request|note --from lucia ...     your own request/message to __OWNER__
   team-ask read <id> | cancel <id>
@@ -22,7 +22,7 @@ __OWNER__ (the Herdr Requests panel and the 3D office use these):
   team-ask answer <id> "text"        answers and tells the agent(s) in their terminal
   team-ask read <id>                 marks a note as read
 <you> is your Herdr name (dev: lucia, daniel, marta, kenji; business: irene, pablo, elena). Where this help says Lucía/lucia, the business team reads Irene/irene. Store: ~/.omniloy-team/requests.json"""
-import sys, os, json, time, fcntl, subprocess, datetime
+import sys, os, json, time, fcntl, subprocess, datetime, re
 TEAM = os.path.expanduser("~/.omniloy-team"); STORE = f"{TEAM}/requests.json"
 NAMES, LEAD = {}, {}   # every persona of every team, and each one's team lead
 for d in ("~/.omniloy-team", "~/.omniloy-biz"):
@@ -90,6 +90,32 @@ def opts(args):
         else: pos.append(a)
     return d, pos
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+LBL = re.compile(r"^\s*(?:[-*•]\s*)?\**\(?([A-Za-z]|\d{1,2})[:.)]\**\s+(\S.*)$")
+def choices(raw, body=""):
+    """The answer buttons of a request, from whatever the asker wrote: --options split by | ; or new lines, by letters
+    ("A: yes, B: no"), or by commas (never inside parentheses); with no --options, a list at the end of the body
+    ("A: ...", "B) ...", "1. ..."), which then moves out of the body. Returns (options, body)."""
+    raw = raw if isinstance(raw, str) else ""; body = body if isinstance(body, str) else ""; out = []
+    if raw.strip():
+        if re.search(r"[|\n;]", raw): out = re.split(r"\s*[|\n;]\s*", raw)
+        else:
+            lab = [x for x in re.split(r"(?:^|,)\s*(?=(?:[A-Z]|\d{1,2})[:.)]\s)", raw) if x.strip()]
+            out = lab if len(lab) > 1 else re.split(r",(?![^(]*\))", raw)
+    else:
+        lines = body.split("\n"); runs = []; cur = []
+        for i, l in enumerate(lines + [""]):
+            m = LBL.match(l) if i < len(lines) else None
+            k = m.group(1).upper() if m else None
+            nxt = (chr(ord(cur[-1][1]) + 1) if not cur[-1][1].isdigit() else str(int(cur[-1][1]) + 1)) if cur else None
+            if m and (k == nxt or (not cur and k in ("A", "1"))): cur.append((i, k, m.group(2)))
+            else:
+                if len(cur) > 1: runs.append(cur)
+                cur = [(i, k, m.group(2))] if m and k in ("A", "1") else []
+        if runs and len(runs[-1]) <= 8:
+            run = runs[-1]; out = [f"{k}: {t}" for _, k, t in run]
+            body = "\n".join(lines[:run[0][0]] + lines[run[-1][0] + 1:]).strip()
+    out = [re.sub(r"\*\*|`", "", o).strip() for o in out]
+    return [o for o in out if o][:8], body
 def line(x):
     state = {"open": "OPEN", "answered": "answered", "read": "read", "cancelled": "cancelled"}[x["status"]]
     return f'#{x["id"]} [{x["kind"]}/{state}] {x["from"]} -> {x.get("to", "__OWNER_ID__")}: {x["title"]}' + (f' ({x["ticket"]})' if x.get("ticket") else "") + (f'\n    -> {x.get("answeredBy", "__OWNER__")}: {x["answer"]}' if x.get("answer") else "")
@@ -106,8 +132,9 @@ if c in ("request", "note"):
         if d.get("to") == "__OWNER_ID__" and c == "note" and who != lead: print(f"notes go to your team lead ({lead}); sent there", file=sys.stderr)
         dup = [x for x in b["items"] if x["status"] == "open" and x["from"] == who and x["title"] == pos[0]]
         if dup: print(dup[0]["id"]); sys.exit()
-        x = {"id": b["next"], "kind": c, "from": who, "title": pos[0], "body": d.get("body", ""), "ticket": d.get("ticket", ""),
-             "options": [o.strip() for o in d.get("options", "").split(",") if o.strip()] if c == "request" else [],
+        ch, body = choices(d.get("options", ""), d.get("body", "")) if c == "request" else ([], d.get("body", ""))
+        x = {"id": b["next"], "kind": c, "from": who, "title": pos[0], "body": body, "ticket": d.get("ticket", ""),
+             "options": ch,
              "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to}
         b["next"] += 1; b["items"].append(x); print(x["id"])
     if to == "__OWNER_ID__":   # the owner sits in another building (team-peer home): the request also lands in their own box there
@@ -122,8 +149,9 @@ elif c == "external":   # from another building (written by team-peer): a reques
     if to == "owner": to = "__OWNER_ID__"
     elif to not in NAMES: sys.exit("no such person here")
     with Box() as b:
-        x = {"id": b["next"], "kind": "note" if d.get("note") else "request", "from": d.get("name") or "another building", "title": pos[0][:140], "body": d.get("body", "") if isinstance(d.get("body"), str) else "", "ticket": "",
-             "options": [o.strip() for o in d.get("options", "").split(",") if o.strip()] if isinstance(d.get("options"), str) else [],
+        ch, body = choices(d.get("options"), d.get("body")) if not d.get("note") else ([], d.get("body", "") if isinstance(d.get("body"), str) else "")
+        x = {"id": b["next"], "kind": "note" if d.get("note") else "request", "from": d.get("name") or "another building", "title": pos[0][:140], "body": body, "ticket": "",
+             "options": ch,
              "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to,
              "ext": {"peer": d.get("peer", ""), "connect": bool(d.get("connect")), "ref": json.loads(d["ref"]) if isinstance(d.get("ref"), str) else {}}}
         b["next"] += 1; b["items"].append(x); print(x["id"])
@@ -167,6 +195,13 @@ elif c == "escalate":
         x["to"], x["via"], x["escalatedAt"] = "__OWNER_ID__", LEAD.get(x["from"], "lucia"), now()
         if len(pos) > 1: x["title"] = pos[1][:140]
         if d.get("body"): x["body"] = d["body"]
-        if d.get("options"): x["options"] = [o.strip() for o in d["options"].split(",") if o.strip()]
+        if d.get("options"): x["options"] = choices(d["options"])[0]
+        elif not x.get("options"): x["options"], x["body"] = choices("", x.get("body", ""))
     print("escalated to __OWNER__")
+elif c == "rechoose":   # open requests written before the buttons accepted other shapes
+    with Box() as b:
+        for x in b["items"]:
+            if x["status"] == "open" and x["kind"] == "request":
+                o, body = choices("|".join(x.get("options") or []), x.get("body", "")) if x.get("options") else choices("", x.get("body", ""))
+                if o != x.get("options"): x["options"], x["body"] = o, body; print(x["id"], o)
 else: print(__doc__); sys.exit(1)

@@ -120,7 +120,7 @@ __OWNER__'s own answer go to __OWNER__.** Use `team-ask` (`team-ask --help`):
 - **Requests that need __OWNER__ personally** (approvals reserved for __OWNER__, merges and
   deploys, production or shared-environment changes, access and credentials,
   spending, a login/2FA only __OWNER__ can do): open them directly,
-  `team-ask request --from <you> --to __OWNER_ID__ "One clear question" --options "A,B"`,
+  `team-ask request --from <you> --to __OWNER_ID__ "One clear question" --options "A|B"`,
   with `--ticket KEY` and enough `--body` to answer in one click. One request per
   decision; check `team-ask ls --to __OWNER_ID__` first so you don't duplicate one.
   If in doubt whether it needs __OWNER__, send it to Lucía.
@@ -153,6 +153,8 @@ __OWNER__'s own answer go to __OWNER__.** Use `team-ask` (`team-ask --help`):
   - **How things work here:** reusable lessons only, max ~25 bullets. Merge or
     remove bullets instead of growing the list.
   - Never put secrets in memory.
+  - No dated entries, pasted output or tables. The limit is about 20,000 tokens, roughly 80 KB (aim well under half; `~/.omniloy-team/memory-config.json` changes it): past it,
+    `team-memory` saves a full copy in `memory/archive/` and asks you to rewrite the file.
 - Keep tickets truthful: the right status and a comment for every state change, and the right holder
   in `team-card`.
   No silent work.

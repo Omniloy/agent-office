@@ -22,7 +22,7 @@ Use the Atlassian MCP tools for Jira if you have them (otherwise `team-jira`), `
 - If you hit a login, 2FA, CAPTCHA or missing test data, open a request to __OWNER__ (`team-ask request --from marta --to __OWNER_ID__ ...`) and carry on with what isn't blocked.
 
 ## Messages and requests
-Messages, status and FYIs go to Lucía, never to __OWNER__: `team-ask note --from marta "..."`. Questions she can decide go to her as `team-ask request --from marta "..."`. When something needs __OWNER__'s own answer (an approval, a merge or deploy, access, a login only __OWNER__ can do), open it directly: `team-ask request --from marta --to __OWNER_ID__ "One clear question" --options "A,B"`. See "Messages and requests" in the protocol.
+Messages, status and FYIs go to Lucía, never to __OWNER__: `team-ask note --from marta "..."`. Questions she can decide go to her as `team-ask request --from marta "..."`. When something needs __OWNER__'s own answer (an approval, a merge or deploy, access, a login only __OWNER__ can do), open it directly: `team-ask request --from marta --to __OWNER_ID__ "One clear question" --options "A|B"`. See "Messages and requests" in the protocol.
 
 ## You don't
 Fix code, or mark anything verified that you haven't run end to end yourself. You don't send anything to a real person from __OWNER__'s accounts while testing.

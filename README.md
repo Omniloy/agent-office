@@ -78,7 +78,7 @@ Everything travels inside ssh tunnels between 127.0.0.1 ports; no new port is op
 |---|---|---|
 | `offices/team-office`, `offices/biz-office` | `~/.omniloy-office/` | The office web apps (Node, no build step) |
 | `services/artifacts` | `~/.omniloy-office/artifacts` | Local pages server (port 4340) |
-| `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `team-peer`, `omniloy-team`, `office-restart` and friends |
+| `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `team-peer`, `omniloy-team`, `office-restart`, `team-memory` and friends |
 | `teams/dev`, `teams/biz`, `teams/admin` | `~/.omniloy-team`, `~/.omniloy-biz`, `~/.omniloy-admin` | Team definition, protocol, memory |
 | `teams/*/agents` | `~/.claude/agents/` | Each person's instructions |
 | `skills/` | `~/.claude/skills`, `~/.codex/skills` | Skills every agent gets |
@@ -87,6 +87,21 @@ Everything travels inside ssh tunnels between 127.0.0.1 ports; no new port is op
 
 Files in the repo contain the placeholders `__OWNER__`, `__OWNER_ID__` and `__LANGUAGE__`; the installer fills
 them in. After the install, ask Zeus (More > Zeus in the office) for any change: he has a handbook of the system.
+
+## Keeping agents' notes small
+
+Each agent reads its whole notes file (`memory/<slug>.md`) at every start, so a file used as a diary costs context
+forever. `team-memory` keeps them in check: the watchdog runs `team-memory check` every ten minutes, and anyone over
+the limit who is running and not working gets a full copy saved in `memory/archive/` and one message asking them to
+rewrite the file in two sections (open now, how things work here). Nothing is deleted.
+
+The limit is 20,000 tokens by default. Change it in `~/.omniloy-team/memory-config.json`:
+
+```json
+{ "limitTokens": 20000, "targetTokens": 10000, "charsPerToken": 4, "repeatAfter": 21600, "off": false }
+```
+
+`team-memory status` lists every file with its estimated size.
 
 ## Safety
 

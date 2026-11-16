@@ -118,12 +118,19 @@ def check(dry=False):
 a = sys.argv[1:] or ["status"]
 if a[0] == "run":
     print(f"team-watch: checking every {cfg()['interval']}s, catching after {cfg()['idleAfter']}s stopped. Local reads only.")
+    last_mem = 0
     while True:
         t0 = time.time()
         try:
             s = check()
             print(f"{datetime.datetime.now():%H:%M:%S} checked in {int((time.time() - t0) * 1000)} ms, stalled: {', '.join(s) if s else 'nobody'}", flush=True)
         except Exception as e: print("check failed:", e, flush=True)
+        if time.time() - last_mem > 600:   # notes files over the limit (team-memory): not affected by `paused`
+            last_mem = time.time()
+            try:
+                out = subprocess.run([f"{HOME}/.local/bin/team-memory", "check"], capture_output=True, text=True, timeout=120).stdout.strip()
+                if out and out != "told: nobody": print(out, flush=True)
+            except Exception as e: print("memory check failed:", e, flush=True)
         time.sleep(max(5, cfg()["interval"] - (time.time() - t0)))
 elif a[0] == "once": print("stalled:", check(dry="--dry" in a))
 elif a[0] == "status":

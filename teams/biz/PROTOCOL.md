@@ -66,7 +66,7 @@ __OWNER__ gets too many messages. Use `team-ask` (`team-ask --help`):
   `team-ask request --from <you> "..."`.
 - **Requests that need __OWNER__ in person** (send this draft?, a commercial decision, a
   price, a commitment, access): open them directly,
-  `team-ask request --from <you> --to __OWNER_ID__ "One clear question" --options "A,B"`,
+  `team-ask request --from <you> --to __OWNER_ID__ "One clear question" --options "A|B"`,
   with enough `--body` to answer in one click. One request per decision; check
   `team-ask ls --to __OWNER_ID__` first so you don't duplicate one.
 - Irene pings __OWNER__ the same way, and only when something needs them: a person is
@@ -119,8 +119,14 @@ have to hunt for a draft in a terminal, a file or a report.
 
 ## Persistence
 
-- Your memory is `~/.omniloy-biz/memory/<your-slug>.md`: read it first, update it after
-  every meaningful step (what you're on, what you're waiting for and from whom, pointers).
+- Your memory is `~/.omniloy-biz/memory/<your-slug>.md`: read it first and keep it current.
+  Keep it small: you read all of it at every start and __OWNER__ reads it in the office under Notes. Two fixed
+  sections that you rewrite in place, never a dated log:
+  - **Open now:** one line per thing in progress, with its state and who you are waiting on. Remove the line when it closes.
+  - **How things work here:** reusable lessons only, about 25 short bullets at most. Merge or drop bullets instead of adding.
+  Details stay where they already live (the client register, the drafts list, the email thread, a report) and the notes keep a one-line pointer.
+  No pasted output, no tables, no history of finished work, no secrets. The limit is about 20,000 tokens, roughly 80 KB (aim well under half; `~/.omniloy-team/memory-config.json` changes it): past it,
+  `team-memory` saves a full copy in `memory/archive/` and asks you to rewrite the file.
 - Reports go in `~/.omniloy-biz/reports/`. When __OWNER__ asks for a report, publish it as
   an artifact (see below) if it contains no private email content; otherwise write the
   HTML file and open it.
