@@ -154,6 +154,8 @@ in the city view (zoom out past the building view), and their floors can be visi
   note to the owner opened there (`team-ask request --from <you> --to <owner> ...`) also lands in the owner's box
   here as "<name> · <their building>" (it shows on every floor's waiting list and opens on the Dev floor), and the
   answer given here travels back, closes their request and reaches the agent's terminal. `team-peer home none` undoes it.
+  The receiving building must allow it: Connections > "Its agents can open requests to you" (`team-peer ask <building> on`,
+  off by default); without it the request stays in the sender's building.
 - **Screens.** `floors.js` draws the city, `peers.js` is the Connections screen (under More on the phone, in the top
   bar elsewhere; `/api/buildings`, `/api/peers/*`), `travel.js` + `world.js` (`teleportOut`, `teleportBack`,
   `visitor`) draw teleports from `/api/visits`. Messages to a person on another floor of this building are detected

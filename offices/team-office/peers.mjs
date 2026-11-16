@@ -66,7 +66,7 @@ export function createPeers({ port, agents, OFFICES, APP }) {
     for (const p of Object.values(d.peers || {})) {
       const known = (seen[p.id] || {}).floors || [], info = known.length ? await peerInfo(p.id, known) : null;
       const floors = known.map((k) => { const live = info && (info.floors || []).find((x) => x.port === k.port); return { ...k, ...(live || {}), local: undefined, door: k.door || k.local }; });
-      out.push({ id: p.id, name: (info && info.name) || p.name, owner: (info && info.owner) || p.owner || '', machine: p.machine || '', online: !!info, status: p.status || 'none', pausedBy: p.pausedBy || '',
+      out.push({ id: p.id, name: (info && info.name) || p.name, owner: (info && info.owner) || p.owner || '', machine: p.machine || '', online: !!info, status: p.status || 'none', pausedBy: p.pausedBy || '', ask: !!p.ask,
         floors, myFloors: OFFICES.map((o) => ({ port: o.port, name: o.name, on: ((p.my || {})[o.port] || {}).on !== false, share: !!((p.my || {})[o.port] || {}).share })) });
     }
     return { me: d.me || {}, buildings: out };
@@ -85,6 +85,7 @@ export function createPeers({ port, agents, OFFICES, APP }) {
       if (['request', 'accept', 'decline', 'disconnect'].includes(verb)) r = await tool('team-peer', [verb, id]);
       else if (verb === 'pause') r = await tool('team-peer', [b.paused === false ? 'resume' : 'pause', id]);
       else if (verb === 'floor') r = await tool('team-peer', ['floor', id, String(Number(b.port) || 0), ...(b.on === undefined ? [] : [b.on ? 'on' : 'off']), ...(b.share === undefined ? [] : [b.share ? 'share' : 'noshare'])]);
+      else if (verb === 'ask') r = await tool('team-peer', ['ask', id, b.on ? 'on' : 'off']);
       else { json(res, 404, { error: 'not found' }); return true; }
       cache.clear();
       json(res, r.ok ? 200 : 400, r.ok ? { ok: true, note: r.out } : { error: r.err || r.out || 'it did not work' });
