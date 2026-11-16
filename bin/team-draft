@@ -183,4 +183,10 @@ elif cmd == "ask":
     x = get(d, rest[0]); x.setdefault("talk", []).append({"who": "__OWNER_ID__", "text": rest[1], "ts": now()}); x["updated"] = now(); save(d)
     nudge(x["from"], f'__OWNER__ asks about draft #{x["id"]} (to {x["to"]}): "{rest[1]}". Answer with `team-draft note {x["id"]} --from {x["from"]} "your answer"` (he reads it in the Drafts popup). If the answer means the text should change, rewrite it with `team-draft body` and update the external draft.')
     print("ok")
+elif cmd == "thread":   # for the office: the mail this draft answers, read live from Gmail and stored nowhere
+    x = get(d, rest[0]); lock.close()
+    if x["channel"] != "gmail" or not x.get("thread"): print(json.dumps({"messages": []})); sys.exit()
+    ok, t = gmail("thread", x["thread"])
+    if not ok or not isinstance(t, dict): sys.exit(str(t)[:200] or "Gmail did not answer")
+    print(json.dumps(t, ensure_ascii=False))
 else: print(__doc__); sys.exit(1)

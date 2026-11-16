@@ -53,6 +53,18 @@ style.textContent = `
 #dr-detail h4 { margin: 8px 0 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8fa3a0; font-weight: 600; }
 .talk { display: flex; flex-direction: column; gap: 6px; } .talk div { padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.05); line-height: 1.45; white-space: pre-wrap; }
 .talk div.me { background: rgba(45,212,191,.1); } .talk b { font-size: 11.5px; color: #8fa3a0; font-weight: 600; margin-right: 6px; }
+#dr-thread { border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: rgba(255,255,255,.035); flex: none; }
+#dr-thread .th { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; padding: 8px 12px; text-align: left; color: #a9bbb8; border-radius: 10px; }
+#dr-thread .th b { color: #e8f0ee; font-weight: 600; } #dr-thread .th i { font-style: normal; display: inline-block; width: 10px; transition: transform .12s; } #dr-thread.open .th i { transform: rotate(90deg); }
+#dr-thread .th span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dr-thread .last { padding: 0 12px 10px 30px; color: #c5d2d0; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+#dr-thread .msgs { max-height: min(42vh, 380px); overflow: auto; border-top: 1px solid rgba(255,255,255,.1); overscroll-behavior: contain; }
+#dr-thread .m { border-bottom: 1px solid rgba(255,255,255,.07); } #dr-thread .m:last-child { border-bottom: 0; }
+#dr-thread .m .mh { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px; cursor: pointer; } #dr-thread .m .mh:hover { background: rgba(255,255,255,.05); }
+#dr-thread .m .mh b { font-weight: 600; white-space: nowrap; } #dr-thread .m.mine .mh b { color: #5eead4; }
+#dr-thread .m .mh span { flex: 1; min-width: 0; color: #8fa3a0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } #dr-thread .m .mh time { color: #8fa3a0; font-size: 11.5px; white-space: nowrap; }
+#dr-thread .m .mb { display: none; padding: 0 12px 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: #dbe5e3; } #dr-thread .m.on .mb { display: block; } #dr-thread .m.on .mh span { visibility: hidden; }
+#dr-thread .m .mt { color: #8fa3a0; font-size: 11.5px; margin-bottom: 6px; white-space: normal; } #dr-thread .note { padding: 8px 12px; color: #8fa3a0; }
 @media (max-width: 760px) { #drafts { grid-template-columns: 1fr; grid-template-rows: auto 200px 1fr; } #dr-list { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.1); } }
 `;
 document.head.appendChild(style);
@@ -97,6 +109,38 @@ function preview(text) {
   return body.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
     .map((p) => `<p>${esc(p).replace(/(https?:\/\/[^\s<]+[^\s<.,;:)])/g, '<a href="$1" target="_blank" rel="noopener">$1</a>').replace(/\n/g, '<br>')}</p>`).join('') + sigHtml;
 }
+// The mail this draft answers, read live from Gmail when the draft is picked. Closed, it shows who wrote last and
+// the start of what they said; open, the whole thread in a box that scrolls on its own, the last message unfolded.
+const threads = new Map(); let thOpen = false; const msgOpen = new Set();
+const short = (addr) => (String(addr || '').split('<')[0].replace(/"/g, '').trim() || String(addr || '').replace(/[<>]/g, '')).split(',')[0];
+const when = (iso) => { const t = new Date(iso); return isNaN(t) ? '' : t.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); };
+function threadHtml(x) {
+  const t = threads.get(x.id);
+  if (!t || t.state === 'loading') return '<div class="note">Loading the thread…</div>';
+  if (t.state === 'err') return `<div class="note">The thread could not be read: ${esc(t.error)} <button id="dr-th-retry">Try again</button></div>`;
+  const ms = t.messages, n = ms.length;
+  if (!n) return '<div class="note">Nothing earlier in this thread: this message starts it.</div>';
+  const last = ms[n - 1];
+  const head = `<button class="th" id="dr-th-toggle" aria-expanded="${thOpen}"><i>▸</i><b>Thread · ${n} ${n === 1 ? 'message' : 'messages'}</b><span>${thOpen ? '' : `last from ${esc(last.mine ? 'you' : short(last.from))}, ${esc(when(last.date))}`}</span></button>`;
+  if (!thOpen) return head + `<div class="last" id="dr-th-last" title="Show the whole thread">${esc(last.text.slice(0, 600))}</div>`;
+  return head + `<div class="msgs">${ms.map((m, i) => {
+    const on = msgOpen.has(m.id) || (i === n - 1 && !msgOpen.has('-' + m.id));
+    return `<div class="m ${m.mine ? 'mine' : ''} ${on ? 'on' : ''}" data-m="${esc(m.id)}"><div class="mh"><b>${esc(m.mine ? 'You' : short(m.from))}</b><span>${esc(m.text.replace(/\s+/g, ' ').slice(0, 160))}</span><time>${esc(when(m.date))}</time></div>
+      <div class="mb"><div class="mt">to ${esc(m.to)}${m.cc ? ` · cc ${esc(m.cc)}` : ''}${m.attachments.length ? ` · attached: ${esc(m.attachments.join(', '))}` : ''}</div>${esc(m.text) || '<i>(no text)</i>'}</div></div>`;
+  }).join('')}</div>`;
+}
+function paintThread() {
+  const x = drafts.find((d) => d.id === cur), el = $('#dr-thread'); if (!x || !el) return;
+  el.classList.toggle('open', thOpen); el.innerHTML = threadHtml(x);
+  const box = el.querySelector('.msgs'); if (box) box.scrollTop = box.scrollHeight;
+}
+async function loadThread(x, again) {
+  if (threads.has(x.id) && !again) return;
+  threads.set(x.id, { state: 'loading' });
+  try { const d = await api(`/api/drafts/thread?id=${x.id}`); threads.set(x.id, { state: 'ok', messages: d.messages || [] }); }
+  catch (e) { threads.set(x.id, { state: 'err', error: e.message }); }
+  if (cur === x.id) paintThread();
+}
 let editing = false;
 function renderDetail() {
   const x = drafts.find((d) => d.id === cur), box = $('#dr-detail');
@@ -110,6 +154,7 @@ function renderDetail() {
       <span>From</span><div>${esc(who(x.from).name)} · ${ago(x.created)}${x.client ? ` · client ${esc(x.client)}` : ''}</div>
       ${x.why ? `<span>Why</span><div class="why">${esc(x.why)}</div>` : ''}</div>
     ${x.channel === 'gmail' ? `<input id="dr-subject" value="${esc(x.subject)}" placeholder="Subject" aria-label="Subject" ${editing ? '' : 'hidden'}>${editing ? '' : `<div class="meta"><span>Subject</span><div>${esc(x.subject)}</div></div>`}` : ''}
+    ${x.channel === 'gmail' && x.thread ? `<div id="dr-thread" class="${thOpen ? 'open' : ''}">${threadHtml(x)}</div>` : ''}
     <div id="dr-preview" ${editing ? 'hidden' : ''}>${preview(x.body)}</div>
     <textarea id="dr-body" aria-label="Message text" spellcheck="true" ${editing ? '' : 'hidden'}>${esc(x.body)}</textarea>
     ${stale ? `<div class="warn">${x.syncError ? `Gmail was not updated: ${esc(x.syncError)}` : `${app} still has the earlier text. Copy text gives you your version now.`}</div>` : ''}
@@ -127,6 +172,7 @@ function renderDetail() {
     ${(x.talk || []).length ? `<div class="talk">${x.talk.map((t) => `<div class="${t.who === '__OWNER_ID__' ? 'me' : ''}"><b>${t.who === '__OWNER_ID__' ? 'You' : esc(firstName(t.who))}</b>${esc(t.text)}</div>`).join('')}</div>` : ''}
     <div class="acts"><input id="dr-q" placeholder="Why this tone? Can you make it shorter? Who else is on the thread?" aria-label="Question about this draft"><button id="dr-ask">Ask</button></div>`;
   dirty = false; flash = '';
+  if (x.channel === 'gmail' && x.thread) { loadThread(x); const mb = box.querySelector('#dr-thread .msgs'); if (mb) mb.scrollTop = mb.scrollHeight; }
 }
 function render() { renderList(); renderDetail(); }
 
@@ -152,7 +198,10 @@ veil.addEventListener('input', (e) => { if (e.target.id === 'dr-body' || e.targe
 veil.addEventListener('click', async (e) => {
   if (e.target.closest('#dr-close')) return open(false);
   const f = e.target.closest('[data-f]'); if (f) { filter = f.dataset.f; return renderList(); }
-  const row = e.target.closest('.dr'); if (row) { cur = Number(row.dataset.id); editing = false; return render(); }
+  const row = e.target.closest('.dr'); if (row) { cur = Number(row.dataset.id); editing = false; thOpen = false; return render(); }
+  if (e.target.closest('#dr-th-toggle, #dr-th-last')) { thOpen = !thOpen; return paintThread(); }
+  if (e.target.closest('#dr-th-retry')) { const y = drafts.find((d) => d.id === cur); if (y) { loadThread(y, true); paintThread(); } return; }
+  const mh = e.target.closest('#dr-thread .mh'); if (mh) { const m = mh.parentElement, id = m.dataset.m, on = !m.classList.contains('on'); m.classList.toggle('on', on); msgOpen.delete(on ? '-' + id : id); msgOpen.add(on ? id : '-' + id); return; }
   const b = e.target.closest('button, a.pri'); if (!b || cur === null) return;
   const x = drafts.find((d) => d.id === cur); if (!x) return;
   const body = $('#dr-body').value, subject = $('#dr-subject') ? $('#dr-subject').value : undefined;

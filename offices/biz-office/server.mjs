@@ -438,6 +438,7 @@ function readBody(req) {
 // Pending requests for __OWNER__ (written by `team-ask`); the office shows them and can answer.
 const TEAM_ASK = bin('team-ask');
 const TEAM_DRAFT = bin('team-draft');
+const threadCache = new Map(); // draft id -> { at, d }
 // Drafts sent or deleted in Gmail itself drop off the list on their own.
 setInterval(() => { run(TEAM_DRAFT, ['sync'], { timeout: 60000 }).catch(() => {}); }, 60000).unref();
 const shortName = (n) => { const m = /^(\S+) (\d+) \(temp\)/.exec(String(n)); return m ? `${m[1]} ${m[2]}` : String(n).split(' ')[0]; }; // a temp keeps its number: "Nora 3"
@@ -568,6 +569,17 @@ const server = http.createServer(async (req, res) => {
         try { for (const x of (await readJson(f)).personas || []) people[x.herdrName] = { name: x.name, color: x.color, role: x.role }; } catch { /* that team is not set up */ }
       }
       return json(res, 200, { drafts: d.drafts, signature: d.signature || null, people });
+    }
+    if (p === '/api/drafts/thread') { // the mail a draft answers: read live from Gmail for the owner, kept two minutes in memory, never on disk
+      const id = String(Number(url.searchParams.get('id')) || '');
+      if (!id) return json(res, 400, { error: 'id is required' });
+      const hit = threadCache.get(id);
+      if (hit && Date.now() - hit.at < 120000) return json(res, 200, hit.d);
+      const r = await run(TEAM_DRAFT, ['thread', id], { timeout: 60000 });
+      if (!r.ok) return json(res, 502, { error: clip(oneLine(r.stderr || r.stdout), 240) });
+      let d = { messages: [] }; try { d = JSON.parse(r.stdout); } catch { /* nothing readable */ }
+      threadCache.set(id, { at: Date.now(), d }); if (threadCache.size > 30) threadCache.delete(threadCache.keys().next().value);
+      return json(res, 200, d);
     }
     if (req.method === 'POST' && ['/api/drafts/edit', '/api/drafts/ask', '/api/drafts/status', '/api/drafts/send'].includes(p)) {
       if (!String(req.headers['content-type'] || '').includes('application/json')) return json(res, 415, { error: 'json only' });

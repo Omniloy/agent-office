@@ -6,6 +6,8 @@ sign-in the Google Workspace connector already holds on this Mac. Used by `team-
   team-gmail trick <draftId>                    only apply the signature link separator from signature.json
   team-gmail send <draftId>                     sends that draft -> JSON {messageId, threadId}
   team-gmail sent-after <threadId> <ISO time>   -> JSON {sent: bool, messageId}   (a message from me in the thread after that time)
+  team-gmail thread <threadId>                  -> JSON {messages: [{from, to, cc, date, mine, text, attachments}]} oldest first, drafts left
+                                                out, each message without the mail it quotes (read-only, for the Drafts popup)
   team-gmail render <text file> [--text]        -> the HTML (or normalised text) for a message, signature per signature.json
 """
 import sys, os, json, re, html, base64, glob, email, email.policy, urllib.request, urllib.parse, urllib.error, datetime
@@ -124,4 +126,39 @@ elif cmd == "sent-after":
     t = call("GET", f"/threads/{a[1]}?format=minimal", ok404=True); since = datetime.datetime.fromisoformat(a[2]).timestamp() * 1000
     hit = next((m for m in (t or {}).get("messages", []) if "SENT" in m.get("labelIds", []) and "DRAFT" not in m.get("labelIds", []) and int(m.get("internalDate", 0)) >= since - 120000), None)
     print(json.dumps({"sent": bool(hit), "messageId": hit["id"] if hit else ""}))
+elif cmd == "thread":
+    t = call("GET", f"/threads/{a[1]}?format=full", ok404=True) or {}
+    def parts(p):
+        yield p
+        for q in p.get("parts") or []: yield from parts(q)
+    def data(p):
+        try: return base64.urlsafe_b64decode(p.get("body", {}).get("data", "") + "==").decode("utf-8", errors="replace")
+        except Exception: return ""
+    def untag(h):
+        h = re.sub(r"(?is)<(style|script|head)\b.*?</\1>", "", h)
+        h = re.sub(r"(?is)<blockquote\b.*", "", h)                                   # what it quotes: the earlier mail is shown on its own
+        h = re.sub(r'(?is)<div[^>]+class="[^"]*gmail_quote.*', "", h)
+        h = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>|</h\d>", "\n", h)
+        return html.unescape(re.sub(r"<[^>]+>", "", h))
+    QUOTE = re.compile(r"^\s*(?:El .{5,90} escribi[oó]:|On .{5,90} wrote:|-{2,}\s*(?:Original Message|Mensaje original|Forwarded message|Mensaje reenviado)\s*-{2,}|De:\s.+|From:\s.+|_{10,})\s*$", re.I)
+    def own(text):
+        out = []
+        for l in text.replace("\r", "").split("\n"):
+            if QUOTE.match(l) and len(out) > 1: break
+            if l.lstrip().startswith(">"): continue
+            out.append(l.rstrip())
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    out = []
+    for m in t.get("messages", []):
+        if "DRAFT" in m.get("labelIds", []): continue
+        h = {x["name"].lower(): x["value"] for x in m.get("payload", {}).get("headers", [])}
+        ps = list(parts(m.get("payload", {})))
+        plain = next((data(p) for p in ps if p.get("mimeType") == "text/plain" and not p.get("filename")), "")
+        if not plain.strip(): plain = untag(next((data(p) for p in ps if p.get("mimeType") == "text/html" and not p.get("filename")), ""))
+        text = own(plain)
+        out.append({"id": m["id"], "from": h.get("from", ""), "to": h.get("to", ""), "cc": h.get("cc", ""),
+                    "date": datetime.datetime.fromtimestamp(int(m.get("internalDate", 0)) / 1000).isoformat(timespec="minutes"),
+                    "mine": "SENT" in m.get("labelIds", []), "text": text[:8000] + ("\n[…]" if len(text) > 8000 else ""),
+                    "attachments": [p["filename"] for p in ps if p.get("filename")]})
+    print(json.dumps({"messages": out[-40:]}, ensure_ascii=False))
 else: print(__doc__); sys.exit(1)
