@@ -117,7 +117,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format }) {
   let tall = false, inset = 0;
   const home = () => (PHONE && tall ? HOME_TALL : HOME);
   if (TOUCH) { controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN }; controls.maxDistance = 60; controls.panSpeed = 1.1; }
-  if (PHONE) renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+  if (PHONE) renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5)); // a phone screen is small: this is a third fewer pixels to fill than 1.75 and looks the same
   // Two fingers move the room; the zoom only joins in once they clearly pinch (more than the wobble of two fingers dragging together).
   if (TOUCH && controls._handleTouchMoveDolly && controls._getSecondPointerPosition) {
     const dolly = controls._handleTouchMoveDolly.bind(controls);
@@ -1221,7 +1221,18 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format }) {
 
   const clock = new THREE.Clock();
   let lightAt = 0;
+  // Drawing is the expensive part (soft shadows, every person, every label). People idling or walking look the same at
+  // 30 pictures a second; turning or zooming the room wants 60. A 120 Hz screen no longer makes it draw 120.
+  let lastDraw = 0, busyUntil = 0, shadowTick = 0;
+  renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = true;
+  const wake = () => { busyUntil = performance.now() + 2500; };
+  for (const ev of ['pointerdown', 'wheel', 'keydown', 'touchmove']) addEventListener(ev, wake, { passive: true, capture: true });
+  addEventListener('pointermove', (e) => { if (e.buttons) wake(); }, { passive: true, capture: true });
   const frame = () => {
+    const nowMs = performance.now();
+    if (nowMs - lastDraw < (nowMs < busyUntil ? 15 : 31)) return;
+    lastDraw = nowMs;
+    if (++shadowTick % 3 === 0) renderer.shadowMap.needsUpdate = true; // shadows are half the drawing: they are worked out again 10 to 20 times a second, not every picture
     const dt = Math.min(0.05, clock.getDelta()), t = performance.now() / 1000;
     if (t - lightAt > 5) { lightAt = t; applyLight(); drawClock(); }
     for (const st of stations.values()) { tickCharacter(st, dt, t); tickStation(st, t); }
