@@ -224,6 +224,13 @@ press Run. It never runs by itself.
 - Marking a command is still a request to them, not an approval: the rules about production, merges, deploys and
   applying infrastructure stay as they are. Never mark a command to get around a rule that stops you from running it.
 - Links: write the full address (`https://...`); it becomes a link that can be pressed, also inside a code span or a block.
+- **One press, always.** Whatever you need __OWNER__ to do on a computer reaches them as something to press, never as steps
+  to follow: a Run button for anything a command can do, a full `https://` link to the exact page for anything that
+  only works in a browser (a sign-in with a password, a consent screen), with one line saying what to press there.
+  If a command does the same as the page (`$ az login` instead of signing in again on the portal), give the command.
+  This holds in every message, request, option and chat reply, and it does not need to be asked for again.
+- `team-ask` refuses a request to __OWNER__ that asks for something to be run and has no Run button, or that has a
+  command in a plain code span. Fix the request; `--as-is ""` is only for text that is not something to run.
 - The result: when the command finishes you get a message with what it printed (the whole output: `team-term last`).
   Wait for that message; do not ask them to paste output, and do not read the terminal before it arrives.
 

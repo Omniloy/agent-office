@@ -14,7 +14,11 @@ if (!window.__GUEST__ && TOKEN && TOKEN !== 'guest' && !new URLSearchParams(loca
   const NAME = /^[a-z0-9][a-z0-9._-]{0,62}$/i;
 
   // ---- commands inside messages (main.js and chat.js call these while they draw a message; the text is already escaped)
+  // What a command looks like when nobody marked it: the page still makes it a Run button.
+  const CMD = /^(?:sudo\s+)?(?:az|gcloud|aws|kubectl|helm|terraform|argocd|docker|git|gh|npm|npx|pnpm|yarn|node|python3?|pip3?|uv|brew|ssh|scp|curl|wget|open|cd|ls|cat|tail|head|grep|chmod|mkdir|export|source|launchctl|systemctl|journalctl|defaults|security|psql|tailscale|hc|make|bash|zsh|claude|codex|office-restart|team-[a-z]+|\.\/[\w.-]+|~\/[\w.\/-]+)\s+\S/;
   window.termRun = {
+    looks: (c) => CMD.test(String(c).trim()),
+    shell: (info) => /^(sh|bash|zsh|shell|console|terminal)$/i.test(String(info).trim()),
     chip: (c, on) => `<span class="runc" role="button" tabindex="0" data-run="${c}" data-on="${NAME.test(on || '') ? on : ''}" title="Opens the terminal with this command ready to run${on ? ` on ${on}` : ''}"><i>▶</i>${NAME.test(on || '') ? `<em>${on}$</em>` : ''}<code>${c}</code></span>`,
     block: (c, on) => `<div class="runb" data-run="${c}" data-on="${NAME.test(on || '') ? on : ''}"><pre>${c}</pre><button type="button" title="Opens the terminal with this ready to run">▶ Run${NAME.test(on || '') ? ` on ${on}` : ''}</button></div>`,
   };

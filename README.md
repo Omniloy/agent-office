@@ -52,6 +52,8 @@ about 15 minutes. Everything else is installed during setup.
 
 Apps, tools, panels and skills are replaced. Your team folders (people, protocols, memory, requests) are never
 overwritten; when the repo has a newer protocol it is left next to yours as `PROTOCOL.md.new`.
+One section is the exception: "Commands for the owner's terminal" in each protocol is brought up to date (your file
+as it was is kept as a `.bak`), so agents in an existing office also hand over commands as Run buttons.
 
 ## Connecting two computers as buildings
 
@@ -111,6 +113,10 @@ machine Herdr knows), inside the page, so it also works from the phone. Agents m
 the terminal with the command ready, and it runs when the owner presses Run. What it printed can be sent back to the agent
 in one press, and agents can read it with `team-term last`. The routes sit behind the office token and are never served to
 visitors from other buildings. Needs `python3` on the computer that runs the office.
+
+It does not depend on the agent remembering: a command in a plain code span or a ```` ```bash ```` block becomes a Run
+button too, an address written without `https://` becomes a link, and `team-ask` refuses a request to the owner that
+asks for something to be run and carries no Run button (the refusal says how to write it).
 
 ## Calendar drafts
 

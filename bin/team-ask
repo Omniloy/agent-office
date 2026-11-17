@@ -21,7 +21,10 @@ __OWNER__ (the Herdr Requests panel and the 3D office use these):
   team-ask ls --to __OWNER_ID__           what is waiting for __OWNER__
   team-ask answer <id> "text"        answers and tells the agent(s) in their terminal
   team-ask read <id>                 marks a note as read
-<you> is your Herdr name (dev: lucia, daniel, marta, kenji; business: irene, pablo, elena). Where this help says Lucía/lucia, the business team reads Irene/irene. Store: ~/.omniloy-team/requests.json"""
+<you> is your Herdr name (dev: lucia, daniel, marta, kenji; business: irene, pablo, elena). Where this help says Lucía/lucia, the business team reads Irene/irene. Store: ~/.omniloy-team/requests.json
+If __OWNER__ has to run something, mark the command so it becomes a Run button for him: `$ command` (or `machine$ command`,
+or a ```run block). A request that asks him to run something without one is refused (--as-is "" sends it anyway).
+A page he must open: the full https:// address."""
 import sys, os, json, time, fcntl, subprocess, datetime, re
 TEAM = os.path.expanduser("~/.omniloy-team"); STORE = f"{TEAM}/requests.json"
 NAMES, LEAD = {}, {}   # every persona of every team, and each one's team lead
@@ -90,6 +93,20 @@ def opts(args):
         else: pos.append(a)
     return d, pos
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+# Anything __OWNER__ is asked to run reaches him as a Run button (one press in his office), never as prose.
+_CMD = r"(?:sudo\s+)?(?:az|gcloud|aws|kubectl|helm|terraform|argocd|docker|git|gh|npm|npx|pnpm|yarn|node|python3?|pip3?|uv|brew|ssh|scp|curl|wget|open|launchctl|systemctl|journalctl|defaults|security|psql|tailscale|make|claude|codex|office-restart)"
+_MARKED = re.compile(r"`[A-Za-z0-9._-]*\$ [^`\n]+`|```run\b")
+_PLAIN = re.compile(r"`(" + _CMD + r"\s+[^`\n]+)`|```(?:sh|bash|zsh|shell|console)\s*\n")
+_ASKS = re.compile(r"\b(run|execute|ejecut\w+|lanz[ae]\w*|terminal|consola|console|command line|l[ií]nea de comandos|comandos?)\b", re.I)
+def one_click(d, *texts):
+    if d.get("as-is") is not None: return
+    t = "\n".join(x for x in texts if isinstance(x, str))
+    m = _PLAIN.search(t)
+    how = ("Write it so it becomes a Run button in his office: a code span that starts with a dollar and a space, `$ az login`; on another of his "
+           "machines the name goes first, `myserver$ df -h`; several lines go in a block that starts with ```run. One complete command, no placeholders, "
+           "no secrets, and say in plain words what it does. If this is not something for him to run, send it again adding --as-is \"\".")
+    if m: sys.exit(f"not sent: it has a command that is not marked for his terminal ({(m.group(1) or 'a shell block')[:60]}). " + how)
+    if _ASKS.search(t) and not _MARKED.search(t): sys.exit("not sent: it asks __OWNER__ to run something but gives him no Run button. " + how)
 LBL = re.compile(r"^\s*(?:[-*•]\s*)?\**\(?([A-Za-z]|\d{1,2})[:.)]\**\s+(\S.*)$")
 def choices(raw, body=""):
     """The answer buttons of a request, from whatever the asker wrote: --options split by | ; or new lines, by letters
@@ -126,6 +143,7 @@ if c in ("request", "note"):
     who = d.get("from") or sys.exit("--from <your Herdr name> is required")
     if who not in NAMES: sys.exit(f"--from must be one of {list(NAMES)}")
     if not pos or len(pos[0]) > 140: sys.exit("give one short line (max 140 chars) as the question/message; put the rest in --body")
+    if who == LEAD[who] or (c == "request" and d.get("to") == "__OWNER_ID__"): one_click(d, pos[0], d.get("body"), d.get("options"))
     with Box() as b:
         lead = LEAD[who]
         to = "__OWNER_ID__" if who == lead or (c == "request" and d.get("to") == "__OWNER_ID__") else lead
@@ -189,6 +207,7 @@ elif c in ("answer", "read", "cancel"):
         print("answered; " + ("delivered to " + x["from"] if r.returncode == 0 else f'{x["from"]} is not running, they will see it with: team-ask ls --from {x["from"]} --all'))
     else: print("ok")
 elif c == "escalate":
+    one_click(d, pos[1] if len(pos) > 1 else "", d.get("body"), d.get("options"))
     with Box() as b:
         x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None) or sys.exit("not found")
         if x["status"] != "open": sys.exit("already closed")

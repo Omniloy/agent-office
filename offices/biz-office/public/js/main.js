@@ -41,8 +41,10 @@ function rich(s) {
   };
   const short = (u) => { const t = u.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''); return t.length > 46 ? `${t.slice(0, 44)}…` : t; };
   let h = esc(s).replace(/`([a-z0-9][a-z0-9._-]*)?\$ ([^`\n]+)`/gi, (m, on, c) => (window.termRun ? hold(window.termRun.chip(c, on || '')) : m)) // `$ command`: a button that opens the terminal with it
+    .replace(/`([^`\n]+)`/g, (m, c) => (window.termRun && window.termRun.looks(c) ? hold(window.termRun.chip(c.trim(), '')) : m)) // a command nobody marked is a button too
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, text, url) => link(url, text))
     .replace(/https?:\/\/[^\s<)\]]*[^\s<)\].,;:!?]/g, (url) => (refOf(url) ? link(url, refOf(url), ' class="key"') : link(url, short(url))));
+  h = h.replace(/(^|[\s(¿¡])((?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|app|ai|es|eu|cloud)(?:\/[^\s<)\]]*[^\s<)\].,;:!?])?)(?=$|[\s),.;:!?])/gim, (_m, pre, dom) => pre + link(`https://${dom}`, dom)); // "portal.azure.com" written without https:// is a link too
   const keys = state && state.projects ? state.projects.map((p) => p.key).filter(Boolean) : [];
   if (keys.length && state.jira && state.jira.site) {
     h = h.replace(new RegExp(`\\b(?:${keys.join('|')})-\\d+\\b`, 'g'), (k) => link(`${state.jira.site}/browse/${k}`, k, ' class="key"'));
@@ -61,7 +63,7 @@ function md(s) { // ``` blocks first: a ```run block is a command for the termin
   return parts.map((part, i) => {
     if (!(i % 2)) return mdBody(part);
     const m = /^([^\n]*)\n([\s\S]*)$/.exec(part) || [0, '', part], info = m[1].trim(), body = (/^[\w .-]*$/.test(info) ? m[2] : part).replace(/\n+$/, '');
-    if (/^run\b/i.test(info) && window.termRun) return window.termRun.block(esc(body), info.replace(/^run\s*(?:on\s+)?/i, '').trim());
+    if (window.termRun && (/^run\b/i.test(info) || window.termRun.shell(info))) return window.termRun.block(esc(body), /^run\b/i.test(info) ? info.replace(/^run\s*(?:on\s+)?/i, '').trim() : ''); // a ```bash block is for the terminal too
     return `<pre class="mdpre">${esc(body).replace(/https?:\/\/(?:(?!&quot;|&#39;|&lt;|&gt;)[^\s<)])*(?!&quot;|&#39;|&lt;|&gt;)[^\s<).,;:!?]/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`)}</pre>`;
   }).join('');
 }

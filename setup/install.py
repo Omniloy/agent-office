@@ -44,6 +44,23 @@ class Run:
     def render(self, text):
         for k, v in self.tokens.items(): text = text.replace(k, v)
         return text
+    def carry_section(self, src, dst, head):
+        """One section of a protocol that is otherwise kept follows the repo: how to hand the owner a command must match
+        what the apps and tools do now, or every agent keeps describing commands in prose. The previous file is kept as a .bak."""
+        if not (os.path.exists(src) and os.path.exists(dst)): return
+        def cut(t):
+            i = t.find("\n" + head)
+            if i < 0: return None
+            j = t.find("\n## ", i + 1); return (i + 1, len(t) if j < 0 else j + 1)
+        new = self.render(open(src, encoding="utf-8").read()); old = open(dst, encoding="utf-8").read()
+        a, b = cut(new), cut(old)
+        if not a: return
+        sec = new[a[0]:a[1]].rstrip("\n") + "\n"
+        out = old[:b[0]] + sec + ("\n" if b[1] < len(old) else "") + old[b[1]:] if b else old.rstrip("\n") + "\n\n" + sec
+        if out == old: return
+        if not self.dry:
+            shutil.copy2(dst, f"{dst}.bak-{STAMP}"); open(dst, "w", encoding="utf-8").write(out)
+        self.say(f"{dst}: the section on commands for the owner's terminal was brought up to date (the file as it was: {os.path.basename(dst)}.bak-{STAMP})")
     def put(self, src, dst, mode=None, keep_existing=False, backup=False):
         """Copy one file, filling in the placeholders when it is text. Returns True when dst changed."""
         raw = open(src, "rb").read()
@@ -110,6 +127,7 @@ class Run:
             else: self.say(f"{d}/team.json exists: kept as it is")
             for f in ("PROTOCOL.md", "HANDBOOK.md"):
                 if os.path.exists(f"{src}/{f}") and self.put(f"{src}/{f}", f"{d}/{f}", keep_existing=True): self.say(f"{d}/{f} written")
+            self.carry_section(f"{src}/PROTOCOL.md", f"{d}/PROTOCOL.md", "## Commands for ")
             for p in json.load(open(f"{src}/team.json"))["personas"]:
                 m = f"{d}/memory/{p['slug']}.md"
                 if not os.path.exists(m) and not self.dry: open(m, "w").write(f"# {p['name']}: memory\n\nNotes that must survive between sessions. Newest first.\n")
