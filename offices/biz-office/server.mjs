@@ -344,7 +344,9 @@ async function buildAgent(p, team, names) {
   if (scr.ok) agent.screen = screenLines(scr.stdout);
   let items = [];
   if (file) { try { items = await parsedTranscript(file, account.kind, names); } catch {} }
-  items.forEach((it, i) => { it.id = `${p.slug}:${it.ts}:${i}`; });
+  // An id must not depend on where the item sits in the part of the file that was read: that part slides as the
+  // file grows, and the page would take a message it has already shown for a new one and play it again.
+  { const nth = new Map(); for (const it of items) { const n = nth.get(it.ts) || 0; nth.set(it.ts, n + 1); it.id = `${p.slug}:${it.ts}:${n}`; } }
   agent.activity = items.slice(-60).map(({ id, ts, kind, tool, text }) => ({ id, ts, kind, tool, text: clip(text, kind === 'tool' ? 160 : 1200) }));
   const lastSay = [...items].reverse().find((i) => i.kind === 'say');
   const lastAct = [...items].reverse().find((i) => i.kind !== 'inbox');

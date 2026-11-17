@@ -19,6 +19,7 @@ html.phone, html.phone body { height: 100dvh; overscroll-behavior: none; touch-a
 } }
 html.phone body { user-select: none; -webkit-user-select: none; }
 html.phone .pbody, html.phone #inbox .list, html.phone #cards .body, html.phone #feed ol, html.phone .psheet .scroll { user-select: text; -webkit-user-select: text; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+html.phone #chat .log .m { user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; } /* chat messages can be selected and copied (long press) */
 html.phone input, html.phone textarea { font-size: 16px !important; } /* below 16px iOS zooms the page when you tap a field */
 
 /* top bar: who we are looking at, and the three numbers that matter */

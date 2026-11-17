@@ -533,6 +533,7 @@ function onState(s) {
   for (const f of s.feed) {
     if (seenFeed.has(f.id)) continue;
     seenFeed.add(f.id);
+    if (f.type === 'msg') { const same = `msg|${f.from}|${f.to}|${f.ts}|${f.text}`; if (seenFeed.has(same)) continue; seenFeed.add(same); } // the same message under another id is not a new one
     if (!booted || Date.now() - f.ts > 45000) continue;
     fresh.add(f.id);
     const from = agentBy(f.from), to = agentBy(f.to);

@@ -1602,7 +1602,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
     converse(fromName, toName, text) {
       const from = byName(fromName), to = byName(toName);
       if (!from || !to || from === to || !from.online) return;
-      if (from.steps.length) { from.steps = from.steps.filter((s) => s.pose !== 'coffee'); from.pending.push({ to, text }); } else startConversation(from, to, text);
+      if (from.steps.length) { from.steps = from.steps.filter((s) => s.pose !== 'coffee'); if (!from.pending.some((x) => x.to === to && x.text === text)) from.pending.push({ to, text }); if (from.pending.length > 12) from.pending.splice(0, from.pending.length - 12); } else startConversation(from, to, text);
     },
     // Travel (travel.js): this person beams out to see someone in another room, and a sign over the desk says where they are.
     teleportOut(name, o) { try { return tripOut(byName(name), o || {}); } catch (e) { console.warn('teleportOut', e); return false; } },
