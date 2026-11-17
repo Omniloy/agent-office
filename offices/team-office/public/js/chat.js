@@ -158,7 +158,7 @@ body.embed #chat { display: none !important; }`;
   }
   const inline = (x) => { // bold, code, [text](url) and bare links
     const keep = []; const hold = (h) => `\u0001${keep.push(h) - 1}\u0001`;
-    x = x.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${c}</code>`)).replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => hold(link(u, t))).replace(/(https?:\/\/[^\s<)]+)/g, (u) => hold(link(u)));
+    x = x.replace(/`([^`\n]+)`/g, (_, c) => { const r = window.termRun && /^([a-z0-9][a-z0-9._-]*)?\$ (\S.*)$/i.exec(c); return hold(r ? window.termRun.chip(r[2], r[1] || '') : /^https?:\/\/\S+$/.test(c) ? `<code>${link(c)}</code>` : `<code>${c}</code>`); }).replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => hold(link(u, t))).replace(/https?:\/\/(?:(?!&quot;|&#39;|&lt;|&gt;)[^\s<)])*(?!&quot;|&#39;|&lt;|&gt;)[^\s<).,;:!?*]/g, (u) => hold(link(u)));
     return x.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>').replace(/\u0001(\d+)\u0001/g, (_, i) => keep[i]);
   };
   function blocks(text) { // tables and lists become real ones; the rest keeps its line breaks
@@ -183,7 +183,12 @@ body.embed #chat { display: none !important; }`;
     out.forEach((o, i) => { html += o.html !== undefined ? o.html : o.line + (i < out.length - 1 && out[i + 1].line !== undefined ? '\n' : ''); });
     return html;
   }
-  function rich(t) { return esc(t).split(/```/).map((part, i) => (i % 2 ? `<pre>${part.replace(/^[a-z0-9]*\n/i, '')}</pre>` : blocks(part))).join(''); }
+  const fence = (part) => { // a ```run block is a command for the terminal; any other block is shown as written, with its links working
+    const m = /^([^\n]*)\n([\s\S]*)$/.exec(part) || [0, '', part], info = m[1].trim(), body = (/^[\w .-]*$/.test(info) ? m[2] : part).replace(/\n+$/, '');
+    if (/^run\b/i.test(info) && window.termRun) return window.termRun.block(body, info.replace(/^run\s*(?:on\s+)?/i, '').trim());
+    return `<pre>${part.replace(/^[a-z0-9]*\n/i, '').replace(/https?:\/\/(?:(?!&quot;|&#39;|&lt;|&gt;)[^\s<)])*(?!&quot;|&#39;|&lt;|&gt;)[^\s<).,;:!?]/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`)}</pre>`;
+  };
+  function rich(t) { return esc(t).split(/```/).map((part, i) => (i % 2 ? fence(part) : blocks(part))).join(''); }
 
   const shots = (h) => (window.compose ? window.compose.shots(h) : h); // attached pictures show as pictures
   let who = '', file = '', pos = 0, timer = 0, open = false, run = 0, pending = [], lastStep = null, target = '', sec = '', status = '';

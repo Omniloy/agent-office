@@ -2,6 +2,7 @@
 // It binds to 127.0.0.1 only and every /api call needs the per-run token that is
 // embedded in the page, so no other site or machine can read screens or send text.
 import http from 'node:http';
+import { createTerm } from './term.mjs';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { existsSync, createReadStream } from 'node:fs';
@@ -731,6 +732,8 @@ function remoteOk(req, host) {
 // What waits for __OWNER__ in every office, and the phone notifications (hub.mjs).
 const hub = createHub({ port: PORT, stuck: () => state.agents.filter((x) => x.status === 'blocked'), agents: () => state.agents });
 
+const term = createTerm({ teamDir: TEAM_DIR, owner: '__OWNER__' }); // the room's terminal (term.mjs): the owner's page only
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
   const host = String(req.headers.host || '');
@@ -753,6 +756,7 @@ const server = http.createServer(async (req, res) => {
     const token = req.headers['x-office-token'] || url.searchParams.get('token');
     if (token !== TOKEN) return json(res, 401, { error: 'bad token' });
     if (await hub.route(req, res, p)) return;
+    if (await term.route(req, res, p, url)) return;
 
     if (p === '/api/state') return json(res, 200, state);
     if (p === '/api/stream') {

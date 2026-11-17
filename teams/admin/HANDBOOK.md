@@ -177,6 +177,11 @@ mods and skills and never touches team folders that already exist (people, proto
 you make here live only on this Mac until someone copies them back to the repo.
 
 - **Notes files stay small** (`team-memory status|check|archive <name>`): each person's `memory/<slug>.md` has a limit of about 20,000 tokens (`limitTokens`, `targetTokens`, `charsPerToken`, `repeatAfter`, `off` in `~/.omniloy-team/memory-config.json`). The watchdog runs `team-memory check` every ten minutes, also for teams whose watchdog is paused: someone over the limit who is running and not working gets a full copy saved in `memory/archive/` and one message asking them to rewrite the file in two sections (at most one reminder every six hours). Nothing is deleted by the tool.
+- **Room terminal.** Every floor has a Terminal button: a real shell on this computer, or an ssh session to another Herdr machine,
+  inside the page (`term.mjs` + `pty-bridge.py` on the server, `public/js/term.js` and `public/vendor/xterm/` in the page; routes
+  `/api/term/*` behind the office token, never served to visitors from other buildings). Agents mark commands in messages
+  (`` `$ cmd` ``, `` `machine$ cmd` ``, or a ```` ```run ```` block) and `main.js`/`chat.js` draw them as Run buttons; nothing runs until
+  __OWNER__ presses Run. Output is kept as text in `~/.omniloy-team/terminal.log` (`team-term tail|last`). A floor restart ends its terminals.
 - **Calendar drafts.** The business team never creates an event with guests or answers an invitation itself. It registers a
   calendar draft (`team-draft add --channel calendar`, kinds: event, rsvp) and __OWNER__ creates or answers with one click in the
   Drafts popup (`drafts.js`), which calls `team-cal` through `team-draft send`. `team-cal busy` gives the clashes shown there.

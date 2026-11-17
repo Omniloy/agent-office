@@ -40,7 +40,7 @@ function rich(s) {
     return hold(`<a${cls} href="${url}" target="_blank" rel="noopener">${label}</a>`);
   };
   const short = (u) => { const t = u.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, ''); return t.length > 46 ? `${t.slice(0, 44)}…` : t; };
-  let h = esc(s)
+  let h = esc(s).replace(/`([a-z0-9][a-z0-9._-]*)?\$ ([^`\n]+)`/gi, (m, on, c) => (window.termRun ? hold(window.termRun.chip(c, on || '')) : m)) // `$ command`: a button that opens the terminal with it
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, text, url) => link(url, text))
     .replace(/https?:\/\/[^\s<)\]]*[^\s<)\].,;:!?]/g, (url) => (refOf(url) ? link(url, refOf(url), ' class="key"') : link(url, short(url))));
   const keys = state && state.projects ? state.projects.map((p) => p.key).filter(Boolean) : [];
@@ -55,7 +55,17 @@ const mdText = (s) => rich(s)
   .replace(/^\s*[-*]\s+/gm, '• ')
   .replace(/\n/g, '<br>');
 if (!document.getElementById('md-table-css')) { const st = document.createElement('style'); st.id = 'md-table-css'; st.textContent = '.mdtw { overflow-x: auto; margin: 6px 0; white-space: normal; -webkit-overflow-scrolling: touch; } .mdtw table { border-collapse: collapse; font-size: .92em; line-height: 1.35; } .mdtw th, .mdtw td { border: 1px solid var(--line, rgba(255,255,255,.18)); padding: 4px 8px; text-align: left; vertical-align: top; max-width: 260px; overflow-wrap: normal; word-break: normal; } .mdtw th { background: rgba(255,255,255,.07); font-weight: 600; }'; document.head.append(st); }
-function md(s) { // tables become real tables (a text cut short may end in half a row: it is drawn as far as it goes)
+function md(s) { // ``` blocks first: a ```run block is a command for the terminal, any other one is shown as written
+  const parts = String(s == null ? '' : s).split('```');
+  if (parts.length < 2) return mdBody(s);
+  return parts.map((part, i) => {
+    if (!(i % 2)) return mdBody(part);
+    const m = /^([^\n]*)\n([\s\S]*)$/.exec(part) || [0, '', part], info = m[1].trim(), body = (/^[\w .-]*$/.test(info) ? m[2] : part).replace(/\n+$/, '');
+    if (/^run\b/i.test(info) && window.termRun) return window.termRun.block(esc(body), info.replace(/^run\s*(?:on\s+)?/i, '').trim());
+    return `<pre class="mdpre">${esc(body).replace(/https?:\/\/(?:(?!&quot;|&#39;|&lt;|&gt;)[^\s<)])*(?!&quot;|&#39;|&lt;|&gt;)[^\s<).,;:!?]/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`)}</pre>`;
+  }).join('');
+}
+function mdBody(s) { // tables become real tables (a text cut short may end in half a row: it is drawn as far as it goes)
   const L = String(s == null ? '' : s).split('\n'), out = []; let buf = [];
   const isRow = (l) => /^\s*\|/.test(l || ''), isSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l || '') && (l || '').includes('-');
   const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());

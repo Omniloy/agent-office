@@ -103,6 +103,15 @@ The limit is 20,000 tokens by default. Change it in `~/.omniloy-team/memory-conf
 
 `team-memory status` lists every file with its estimated size.
 
+## The room terminal
+
+Every floor has a **Terminal** button: a real shell on the computer that runs the office (or an ssh session to another
+machine Herdr knows), inside the page, so it also works from the phone. Agents mark the commands the owner has to run
+(`` `$ command` ``, `` `machine$ command` `` or a ```` ```run ```` block) and each shows as a Run button: pressing it opens
+the terminal with the command ready, and it runs when the owner presses Run. What it printed can be sent back to the agent
+in one press, and agents can read it with `team-term last`. The routes sit behind the office token and are never served to
+visitors from other buildings. Needs `python3` on the computer that runs the office.
+
 ## Calendar drafts
 
 The business team never creates an event with guests or answers an invitation on its own, because Google would

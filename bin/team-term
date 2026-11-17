@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""team-term: read what the office terminal printed. __OWNER__ runs commands there himself, often ones you marked
+for him in a message; this is how you see the result without asking him to paste it.
+
+  team-term tail [N]        the last N lines the terminal printed (default 80, at most 400)
+  team-term last            everything since the last command he ran from a message button
+
+How to mark a command so it becomes a Run button in his office (he presses it; it never runs by itself):
+  inline, in any message or request:     `$ kubectl get pods -n prod`
+  on another of his machines (by ssh):   `myserver$ systemctl status nginx`
+  a block, one or several lines:         ```run            or   ```run myserver
+                                         az login
+                                         ```
+One command per button, complete and ready to run as written: no placeholders to fill in, no secrets.
+Say in the same message what it does and why. Read-only. The log is ~/.omniloy-team/terminal.log."""
+import sys, os, re
+LOG = os.path.expanduser("~/.omniloy-team/terminal.log")
+a = sys.argv[1:] or ["tail"]
+if a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+try: text = open(LOG, encoding="utf-8", errors="replace").read()
+except FileNotFoundError: sys.exit("the office terminal has not been used on this computer yet")
+if a[0] == "last":
+    i = max((m.start() for m in re.finditer(r"^### .* ran on ", text, re.M)), default=-1)
+    print(text[i:].strip()[-12000:] if i >= 0 else "no command has been run from a message button yet")
+elif a[0] == "tail":
+    n = min(400, max(1, int(a[1]))) if len(a) > 1 and a[1].isdigit() else 80
+    print("\n".join(text.rstrip("\n").split("\n")[-n:]))
+else: print(__doc__); sys.exit(1)

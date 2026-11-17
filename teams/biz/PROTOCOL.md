@@ -163,6 +163,27 @@ popup, and the app does it through Google Calendar.
   an artifact (see below) if it contains no private email content; otherwise write the
   HTML file and open it.
 
+## Commands for __OWNER__'s terminal
+
+When __OWNER__ has to run something personally (a sign-in, a command that needs their own access or their approval), do not
+describe it in prose and do not ask them to open a terminal. Write the command so that it becomes a **Run button**
+in their office: they press it, the office terminal opens with the command ready, and it runs there when they
+press Run. It never runs by itself.
+
+- In a sentence, a request title or an option: a code span that starts with a dollar and a space,
+  `` `$ az login --use-device-code` ``.
+- On another of their machines (it runs there over ssh): the machine name before the dollar, `` `myserver$ df -h` ``.
+- Longer, or several lines: a block whose first line is ```` ```run ```` (or ```` ```run myserver ````), then the
+  command, then ```` ``` ````.
+- One button, one complete command, exactly as it must run: no placeholders to fill in, no secrets, and
+  nothing that hides what it does (no piping a download into a shell). Say in the same message, in plain words,
+  what it does, on which machine, and whether it changes anything.
+- Marking a command is still a request to them, not an approval: the rules about production, merges, deploys and
+  applying infrastructure stay as they are. Never mark a command to get around a rule that stops you from running it.
+- Links: write the full address (`https://...`); it becomes a link that can be pressed, also inside a code span or a block.
+- The result: you are told when it has been run. Read what it printed with `team-term last` (or `team-term tail`);
+  do not ask them to paste output. For a request, they can also answer with the output in one press.
+
 ## Artifacts
 
 When __OWNER__ asks for an artifact (a page, visual report, dashboard, document to look at), or a page would explain
