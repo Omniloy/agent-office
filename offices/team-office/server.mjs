@@ -370,7 +370,7 @@ async function refreshPrs(team, force) {
       if (!r.ok) { errors.push(`${repo}: ${r.stderr.split('\n')[0]}`); return []; }
       try {
         return JSON.parse(r.stdout || '[]').map((x) => ({
-          repo: repo.split('/').pop(), projects: projOf(repo), number: x.number, title: x.title, url: x.url, draft: !!x.isDraft, review: x.reviewDecision || '',
+          repo: repo.split('/').pop(), projects: projOf(repo), number: x.number, title: x.title, url: x.url, draft: !!x.isDraft, review: x.reviewDecision || ((x.latestReviews || []).some((r) => r.state === 'CHANGES_REQUESTED') ? 'CHANGES_REQUESTED' : (x.latestReviews || []).some((r) => r.state === 'APPROVED') ? 'APPROVED' : ''), // GitHub gives no decision when the repo does not require reviews: read each reviewer's last review
           ci: ciState(x.statusCheckRollup), labels: (x.labels || []).map((l) => l.name), branch: x.headRefName || '', updated: x.updatedAt,
           mine: !!me && (x.author || {}).login !== me && ((x.reviewRequests || []).some((r) => r.login === me) || (x.latestReviews || []).some((r) => (r.author || {}).login === me)), // asked to review it, or already did
         }));
