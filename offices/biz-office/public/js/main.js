@@ -435,7 +435,7 @@ function renderAsks() {
       ${x.ticket && asks.site ? `<a class="key" href="${esc(asks.site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
     <div class="atitle">${rich(x.title || '')}</div>${x.body ? `<div class="abody">${md(x.body)}</div>` : ''}
     ${x.kind === 'request'
-      ? `${x.options.length ? `<div class="acts">${x.options.map((o, i) => `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+      ? `${x.options.length ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
          <div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>`
       : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
   </div>`).join('');

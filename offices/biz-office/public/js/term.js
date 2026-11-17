@@ -18,6 +18,9 @@ if (!window.__GUEST__ && TOKEN && TOKEN !== 'guest' && !new URLSearchParams(loca
   const CMD = /^(?:sudo\s+)?(?:az|gcloud|aws|kubectl|helm|terraform|argocd|docker|git|gh|npm|npx|pnpm|yarn|node|python3?|pip3?|uv|brew|ssh|scp|curl|wget|open|cd|ls|cat|tail|head|grep|chmod|mkdir|export|source|launchctl|systemctl|journalctl|defaults|security|psql|tailscale|hc|make|bash|zsh|claude|codex|office-restart|team-[a-z]+|\.\/[\w.-]+|~\/[\w.\/-]+)\s+\S/;
   window.termRun = {
     looks: (c) => CMD.test(String(c).trim()),
+    // an answer option that carries a command ("A: Create $ python3 x.py"): its label and a Run button, not a plain answer button
+    option: (o) => { const m = /^(.*?)\s*`?((?:[a-z0-9][a-z0-9._-]*)?)\$ ([^`]+)`?\s*$/i.exec(String(o)); const c = m && m[3].trim();
+      return c && (m[2] || /^[a-z.~\/]/i.test(c)) && c.length > 2 ? `<div class="runo"><b>${m[1].replace(/[:\s]+$/, '')}</b>${window.termRun.chip(c, m[2])}</div>` : ''; },
     shell: (info) => /^(sh|bash|zsh|shell|console|terminal)$/i.test(String(info).trim()),
     chip: (c, on) => `<span class="runc" role="button" tabindex="0" data-run="${c}" data-on="${NAME.test(on || '') ? on : ''}" title="Opens the terminal with this command ready to run${on ? ` on ${on}` : ''}"><i>▶</i>${NAME.test(on || '') ? `<em>${on}$</em>` : ''}<code>${c}</code></span>`,
     block: (c, on) => `<div class="runb" data-run="${c}" data-on="${NAME.test(on || '') ? on : ''}"><pre>${c}</pre><button type="button" title="Opens the terminal with this ready to run">▶ Run${NAME.test(on || '') ? ` on ${on}` : ''}</button></div>`,
@@ -25,6 +28,7 @@ if (!window.__GUEST__ && TOKEN && TOKEN !== 'guest' && !new URLSearchParams(loca
 
   const style = document.createElement('style');
   style.textContent = `
+.runo { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; flex-basis: 100%; } .runo b { font-weight: 600; }
 .runc { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 1px 8px 1px 6px; margin: 1px 0; border-radius: 7px; background: rgba(45,212,191,.12); border: 1px solid rgba(45,212,191,.45); cursor: pointer; vertical-align: baseline; white-space: normal; }
 .runc:hover, .runc:focus-visible { background: rgba(45,212,191,.22); outline: none; } .runc i { font-style: normal; font-size: .8em; color: #2dd4bf; flex: none; }
 .runc em { font-style: normal; font-size: .82em; color: #fbbf24; flex: none; } .runc code { background: transparent !important; border: 0 !important; padding: 0 !important; overflow-wrap: anywhere; white-space: pre-wrap; }

@@ -49,7 +49,7 @@ function render(d) {
       ${x.ticket && site ? `<a href="${esc(site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
     <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
     ${EMBED ? '' : x.kind === 'request'
-      ? `<div class="acts">${x.options.map((o, i) => `<button class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+      ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>
          <div class="acts"><input placeholder="Write an answer…"><button data-send>Send</button></div>`
       : `<div class="acts"><button data-read>Mark as read</button></div>`}
   </div>`;

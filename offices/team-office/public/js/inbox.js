@@ -109,7 +109,7 @@ function render(force) {
         <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc(x.name)}</button><i>${x.kind === 'request' ? 'needs your answer' : 'message'}</i><time>${esc(ago(x.created))}</time></div>
         <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
         ${x.kind === 'request'
-          ? `${(x.options || []).length ? `<div class="acts">${x.options.map((o, i) => `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+          ? `${(x.options || []).length ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
              <div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>`
           : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
       </div>`).join('') : `<div class="empty">No questions or messages are waiting for you.${notes ? '' : '<br>When someone on the team needs an answer, it shows up here.'}</div>`;
