@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """pty-bridge: runs a program inside a real terminal (pty) for term.mjs. Keys come in on stdin, the screen goes out
-on stdout, and "cols rows\n" lines on file descriptor 3 resize it. Ends when the program ends or stdin closes."""
+on stdout, and "cols rows\n" lines on file descriptor 3 resize it. On file descriptor 4 it says "idle" when the program
+itself is waiting at its prompt and "busy" when something it started is running. Ends when the program ends or stdin closes."""
 import os, pty, sys, select, fcntl, termios, struct, signal
 argv = sys.argv[1:] or [os.environ.get("SHELL", "/bin/bash"), "-l"]
 pid, fd = pty.fork()
@@ -11,14 +12,23 @@ def resize(cols, rows):
     try: fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", max(2, rows), max(10, cols), 0, 0))
     except Exception: pass
 resize(100, 30)
-ins = [0, fd, 3]; ctl = b""
+ins = [0, fd, 3]; ctl = b""; state = None
+def report():
+    global state
+    try: now = "idle" if os.tcgetpgrp(fd) == pid else "busy"
+    except Exception: return
+    if now != state:
+        state = now
+        try: os.write(4, (now + "\n").encode())
+        except Exception: pass
 def write_all(f, d):
     while d:
         try: d = d[os.write(f, d):]
         except InterruptedError: pass
 try:
     while True:
-        r, _, _ = select.select(ins, [], [])
+        r, _, _ = select.select(ins, [], [], 0.3)
+        report()
         if fd in r:
             try: d = os.read(fd, 65536)
             except OSError: break

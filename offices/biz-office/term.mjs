@@ -5,9 +5,9 @@
 //   GET  /api/term/info                      -> { host, user, cwd, machines, sessions }
 //   GET  /api/term/stream?id=local|<machine> -> server-sent events: init (what is on screen), out, exit
 //   POST /api/term/input  { id, data }       keys typed in the page
-//   POST /api/term/run    { id, cmd, from }  a command pressed in a message; tells its author it was run
+//   POST /api/term/run    { id, cmd, from }  a command pressed in a message; when it finishes, its author is sent what it printed
 //   POST /api/term/resize { id, cols, rows } · POST /api/term/kill { id }
-//   GET  /api/term/last?id=                  -> { cmd, text } what the last pressed command printed, as plain text
+//   GET  /api/term/last?id=                  -> { cmd, text, done } what the last pressed command printed, as plain text
 // What the terminals print is also kept as plain text in ~/.omniloy-team/terminal.log (this user only), so the
 // agent who asked for a command can read the result with `team-term tail`.
 import { spawn, execFile } from 'node:child_process';
@@ -27,6 +27,17 @@ const NAME = /^[a-z0-9][a-z0-9._-]{0,62}$/i;
 export const clean = (s) => s
   .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '').replace(/\x1b[()][0-9A-Za-z]/g, '').replace(/\x1b[@-Z\\-_=>]/g, '')
   .replace(/\r+\n/g, '\n').replace(/[^\n\x08]\x08/g, '').replace(/[^\n\x08]\x08/g, '').split('\n').map((l) => l.slice(l.lastIndexOf('\r') + 1)).join('\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+
+// What a command printed, without the line that echoes it and without the prompt that follows.
+const PROMPT = /[#$%>❯»] ?$/;
+export function printed(since, cmd = '') {
+  const L = clean(since).split('\n'), head = cmd.split('\n')[0].slice(0, 24);
+  const at = head ? L.slice(0, 8).findIndex((l) => l.includes(head)) : -1; // the line that echoes the command (a new shell prints a few lines before it)
+  L.splice(0, at >= 0 ? at + 1 : 1);
+  while (L.length && !L[L.length - 1].trim()) L.pop();
+  if (L.length && PROMPT.test(L[L.length - 1]) && L[L.length - 1].length < 200) L.pop();
+  return L.join('\n').trim();
+}
 
 export function createTerm({ teamDir, owner = 'the owner' }) {
   const sessions = new Map();
@@ -61,8 +72,8 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
     const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
     delete env.OFFICE_TOKEN; delete env.PORT;
     if (!env.LANG) env.LANG = 'en_US.UTF-8';
-    const child = spawn('python3', [BRIDGE, ...argv], { cwd: teamDir, env, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
-    const s = { id, child, chunks: [], size: 0, clients: new Set(), alive: true, since: '', cmd: '', pend: '', started: Date.now() };
+    const child = spawn('python3', [BRIDGE, ...argv], { cwd: teamDir, env, stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] });
+    const s = { id, child, chunks: [], size: 0, clients: new Set(), alive: true, since: '', cmd: '', pend: '', started: Date.now(), idle: id === 'local', lastOut: Date.now(), run: 0, done: true };
     const emit = (event, data) => { for (const res of s.clients) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
     const flush = (all) => { // whole lines only, so an escape code cut in two never reaches the log
       const cut = all ? s.pend.length : s.pend.lastIndexOf('\n') + 1;
@@ -71,17 +82,39 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
     const onData = (d) => {
       s.chunks.push(d); s.size += d.length;
       while (s.size > KEEP && s.chunks.length > 1) s.size -= s.chunks.shift().length;
-      const t = d.toString('utf8');
+      const t = d.toString('utf8'); s.lastOut = Date.now();
       s.since = (s.since + t).slice(-60_000); s.pend += t; flush(s.pend.length > 8000);
       emit('out', d.toString('base64'));
     };
     child.stdout.on('data', onData); child.stderr.on('data', onData);
-    child.stdin.on('error', () => {}); child.stdio[3].on('error', () => {});
+    child.stdin.on('error', () => {}); child.stdio[3].on('error', () => {}); child.stdio[4].on('error', () => {});
+    child.stdio[4].on('data', (d) => { const w = String(d).trim().split('\n').pop(); if (w === 'idle' || w === 'busy') s.idle = w === 'idle'; }); // the bridge says when the shell is back at its prompt
     child.on('error', (e) => onData(Buffer.from(`\r\n[the terminal could not start: ${e.message}]\r\n`)));
     child.on('exit', () => { s.alive = false; flush(true); emit('exit', {}); });
     sessions.set(id, s);
     logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} terminal opened (${id === 'local' ? os.hostname() : id})\n`);
     return s;
+  }
+  // A pressed command has finished when the shell is waiting at its prompt again. A local shell tells us exactly
+  // (pty-bridge.py); over ssh we go by a quiet screen that ends in a prompt. Its author is then sent what it printed.
+  function watch(s, cmd, person, where) {
+    const mine = ++s.run, typed = Date.now(); let warned = false; s.done = false;
+    const tell = (text) => { if (person) execFile(HC, ['send', person.herdrName, text], { timeout: 20000 }, () => {}); };
+    const short = cmd.length > 300 ? `${cmd.slice(0, 300)}…` : cmd;
+    const tick = () => {
+      if (s.run !== mine) return; // another command was pressed after this one
+      const age = Date.now() - typed, quiet = Date.now() - s.lastOut;
+      const back = !s.alive || (s.id === 'local' ? s.idle && age > 1200 && quiet > 500 : age > 2500 && quiet > 2500 && PROMPT.test(clean(s.since).trimEnd().split('\n').pop() || ''));
+      if (back) {
+        s.done = true;
+        const out = printed(s.since, cmd), secs = Math.round(age / 1000);
+        logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} finished after ${secs}s${s.alive ? '' : ' (the terminal ended)'}\n`);
+        return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s): ${short}\n\nIt printed${out.length > 3500 ? ' (the last part; all of it: `team-term last`)' : ''}:\n${out ? out.slice(-3500) : '(nothing)'}\n\nDo not ask for the output to be pasted.`);
+      }
+      if (!warned && age > 5 * 60000) { warned = true; tell(`${owner} ran the command you marked, in the office terminal on ${where}, ${Math.round(age / 60000)} minutes ago and it is still running (it may be waiting for input from ${owner}): ${short}\nYou will be told when it finishes. \`team-term last\` shows what it has printed so far.`); }
+      if (age < 2 * 3600000) setTimeout(tick, 500).unref();
+    };
+    setTimeout(tick, 800).unref();
   }
   const live = (id) => { const s = sessions.get(id); return s && s.alive ? s : start(id); };
   async function personas() { // everyone on this computer's teams, to know who can be told
@@ -107,7 +140,7 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
       if (req.method === 'GET') {
         const id = String(url.searchParams.get('id') || 'local');
         if (!(await validId(id))) return json(res, 400, { error: 'unknown machine' }), true;
-        if (p === '/api/term/last') { const s = sessions.get(id); return json(res, 200, { cmd: s ? s.cmd : '', text: s ? clean(s.since).trim().slice(-8000) : '' }), true; }
+        if (p === '/api/term/last') { const s = sessions.get(id); return json(res, 200, { cmd: s ? s.cmd : '', text: s ? printed(s.since, s.cmd).slice(-8000) : '', done: s ? s.done : true }), true; }
         if (p === '/api/term/stream') {
           const s = live(id);
           res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
@@ -140,8 +173,8 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
         const who = String(body.from || ''), person = who ? (await personas()).find((x) => x.herdrName === who || x.slug === who) : null;
         const where = id === 'local' ? os.hostname().replace(/\.local$/, '') : id;
         logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${owner} ran on ${where}${person ? ` (marked by ${person.herdrName})` : ''}: ${cmd}\n`);
-        setTimeout(() => { s.since = ''; s.cmd = cmd; if (s.alive) s.child.stdin.write(`${cmd.replace(/\n/g, '\r')}\r`); }, fresh ? (id === 'local' ? 700 : 2500) : 0); // a new shell needs a moment before it listens
-        if (person) execFile(HC, ['send', person.herdrName, `${owner} ran the command you marked, in the office terminal on ${where}: ${cmd.slice(0, 400)}\nRead what it printed with \`team-term tail\` (again in a moment if it is still running). Do not ask for the output to be pasted.`], { timeout: 20000 }, () => {});
+        s.done = false;
+        setTimeout(() => { s.since = ''; s.cmd = cmd; if (s.alive) s.child.stdin.write(`${cmd.replace(/\n/g, '\r')}\r`); watch(s, cmd, person, where); }, fresh ? (id === 'local' ? 700 : 2500) : 0); // a new shell needs a moment before it listens
         return json(res, 200, { ok: true, told: person ? person.name : '' }), true;
       }
       return json(res, 404, { error: 'not found' }), true;

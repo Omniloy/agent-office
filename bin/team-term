@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """team-term: read what the office terminal printed. __OWNER__ runs commands there himself, often ones you marked
-for him in a message; this is how you see the result without asking him to paste it.
+for him in a message. When one of yours finishes you get a message with what it printed; this shows all of it.
 
   team-term tail [N]        the last N lines the terminal printed (default 80, at most 400)
   team-term last            everything since the last command he ran from a message button

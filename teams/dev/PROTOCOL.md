@@ -224,8 +224,8 @@ press Run. It never runs by itself.
 - Marking a command is still a request to them, not an approval: the rules about production, merges, deploys and
   applying infrastructure stay as they are. Never mark a command to get around a rule that stops you from running it.
 - Links: write the full address (`https://...`); it becomes a link that can be pressed, also inside a code span or a block.
-- The result: you are told when it has been run. Read what it printed with `team-term last` (or `team-term tail`);
-  do not ask them to paste output. For a request, they can also answer with the output in one press.
+- The result: when the command finishes you get a message with what it printed (the whole output: `team-term last`).
+  Wait for that message; do not ask them to paste output, and do not read the terminal before it arrives.
 
 ## Artifacts
 

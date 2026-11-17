@@ -162,7 +162,7 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
       } else if (b.id === 'term-send') {
         const sh = $('#term-share'), d = await api(`/api/term/last?id=${encodeURIComponent(sh.dataset.id)}`);
         const out = (d.text || '').trim(), lines = out ? out.split('\n').length : 0;
-        if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = lines ? `Yes, send these ${lines} lines to ${sh.dataset.name || 'them'}` : 'It printed nothing yet. Send anyway?'; setTimeout(() => { if (b.isConnected && b.dataset.sure === '1') { b.dataset.sure = ''; b.textContent = `${sh.dataset.req ? 'Answer' : 'Send'} ${sh.dataset.name || 'them'} what it printed`; } }, 6000); return; }
+        if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = d.done === false ? `It is still running. Send the ${lines} lines so far?` : lines ? `Yes, send these ${lines} lines to ${sh.dataset.name || 'them'}` : 'It printed nothing. Send anyway?'; setTimeout(() => { if (b.isConnected && b.dataset.sure === '1') { b.dataset.sure = ''; b.textContent = `${sh.dataset.req ? 'Answer' : 'Send'} ${sh.dataset.name || 'them'} what it printed`; } }, 6000); return; }
         b.disabled = true;
         const text = `I ran it on ${where(sh.dataset.id)}: ${d.cmd}\n\nIt printed:\n${out.length > 3300 ? `(the last part)\n${out.slice(-3300)}` : out || '(nothing)'}`;
         if (sh.dataset.req) await api('/api/requests/answer', { id: Number(sh.dataset.req), text });
