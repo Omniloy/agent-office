@@ -7,9 +7,16 @@ Agents (register EVERY message you propose in __OWNER__'s name, right after you 
         [--subject ".."] [--cc ".."] [--client <client id>] [--why "one line: why this message, why now"]
         gmail:    [--thread <gmail thread id>] [--draft-id <id of the Gmail draft you created>]
         whatsapp: [--phone +34600111222] [--chat "name of the WhatsApp chat"]
+  calendar (an event to create, or an answer to an invitation; --to is not needed):
+        team-draft add --from <you> --channel calendar --title "Call with X" --start 2026-11-18T11:00 [--end 2026-11-18T11:30]
+              [--guests "a@x.com, b@y.com"] [--meet] [--location ".."] [--body "description for the guests"] [--tz Europe/Madrid]
+              [--thread <gmail thread it comes from>] [--client <id>] --why "..."        (a whole day: --start 2026-11-18)
+        team-draft add --from <you> --channel calendar --kind rsvp --event-id <calendar event id> --response accepted|declined|tentative
+              [--thread <gmail thread>] --why "..."
   team-draft ls [--from <you>] [--all]          open drafts (--all: sent and discarded too)
   team-draft show <id>                          full text, __OWNER__'s edits, his questions
   team-draft set <id> key=value ...             fix a field: to, cc, subject, client, why, thread, draftId, phone, chat
+                                                (calendar: title, start, end, guests, location, meet=yes|no, response, tz)
   team-draft body <id> --body-file FILE         you rewrote the text yourself
   team-draft synced <id> [--draft-id <new id>]  the external draft (Gmail/WhatsApp box) now matches the text here
   team-draft note <id> --from <you> "text"      answer __OWNER__'s question about a draft, or tell him something about it
@@ -18,12 +25,45 @@ Agents (register EVERY message you propose in __OWNER__'s name, right after you 
 __OWNER__ (the Drafts panel calls these; agents never do):
   team-draft edit <id> --body-file FILE [--subject ".."]    his version; a Gmail draft is updated directly through the Gmail API
   team-draft send <id> --by-owner                         sends the Gmail draft as it reads here, marks it sent, tells the author
+                                                            (calendar: creates the event and invites the guests, or answers the invitation)
+  team-draft edit <id> --event-file FILE                    his version of a calendar draft (JSON: title, start, end, guests, location, meet, description, response)
+  team-draft event <id>                                     for the panel: what else is in his calendar at that time, and the invitation as it is now
   team-draft sync                                           marks drafts he already sent (or deleted) in Gmail
   team-draft ask <id> "question"                            goes to the author's terminal; the answer comes back with `note`
 """
 import sys, os, json, fcntl, subprocess, datetime, urllib.parse, re
 D = os.path.expanduser("~/.omniloy-biz"); F = D + "/drafts.json"; HC = os.path.expanduser("~/.local/bin/hc")
-CHANNELS = ("gmail", "whatsapp", "slack")
+CHANNELS = ("gmail", "whatsapp", "slack", "calendar")
+CAL = os.path.expanduser("~/.local/bin/team-cal")
+WHEN = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$")
+RESP = {"accepted": "Accept", "declined": "Decline", "tentative": "Maybe"}
+def cal(*args):
+    """Run the Calendar helper. Returns (ok, parsed json or error text)."""
+    r = subprocess.run([CAL, *args], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0: return False, (r.stderr or r.stdout).strip().split("\n")[-1]
+    try: return True, json.loads(r.stdout)
+    except Exception: return True, r.stdout
+def emails(v):
+    if isinstance(v, list): v = ", ".join(str(g) for g in v)
+    return list(dict.fromkeys(m.lower() for m in re.findall(r"[^@\s,;<>\"']+@[^@\s,;<>\"']+\.[^@\s,;<>\"']+", str(v or ""))))
+def clock(v, name):
+    v = str(v or "").strip().replace(" ", "T")[:16]
+    if not WHEN.match(v): sys.exit(f'--{name} must look like 2026-11-18T11:00 (or 2026-11-18 for a whole day), got "{v}"')
+    return v
+def tidy(x):
+    """Keep a calendar draft consistent after any change, and fill the fields every list shows (to, subject)."""
+    x["start"] = clock(x.get("start"), "start")
+    if not x.get("end"): x["end"] = x["start"] if len(x["start"]) == 10 else (datetime.datetime.fromisoformat(x["start"]) + datetime.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M")
+    x["end"] = clock(x["end"], "end")
+    if len(x["start"]) != len(x["end"]): sys.exit("start and end must both be days or both be times")
+    if x["end"] < x["start"] or (len(x["start"]) > 10 and x["end"] == x["start"]): sys.exit("the event ends before it starts")
+    x["guests"] = emails(x.get("guests")); x["meet"] = bool(x.get("meet")); x["subject"] = x["title"] = str(x.get("title") or "").strip()
+    if not x["title"]: sys.exit("the event needs a title")
+    if x.get("kind") == "rsvp":
+        if x.get("response") not in RESP: sys.exit("--response must be accepted, declined or tentative")
+        x["to"] = x.get("organizer") or "the organiser"
+    else: x["to"] = ", ".join(x["guests"]) or "your calendar only, nobody is invited"
+    return x
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 def load():
     try: return json.load(open(F))
@@ -59,6 +99,12 @@ def link(x):
     if x["channel"] == "gmail":
         acct = team().get("gmailAccount"); base = "https://mail.google.com/mail/" + (f"?authuser={urllib.parse.quote(acct)}" if acct else "u/0/")
         return base + (f"#all/{x['thread']}" if x.get("thread") else "#drafts")
+    if x["channel"] == "calendar":
+        if x.get("eventLink"): return x["eventLink"]
+        day = lambda v, plus=0: (datetime.date.fromisoformat(v[:10]) + datetime.timedelta(days=plus)).strftime("%Y%m%d")
+        dates = f'{day(x["start"])}/{day(x["end"], 1)}' if len(x["start"]) == 10 else f'{x["start"].replace("-", "").replace(":", "")}00/{x["end"].replace("-", "").replace(":", "")}00'
+        q = {"action": "TEMPLATE", "text": x["title"], "dates": dates, "ctz": x.get("tz") or "", "details": x.get("body") or "", "location": x.get("location") or "", "add": ",".join(x.get("guests") or [])}
+        return "https://calendar.google.com/calendar/render?" + urllib.parse.urlencode({k: v for k, v in q.items() if v})
     if x["channel"] == "whatsapp":
         digits = re.sub(r"\D", "", x.get("phone") or "")
         return f"https://web.whatsapp.com/send?phone={digits}&text={urllib.parse.quote(x['body'])}" if digits else "https://web.whatsapp.com/"
@@ -94,9 +140,27 @@ os.makedirs(D, exist_ok=True); lock = open(F + ".lock", "w"); fcntl.flock(lock, 
 d = load(); cmd = a[0]; o, rest = opts(a[1:])
 
 if cmd == "add":
-    for k in ("from", "channel", "to"):
+    for k in ("from", "channel") + (() if o.get("channel") == "calendar" else ("to",)):
         if not isinstance(o.get(k), str): sys.exit(f"--{k} is required")
     if o["channel"] not in CHANNELS: sys.exit(f"--channel must be one of {CHANNELS}")
+    if o["channel"] == "calendar":
+        S = lambda k: o[k] if isinstance(o.get(k), str) else ""
+        x = {"id": d["next"], "from": o["from"], "channel": "calendar", "kind": "rsvp" if o.get("kind") == "rsvp" else "event", "cc": "", "body": S("body") or (open(os.path.expanduser(o["body-file"])).read().strip() if S("body-file") else ""),
+             "client": S("client"), "why": S("why"), "thread": S("thread"), "draftId": "", "phone": "", "chat": "", "tz": S("tz") or team().get("timezone") or "Europe/Madrid",
+             "status": "open", "synced": True, "edited": False, "talk": [], "created": now(), "updated": now()}
+        if x["kind"] == "rsvp":
+            if not S("event-id"): sys.exit("--event-id is required: the id of the invitation in his calendar (get_events in the Google Workspace connector shows it)")
+            ok, e = cal("get", S("event-id"), "--tz", x["tz"])
+            if not ok or not isinstance(e, dict): sys.exit(f"could not read that event: {e}")
+            if not e.get("exists"): sys.exit("that event is not in his calendar (cancelled, or the id is wrong)")
+            if e.get("myResponse") in ("", "organizer"): sys.exit("he is the organiser or is not on the guest list, so there is nothing to answer")
+            x.update({"eventId": e["id"], "eventLink": e.get("link", ""), "title": e["title"], "start": e["start"], "end": e["end"], "location": e.get("location", ""), "meet": bool(e.get("meet")),
+                      "organizer": e.get("organizer", ""), "guests": [g["email"] for g in e.get("attendees", []) if not g.get("self")], "response": S("response")})
+        else:
+            x.update({"title": S("title") or S("subject"), "start": S("start"), "end": S("end"), "guests": S("guests") or S("to"), "location": S("location"), "meet": "meet" in o})
+            if not x["start"]: sys.exit("--start is required, like 2026-11-18T11:00")
+        tidy(x); d["next"] += 1; d["drafts"].append(x); save(d)
+        print(f'draft #{x["id"]} registered; __OWNER__ sees it in the Drafts popup and ' + ("answers the invitation" if x["kind"] == "rsvp" else "creates the event" + (f' (Google then invites {len(x["guests"])} guest(s))' if x["guests"] else "")) + " with one click"); sys.exit()
     x = {"id": d["next"], "from": o["from"], "channel": o["channel"], "to": o["to"], "cc": o.get("cc") or "", "subject": o.get("subject") or "",
          "body": body_of(o), "client": o.get("client") or "", "why": o.get("why") or "", "thread": o.get("thread") or "", "draftId": o.get("draft-id") or "",
          "phone": o.get("phone") or "", "chat": o.get("chat") or "", "status": "open", "synced": True, "edited": False, "talk": [], "created": now(), "updated": now()}
@@ -115,8 +179,10 @@ elif cmd == "set":
     x = get(d, rest[0])
     for kv in rest[1:]:
         k, v = kv.split("=", 1)
+        if x["channel"] == "calendar" and k in ("title", "start", "end", "guests", "location", "meet", "response", "tz"): x[k] = (v.lower() in ("yes", "true", "1")) if k == "meet" else v; continue
         if k not in ("to", "cc", "subject", "client", "why", "thread", "draftId", "phone", "chat"): sys.exit(f"unknown field {k}")
         x[k] = v
+    if x["channel"] == "calendar": tidy(x)
     x["updated"] = now(); save(d); print("ok")
 elif cmd == "body":
     x = get(d, rest[0]); x["body"] = body_of(o); x["updated"] = now(); save(d); print("ok")
@@ -133,6 +199,14 @@ elif cmd in ("sent", "discard"):
     x = get(d, rest[0]); x["status"] = "sent" if cmd == "sent" else "discarded"; x["updated"] = now(); save(d)
     if "by-owner" in o: nudge(x["from"], f'__OWNER__ marked draft #{x["id"]} (to {x["to"]}) as {x["status"]}. ' + ("Record the contact where it belongs." if cmd == "sent" else "Do not propose it again unless something changes."))
     print("ok")
+elif cmd == "edit" and get(d, rest[0])["channel"] == "calendar":
+    x = get(d, rest[0]); e = json.load(open(os.path.expanduser(o["event-file"]), encoding="utf-8"))
+    if x["status"] != "open": sys.exit(f'draft #{x["id"]} is already {x["status"]}')
+    keys = ("response",) if x.get("kind") == "rsvp" else ("title", "start", "end", "guests", "location", "meet")
+    for k in keys:
+        if k in e: x[k] = e[k]
+    if x.get("kind") != "rsvp" and "description" in e: x["body"] = str(e["description"]).strip()
+    tidy(x); x["edited"] = True; x["updated"] = now(); save(d); print("ok")
 elif cmd == "edit":
     x = get(d, rest[0]); x["body"] = body_of(o)
     if isinstance(o.get("subject"), str): x["subject"] = o["subject"]
@@ -151,6 +225,19 @@ elif cmd == "send":
     if "by-owner" not in o: sys.exit("only __OWNER__ sends, from the Drafts panel. Agents never send.")
     x = get(d, rest[0])
     if x["status"] != "open": sys.exit(f'draft #{x["id"]} is already {x["status"]}')
+    if x["channel"] == "calendar":
+        if x.get("kind") == "rsvp":
+            ok, out = cal("rsvp", x["eventId"], x["response"], "--by-owner")
+            if not ok: sys.exit(f"Calendar did not take the answer: {out}")
+            said = f'__OWNER__ answered the invitation "{x["title"]}" ({x["start"].replace("T", " ")}): {x["response"]}. The organiser has been told by Google.'
+        else:
+            f = tmpfile(json.dumps({"title": x["title"], "start": x["start"], "end": x["end"], "tz": x.get("tz"), "guests": x["guests"], "location": x.get("location"), "description": x.get("body"), "meet": x.get("meet")}))
+            ok, out = cal("create", f, "--by-owner"); os.unlink(f)
+            if not ok or not isinstance(out, dict): sys.exit(f"Calendar did not create it: {out}")
+            x["eventId"], x["eventLink"], x["meetLink"] = out.get("id", ""), out.get("link", ""), out.get("meet", "")
+            said = (f'__OWNER__ created the event "{x["title"]}" ({x["start"].replace("T", " ")}) from draft #{x["id"]}' + (f' and Google sent the invitation to {len(x["guests"])} guest(s)' if x["guests"] else ", with no guests")
+                    + f'. Read it with `team-draft show {x["id"]}` if a reply needs the link' + (" (meetLink is the video call)" if x["meetLink"] else "") + ". Do not create it again.")
+        x["status"] = "sent"; x["sentAt"] = now(); x["sentFrom"] = "app"; x["updated"] = now(); save(d); nudge(x["from"], said); print("sent"); sys.exit()
     if x["channel"] != "gmail" or not x.get("draftId"): sys.exit("only Gmail drafts linked to a real Gmail draft can be sent from here; open the app for this one")
     if not x.get("synced", True):
         ok, out = push(x)
@@ -185,8 +272,20 @@ elif cmd == "ask":
     print("ok")
 elif cmd == "thread":   # for the office: the mail this draft answers, read live from Gmail and stored nowhere
     x = get(d, rest[0]); lock.close()
-    if x["channel"] != "gmail" or not x.get("thread"): print(json.dumps({"messages": []})); sys.exit()
+    if x["channel"] not in ("gmail", "calendar") or not x.get("thread"): print(json.dumps({"messages": []})); sys.exit()
     ok, t = gmail("thread", x["thread"])
     if not ok or not isinstance(t, dict): sys.exit(str(t)[:200] or "Gmail did not answer")
     print(json.dumps(t, ensure_ascii=False))
+elif cmd == "event":   # for the office: what the calendar says right now, read live and stored nowhere
+    x = get(d, rest[0]); lock.close()
+    if x["channel"] != "calendar": print(json.dumps({})); sys.exit()
+    out = {"conflicts": [], "event": None}
+    ok, b = cal("busy", x["start"], x["end"], "--tz", x.get("tz") or "Europe/Madrid", *(["--skip", x["eventId"]] if x.get("eventId") else []))
+    if not ok or not isinstance(b, dict): sys.exit(str(b)[:200] or "Calendar did not answer")
+    whole = len(x["start"]) == 10
+    out["conflicts"] = [e for e in b["events"] if whole or (not e["allDay"] and e["start"] < x["end"] and e["end"] > x["start"])][:8]
+    if x.get("kind") == "rsvp":
+        ok, e = cal("get", x["eventId"], "--tz", x.get("tz") or "Europe/Madrid")
+        if ok and isinstance(e, dict): out["event"] = e
+    print(json.dumps(out, ensure_ascii=False))
 else: print(__doc__); sys.exit(1)

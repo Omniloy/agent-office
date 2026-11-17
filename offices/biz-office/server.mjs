@@ -581,13 +581,32 @@ const server = http.createServer(async (req, res) => {
       threadCache.set(id, { at: Date.now(), d }); if (threadCache.size > 30) threadCache.delete(threadCache.keys().next().value);
       return json(res, 200, d);
     }
+    if (p === '/api/drafts/event') { // a calendar draft: what else is in the calendar at that time, read live, kept one minute in memory, never on disk
+      const id = String(Number(url.searchParams.get('id')) || '');
+      if (!id) return json(res, 400, { error: 'id is required' });
+      const key = 'ev' + id, hit = threadCache.get(key);
+      if (hit && Date.now() - hit.at < 60000 && !url.searchParams.has('fresh')) return json(res, 200, hit.d);
+      const r = await run(TEAM_DRAFT, ['event', id], { timeout: 60000 });
+      if (!r.ok) return json(res, 502, { error: clip(oneLine(r.stderr || r.stdout), 240) });
+      let d = { conflicts: [] }; try { d = JSON.parse(r.stdout); } catch { /* nothing readable */ }
+      threadCache.set(key, { at: Date.now(), d }); if (threadCache.size > 30) threadCache.delete(threadCache.keys().next().value);
+      return json(res, 200, d);
+    }
     if (req.method === 'POST' && ['/api/drafts/edit', '/api/drafts/ask', '/api/drafts/status', '/api/drafts/send'].includes(p)) {
       if (!String(req.headers['content-type'] || '').includes('application/json')) return json(res, 415, { error: 'json only' });
       const body = await readBody(req);
       const id = String(Number(body.id) || '');
       if (!id) return json(res, 400, { error: 'id is required' });
       let args;
-      if (p.endsWith('/edit')) {
+      if (p.endsWith('/edit') && body.event && typeof body.event === 'object') { // a calendar draft: the fields of the event
+        const e = {}; for (const k of ['title', 'start', 'end', 'location', 'description', 'response']) if (typeof body.event[k] === 'string') e[k] = body.event[k].slice(0, k === 'description' ? 8000 : 300);
+        if (typeof body.event.guests === 'string') e.guests = body.event.guests.slice(0, 4000);
+        if (typeof body.event.meet === 'boolean') e.meet = body.event.meet;
+        const tmp = path.join(os.tmpdir(), `biz-event-${id}-${Date.now()}.json`);
+        await fs.writeFile(tmp, JSON.stringify(e));
+        threadCache.delete('ev' + id);
+        args = ['edit', id, '--event-file', tmp];
+      } else if (p.endsWith('/edit')) {
         const text = String(body.body || '').trim();
         if (!text || text.length > 20000) return json(res, 400, { error: 'the message is empty or too long' });
         const tmp = path.join(os.tmpdir(), `biz-draft-${id}-${Date.now()}.txt`);

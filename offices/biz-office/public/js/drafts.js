@@ -10,7 +10,7 @@ const api = async (path, body) => {
   const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'x-office-token': TOKEN, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || `Request failed (${r.status})`); return d;
 };
-const APP = { gmail: 'Gmail', whatsapp: 'WhatsApp', slack: 'Slack' };
+const APP = { gmail: 'Gmail', whatsapp: 'WhatsApp', slack: 'Slack', calendar: 'Calendar' };
 
 const style = document.createElement('style');
 style.textContent = `
@@ -34,7 +34,19 @@ style.textContent = `
 .dr .l2 { color: #a9bbb8; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dr .l3 { color: #8fa3a0; margin-top: 4px; font-size: 11.5px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; } .dr .l3 i.dot { width: 8px; height: 8px; border-radius: 50%; }
 .chn { font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 1px 7px; border-radius: 99px; text-transform: uppercase; }
-.chn.gmail { background: rgba(125,211,252,.16); color: #7dd3fc; } .chn.whatsapp { background: rgba(74,222,128,.16); color: #4ade80; } .chn.slack { background: rgba(196,181,253,.16); color: #c4b5fd; }
+.chn.gmail { background: rgba(125,211,252,.16); color: #7dd3fc; } .chn.whatsapp { background: rgba(74,222,128,.16); color: #4ade80; } .chn.slack { background: rgba(196,181,253,.16); color: #c4b5fd; } .chn.calendar { background: rgba(251,146,60,.16); color: #fdba74; }
+#dr-detail .evt { font-size: 17px; font-weight: 600; line-height: 1.3; } #dr-detail .evw { font-size: 14px; }
+#dr-detail .guests { display: flex; flex-wrap: wrap; gap: 5px; } #dr-detail .guests i { font-style: normal; font-size: 12px; padding: 2px 9px; border-radius: 99px; background: rgba(255,255,255,.08); overflow-wrap: anywhere; }
+#dr-detail .guests i.accepted { background: rgba(74,222,128,.16); color: #86efac; } #dr-detail .guests i.declined { background: rgba(248,113,113,.14); color: #fca5a5; text-decoration: line-through; } #dr-detail .guests i.tentative { background: rgba(251,191,36,.14); color: #fcd34d; }
+#dr-cal-live { border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: rgba(255,255,255,.035); padding: 9px 12px; line-height: 1.5; flex: none; }
+#dr-cal-live .note { color: #8fa3a0; } #dr-cal-live .free { color: #5eead4; } #dr-cal-live .clash b { color: #fbbf24; font-weight: 600; display: block; margin-bottom: 2px; }
+#dr-cal-live .clash div { display: flex; gap: 10px; } #dr-cal-live .clash time { color: #8fa3a0; white-space: nowrap; min-width: 92px; } #dr-cal-live .clash em { color: #8fa3a0; font-style: normal; }
+#dr-detail .desc { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; padding: 10px 12px; border-radius: 10px; background: rgba(0,0,0,.22); color: #dbe5e3; }
+#dr-detail .hint { color: #8fa3a0; font-size: 12px; line-height: 1.4; }
+.evform { display: flex; flex-direction: column; gap: 9px; } .evform label { display: flex; flex-direction: column; gap: 4px; color: #8fa3a0; font-size: 12px; min-width: 0; }
+.evform .row { display: flex; gap: 9px; flex-wrap: wrap; } .evform .row label { flex: 1; min-width: 110px; }
+.evform label.chk { flex-direction: row; align-items: center; gap: 8px; color: #e8f0ee; font-size: 13px; } #dr-detail .evform label.chk input { width: auto; flex: none; margin: 0; }
+#dr-detail .evform textarea { flex: none; min-height: 0; resize: vertical; } .evform input[type=date], .evform input[type=time] { color-scheme: dark; }
 .tag { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: rgba(251,191,36,.16); color: #fbbf24; } .tag.q { background: rgba(196,181,253,.16); color: #c4b5fd; }
 #dr-detail { overflow: auto; padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 #dr-detail .empty, #dr-list .empty { color: #8fa3a0; padding: 30px 10px; text-align: center; line-height: 1.5; }
@@ -83,15 +95,15 @@ const firstName = (slug) => who(slug).name.split(' ')[0];
 function renderList() {
   const n = drafts.length;
   btn.innerHTML = `Drafts${n ? `<b>${n}</b>` : ''}`;
-  $('#dr-sub').textContent = n ? `${n} waiting for you · email goes out only when you press Send` : 'Nothing waiting';
+  $('#dr-sub').textContent = n ? `${n} waiting for you · nothing goes out until you press the button` : 'Nothing waiting';
   const chans = [...new Set(drafts.map((x) => x.channel))];
   const list = drafts.filter((x) => filter === 'all' || x.channel === filter);
   $('#dr-list').innerHTML = (chans.length > 1 ? `<div class="f"><button data-f="all" class="${filter === 'all' ? 'on' : ''}">All ${n}</button>${chans.map((c) => `<button data-f="${c}" class="${filter === c ? 'on' : ''}">${APP[c] || c} ${drafts.filter((x) => x.channel === c).length}</button>`).join('')}</div>` : '')
     + (list.length ? list.map((x) => {
       const q = (x.talk || []).some((t) => t.who !== '__OWNER_ID__') && (x.talk || []).at(-1).who !== '__OWNER_ID__';
       return `<div class="dr ${cur === x.id ? 'on' : ''}" data-id="${x.id}">
-        <div class="l1"><i class="chn ${esc(x.channel)}">${esc(APP[x.channel] || x.channel)}</i><b>${esc(x.to)}</b><time>${ago(x.created)}</time></div>
-        <div class="l2">${esc(x.subject || x.body.split('\n').find((l) => l.trim()) || '')}</div>
+        <div class="l1"><i class="chn ${esc(x.channel)}">${esc(x.channel === 'calendar' ? (x.kind === 'rsvp' ? 'Invitation' : 'Event') : APP[x.channel] || x.channel)}</i><b>${esc(x.channel === 'calendar' ? (x.kind === 'rsvp' ? `from ${x.organizer || 'the organiser'}` : x.guests.length ? `${x.guests.length} ${x.guests.length === 1 ? 'guest' : 'guests'}: ${x.guests.map((g) => g.split('@')[0]).join(', ')}` : 'No guests') : x.to)}</b><time>${ago(x.created)}</time></div>
+        <div class="l2">${esc(x.channel === 'calendar' ? `${x.kind === 'rsvp' ? `${RESP[x.response] || 'Answer'}: ` : ''}${x.title} · ${whenTxt(x, true)}` : x.subject || x.body.split('\n').find((l) => l.trim()) || '')}</div>
         <div class="l3"><i class="dot" style="background:${esc(who(x.from).color)}"></i>${esc(firstName(x.from))}${x.client ? ` · ${esc(x.client)}` : ''}${x.edited ? '<span class="tag">edited by you</span>' : ''}${q ? '<span class="tag q">reply for you</span>' : ''}</div></div>`;
     }).join('') : `<div class="empty">No drafts waiting.<br>When someone on the team prepares a message for you, it appears here.</div>`);
 }
@@ -141,10 +153,108 @@ async function loadThread(x, again) {
   catch (e) { threads.set(x.id, { state: 'err', error: e.message }); }
   if (cur === x.id) paintThread();
 }
+// ---- calendar drafts: an event to create (Google emails the guests) or an answer to an invitation. Nothing happens until he presses the button.
+const RESP = { accepted: 'Accept', tentative: 'Maybe', declined: 'Decline' }, SAID = { accepted: 'accepted', tentative: 'maybe', declined: 'declined', needsAction: 'not answered' };
+const pad = (n) => String(n).padStart(2, '0');
+const dOf = (v) => new Date(v.length === 10 ? v + 'T00:00' : v);
+const dayTxt = (v) => dOf(v).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+const hm = (v) => v.slice(11, 16);
+function whenTxt(x, brief) {
+  if (!x.start) return '';
+  if (x.start.length === 10) return x.end && x.end !== x.start ? `${dayTxt(x.start)} to ${dayTxt(x.end)}, all day` : `${dayTxt(x.start)}, all day`;
+  const mins = Math.round((dOf(x.end) - dOf(x.start)) / 60000), dur = mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ''}`;
+  const tz = x.tz && x.tz !== Intl.DateTimeFormat().resolvedOptions().timeZone ? ` · ${x.tz} time` : '';
+  const same = x.start.slice(0, 10) === x.end.slice(0, 10);
+  return brief ? `${dayTxt(x.start)} ${hm(x.start)}` : `${dayTxt(x.start)} · ${hm(x.start)} to ${same ? hm(x.end) : `${dayTxt(x.end)} ${hm(x.end)}`} · ${dur}${tz}`;
+}
+const live = new Map(); // draft id -> what the calendar says now, read when the draft is picked
+const liveKey = (x) => `${x.start}|${x.end}`;
+function liveHtml(x) {
+  const t = live.get(x.id);
+  if (!t || t.state === 'loading') return '<div class="note">Checking your calendar…</div>';
+  if (t.state === 'err') return `<div class="note">Your calendar could not be read: ${esc(t.error)} <button id="dr-ev-retry">Try again</button></div>`;
+  if (t.event && !t.event.exists) return '<div class="clash"><b>This invitation is no longer in your calendar: it was cancelled or deleted.</b></div>';
+  const c = t.conflicts || [];
+  let h = c.length ? `<div class="clash"><b>${x.kind === 'rsvp' ? 'Also in your calendar at that time' : 'You already have something at that time'}</b>${c.map((e) => `<div><time>${e.allDay ? 'all day' : `${hm(e.start)} to ${hm(e.end)}`}</time><span>${esc(e.title)}${e.myResponse === 'needsAction' ? ' <em>(not answered)</em>' : e.myResponse === 'tentative' ? ' <em>(maybe)</em>' : ''}</span></div>`).join('')}</div>`
+    : '<div class="free">Nothing else in your calendar at that time.</div>';
+  if (t.event && t.event.myResponse && t.event.myResponse !== 'needsAction') h += `<div class="note">You already answered this one: ${esc(SAID[t.event.myResponse] || t.event.myResponse)}.</div>`;
+  return h;
+}
+function guestsHtml(x) {
+  const t = live.get(x.id), att = t && t.event && t.event.exists ? t.event.attendees.filter((g) => !g.self) : null;
+  if (att) return att.length ? att.map((g) => `<i class="${esc(g.response)}" title="${esc(g.email)}${g.response && g.response !== 'needsAction' ? `: ${esc(SAID[g.response] || g.response)}` : ''}">${esc(g.name || g.email)}</i>`).join('') : 'Only you';
+  return x.guests.length ? x.guests.map((g) => `<i>${esc(g)}</i>`).join('') : '';
+}
+function paintLive() {
+  const x = drafts.find((d) => d.id === cur); if (!x || x.channel !== 'calendar') return;
+  const el = $('#dr-cal-live'); if (el) el.innerHTML = liveHtml(x);
+  const g = $('#dr-guests'); if (g && x.kind === 'rsvp') g.innerHTML = guestsHtml(x);
+}
+async function loadLive(x, again) {
+  const k = liveKey(x), t = live.get(x.id);
+  if (t && t.k === k && !again) return;
+  live.set(x.id, { state: 'loading', k });
+  try { const d = await api(`/api/drafts/event?id=${x.id}${again ? '&fresh=1' : ''}`); live.set(x.id, { state: 'ok', k, conflicts: d.conflicts || [], event: d.event || null }); }
+  catch (e) { live.set(x.id, { state: 'err', k, error: e.message }); }
+  if (cur === x.id) paintLive();
+}
+function eventForm(x) {
+  const v = (id) => ($(id) ? $(id).value.trim() : ''), day = v('#ev-day');
+  const e = { title: v('#ev-title'), guests: v('#ev-guests'), location: v('#ev-loc'), meet: $('#ev-meet').checked, description: v('#ev-desc') };
+  if (x.start.length === 10) { e.start = day; e.end = v('#ev-last') || day; }
+  else {
+    const a = v('#ev-from'), b = v('#ev-to'); let last = day;
+    if (b <= a) { const d = new Date(day + 'T12:00'); d.setDate(d.getDate() + 1); last = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; } // ends after midnight
+    e.start = `${day}T${a}`; e.end = `${last}T${b}`;
+  }
+  return e;
+}
+function renderEvent(x, box) {
+  const author = firstName(x.from), rsvp = x.kind === 'rsvp', n = x.guests.length, whole = x.start.length === 10;
+  const where = [x.location, rsvp ? (x.meet ? 'Google Meet' : '') : (x.meet ? 'a Google Meet link is added when it is created' : '')].filter(Boolean).join(' · ');
+  const view = `
+    <div class="meta"><span>${rsvp ? 'Invitation' : 'Event'}</span><div class="evt">${esc(x.title)}</div>
+      <span>When</span><div class="evw">${esc(whenTxt(x))}</div>
+      ${where ? `<span>Where</span><div>${esc(where)}</div>` : ''}
+      ${rsvp ? `<span>Organiser</span><div>${esc(x.organizer || '')}</div>` : ''}
+      <span>Guests</span><div class="guests" id="dr-guests">${guestsHtml(x) || 'Nobody. It only goes into your calendar and no email is sent.'}</div>
+      <span>From</span><div>${esc(who(x.from).name)} · ${ago(x.created)}${x.client ? ` · client ${esc(x.client)}` : ''}${x.edited ? ' · edited by you' : ''}</div>
+      ${x.why ? `<span>Why</span><div class="why">${esc(x.why)}</div>` : ''}</div>
+    <div id="dr-cal-live">${liveHtml(x)}</div>
+    ${x.thread ? `<div id="dr-thread" class="${thOpen ? 'open' : ''}">${threadHtml(x)}</div>` : ''}
+    ${!rsvp && x.body ? `<div class="desc">${esc(x.body)}</div>` : ''}`;
+  const form = `<div class="evform">
+      <label>Title<input id="ev-title" value="${esc(x.title)}"></label>
+      <div class="row"><label>${whole ? 'First day' : 'Day'}<input type="date" id="ev-day" value="${esc(x.start.slice(0, 10))}"></label>
+        ${whole ? `<label>Last day<input type="date" id="ev-last" value="${esc(x.end.slice(0, 10))}"></label>` : `<label>From<input type="time" id="ev-from" value="${esc(hm(x.start))}"></label><label>To<input type="time" id="ev-to" value="${esc(hm(x.end))}"></label>`}</div>
+      <label>Guests: their email addresses, separated by commas. Leave empty to invite nobody.<textarea id="ev-guests" rows="3" spellcheck="false">${esc(x.guests.join(', '))}</textarea></label>
+      <label>Where<input id="ev-loc" value="${esc(x.location || '')}" placeholder="Room, address or link"></label>
+      <label class="chk"><input type="checkbox" id="ev-meet" ${x.meet ? 'checked' : ''}> Add a Google Meet link</label>
+      <label>Description the guests will read<textarea id="ev-desc" rows="4">${esc(x.body || '')}</textarea></label></div>`;
+  const edit = editing && !rsvp;
+  box.innerHTML = `${edit ? form : view}
+    ${flash ? `<div class="ok">${esc(flash)}</div>` : ''}
+    <div class="acts">
+      ${rsvp ? Object.keys(RESP).map((r) => `<button class="${r === x.response ? 'pri' : ''}" data-resp="${r}" title="${r === x.response ? `${esc(author)} proposes this answer. ` : ''}The organiser is told by Google.">${RESP[r]}</button>`).join('')
+        : `<button class="pri" id="dr-send" ${edit ? 'hidden' : ''} title="${n ? `Creates the event in your calendar and Google emails the invitation to ${n === 1 ? 'the guest' : `the ${n} guests`} from your account` : 'Creates the event in your calendar. No email is sent.'}">${n ? `Create and invite ${n}` : 'Create event'}</button>
+           <button id="dr-edit">${edit ? 'Back' : 'Edit'}</button><button id="dr-save" disabled ${edit ? '' : 'hidden'}>Save changes</button>`}
+      ${x.link ? `<a class="lnk" href="${esc(x.link)}" target="_blank" rel="noopener" title="${rsvp ? 'Opens the invitation in Google Calendar' : 'Opens a new event in Google Calendar filled in with this. You save it there.'}">Open in Calendar</a>` : ''}
+      <span class="sp"></span>
+      <button id="dr-sent" title="You already did it yourself. Removes it from this list and tells ${esc(author)}.">Already done</button>
+      <button id="dr-discard" title="You will not do it. Removes it from this list and tells ${esc(author)}.">Discard</button>
+    </div>
+    <div class="hint">${edit ? 'Save your changes first; then you can create it.' : rsvp ? `Nothing is answered until you press a button. ${esc(author)} proposes: ${esc((RESP[x.response] || '').toLowerCase())}.` : n ? `Nothing is created or sent until you press the button. Then Google emails the invitation to ${n === 1 ? 'the guest' : `the ${n} guests`} from your account.` : 'Nothing is created until you press the button. Nobody is invited, so no email goes out.'}</div>
+    <h4>Ask ${esc(author)} about this</h4>
+    ${(x.talk || []).length ? `<div class="talk">${x.talk.map((t) => `<div class="${t.who === '__OWNER_ID__' ? 'me' : ''}"><b>${t.who === '__OWNER_ID__' ? 'You' : esc(firstName(t.who))}</b>${esc(t.text)}</div>`).join('')}</div>` : ''}
+    <div class="acts"><input id="dr-q" placeholder="Is this the right time? Who is missing from the guests?" aria-label="Question about this draft"><button id="dr-ask">Ask</button></div>`;
+  dirty = false; flash = '';
+  loadLive(x); if (x.thread) loadThread(x);
+}
 let editing = false;
 function renderDetail() {
   const x = drafts.find((d) => d.id === cur), box = $('#dr-detail');
   if (!x) { box.innerHTML = `<div class="empty">${drafts.length ? 'Pick a draft on the left.' : ''}</div>`; return; }
+  if (x.channel === 'calendar') return renderEvent(x, box);
   const app = APP[x.channel] || x.channel, author = firstName(x.from);
   const stale = !x.synced, canSend = x.channel === 'gmail' && Boolean(x.draftId);
   const openHint = x.channel === 'whatsapp' ? (x.phone ? 'Opens the chat with this text already typed. You press send there.' : `Opens WhatsApp. Find the chat${x.chat ? ` “${esc(x.chat)}”` : ''}; ${author} may have typed the text there already, or use Copy text.`)
@@ -184,7 +294,7 @@ async function poll(force) {
     if (cur !== null && !drafts.some((x) => x.id === cur)) cur = null;
     if (s === sig && !force) return; sig = s;
     renderList();
-    if (!dirty && !['dr-q', 'dr-body', 'dr-subject'].includes(document.activeElement && document.activeElement.id)) renderDetail();
+    if (!dirty && !(veil.contains(document.activeElement) && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName))) renderDetail();
   } catch { /* server restarting */ }
 }
 function open(on) {
@@ -194,18 +304,32 @@ function open(on) {
 }
 btn.onclick = () => open();
 veil.addEventListener('mousedown', (e) => { if (e.target === veil) open(false); });
-veil.addEventListener('input', (e) => { if (e.target.id === 'dr-body' || e.target.id === 'dr-subject') { dirty = true; const s = $('#dr-save'); if (s) s.disabled = false; } });
+veil.addEventListener('input', (e) => { if (e.target.id === 'dr-body' || e.target.id === 'dr-subject' || e.target.closest('.evform')) { dirty = true; const s = $('#dr-save'); if (s) s.disabled = false; } });
 veil.addEventListener('click', async (e) => {
   if (e.target.closest('#dr-close')) return open(false);
   const f = e.target.closest('[data-f]'); if (f) { filter = f.dataset.f; return renderList(); }
   const row = e.target.closest('.dr'); if (row) { cur = Number(row.dataset.id); editing = false; thOpen = false; return render(); }
   if (e.target.closest('#dr-th-toggle, #dr-th-last')) { thOpen = !thOpen; return paintThread(); }
   if (e.target.closest('#dr-th-retry')) { const y = drafts.find((d) => d.id === cur); if (y) { loadThread(y, true); paintThread(); } return; }
+  if (e.target.closest('#dr-ev-retry')) { const y = drafts.find((d) => d.id === cur); if (y) { loadLive(y, true); paintLive(); } return; }
   const mh = e.target.closest('#dr-thread .mh'); if (mh) { const m = mh.parentElement, id = m.dataset.m, on = !m.classList.contains('on'); m.classList.toggle('on', on); msgOpen.delete(on ? '-' + id : id); msgOpen.add(on ? id : '-' + id); return; }
   const b = e.target.closest('button, a.pri'); if (!b || cur === null) return;
   const x = drafts.find((d) => d.id === cur); if (!x) return;
-  const body = $('#dr-body').value, subject = $('#dr-subject') ? $('#dr-subject').value : undefined;
+  const body = $('#dr-body') ? $('#dr-body').value : '', subject = $('#dr-subject') ? $('#dr-subject').value : undefined;
   try {
+    if (x.channel === 'calendar' && (b.id === 'dr-send' || b.id === 'dr-save' || b.dataset.resp)) {
+      const n = x.guests.length, r = b.dataset.resp;
+      if (b.id === 'dr-save') { await api('/api/drafts/edit', { id: cur, event: eventForm(x) }); flash = 'Saved.'; dirty = false; editing = false; await poll(true); return renderDetail(); }
+      if (b.dataset.sure !== '1') {
+        const was = b.textContent; b.dataset.sure = '1';
+        b.textContent = r ? `Yes, ${RESP[r].toLowerCase()}` : n ? `Yes, create it and email ${n} ${n === 1 ? 'guest' : 'guests'}` : 'Yes, create it';
+        setTimeout(() => { if (b.isConnected && b.dataset.sure === '1') { b.dataset.sure = ''; b.textContent = was; } }, 5000); return;
+      }
+      b.disabled = true; b.textContent = r ? 'Answering…' : 'Creating…';
+      if (r && r !== x.response) await api('/api/drafts/edit', { id: cur, event: { response: r } });
+      await api('/api/drafts/send', { id: cur }); cur = null; dirty = false; editing = false; await poll(true); if (drafts.length) cur = drafts[0].id;
+      flash = `“${x.title}”: ` + (r ? `you answered ${RESP[r].toLowerCase()} and the organiser has been told.` : n ? `created, and the ${n === 1 ? 'invitation is' : `${n} invitations are`} out.` : 'created. It is in your calendar.'); return render();
+    }
     if (b.id === 'dr-edit') { if (dirty) return; editing = !editing; renderDetail(); }
     else if (b.id === 'dr-send') {
       if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = `Yes, send to ${x.to.split('<')[0].trim().split(' ')[0] || 'them'} now`; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.textContent = 'Send'; } }, 5000); return; }
@@ -217,10 +341,10 @@ veil.addEventListener('click', async (e) => {
     else if (b.id === 'dr-open') { if (dirty) { e.preventDefault(); await api('/api/drafts/edit', { id: cur, body, subject }); dirty = false; await poll(true); const y = drafts.find((d) => d.id === cur); renderDetail(); if (y && y.link) window.open(y.link, '_blank', 'noopener'); } }
     else if (b.id === 'dr-copy') { try { await navigator.clipboard.writeText(body); b.textContent = 'Copied'; } catch { $('#dr-body').select(); b.textContent = 'Selected, press ⌘C'; } setTimeout(() => { b.textContent = 'Copy text'; }, 1600); }
     else if (b.id === 'dr-sent' || b.id === 'dr-discard') {
-      if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = b.id === 'dr-sent' ? 'Yes, I sent it' : 'Yes, discard it'; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.textContent = b.id === 'dr-sent' ? 'Mark as sent' : 'Discard'; } }, 4000); return; }
+      if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = b.id === 'dr-sent' ? (x.channel === 'calendar' ? 'Yes, I did it myself' : 'Yes, I sent it') : 'Yes, discard it'; setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.textContent = b.id === 'dr-sent' ? (x.channel === 'calendar' ? 'Already done' : 'Mark as sent') : 'Discard'; } }, 4000); return; }
       await api('/api/drafts/status', { id: cur, status: b.id === 'dr-sent' ? 'sent' : 'discarded' }); cur = null; dirty = false; await poll(true); if (drafts.length) cur = drafts[0].id; render();
     } else if (b.id === 'dr-ask') { const q = $('#dr-q').value.trim(); if (!q) return; await api('/api/drafts/ask', { id: cur, text: q }); document.activeElement.blur(); await poll(true); renderDetail(); }
-  } catch (err) { flash = ''; b.textContent = err.message; }
+  } catch (err) { flash = ''; b.textContent = err.message; b.disabled = false; b.dataset.sure = ''; }
 });
 veil.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { e.preventDefault(); if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) e.target.blur(); else open(false); }
@@ -232,5 +356,6 @@ addEventListener('keydown', (e) => {
   if (e.key === 'd' || e.key === 'D') { e.preventDefault(); open(); }
   else if (e.key === 'Escape' && veil.classList.contains('show')) { e.stopImmediatePropagation(); open(false); }
 }, true);
+window.__openDraft = (id) => { if (drafts.some((x) => x.id === id)) { cur = id; editing = false; thOpen = false; } open(true); }; // the For you panel opens a draft straight here
 if (location.hash === '#drafts') open(true);
 poll(); setInterval(poll, 4000);

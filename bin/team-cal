@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""team-cal: the few Google Calendar operations the Drafts panel needs, done directly with the Calendar API using
+the sign-in the Google Workspace connector already holds on this Mac. Used by `team-draft`.
+Read-only (anyone on the team may use these):
+  team-cal get <eventId>                 -> JSON {exists, id, title, start, end, allDay, tz, organizer, location, meet, link,
+                                            description, myResponse, attendees: [{email, name, response, self, organizer}]}
+  team-cal busy <start> <end> [--tz Europe/Madrid] [--skip <eventId>]
+                                         -> JSON {events: [{id, title, start, end, allDay, myResponse}]} what is already in the
+                                            calendar in that window (declined events left out)
+The owner's click only (the Drafts panel calls these through `team-draft send --by-owner`; agents never do):
+  team-cal create <json file> --by-owner      {title, start, end, tz, guests: [emails], location, description, meet}
+                                                creates the event and Google emails the invitations -> JSON {id, link, meet}
+  team-cal rsvp <eventId> accepted|declined|tentative --by-owner
+                                                answers an invitation; the organiser is told -> JSON {id, response}
+Times are local, "YYYY-MM-DDTHH:MM" (or "YYYY-MM-DD" for a whole day; the end day is included)."""
+import sys, os, json, re, urllib.request, urllib.parse, urllib.error, datetime, uuid
+from zoneinfo import ZoneInfo
+BIZ = os.path.expanduser("~/.omniloy-biz")
+API = "https://www.googleapis.com/calendar/v3/calendars/primary"
+def team():
+    try: return json.load(open(BIZ + "/team.json"))
+    except Exception: return {}
+TZ = team().get("timezone") or "Europe/Madrid"
+def creds():
+    account = team().get("gmailAccount", "")
+    for d in ("~/.cowork/google-workspace/credentials", "~/.google_workspace_mcp/credentials"):
+        f = os.path.expanduser(f"{d}/{account}.json")
+        if account and os.path.exists(f): return json.load(open(f))
+    sys.exit("no Google sign-in found for the team's account; open any Google Workspace tool once to sign in")
+_tok = None
+def token():
+    global _tok
+    if _tok: return _tok
+    c = creds()
+    data = urllib.parse.urlencode({"client_id": c["client_id"], "client_secret": c["client_secret"], "refresh_token": c["refresh_token"], "grant_type": "refresh_token"}).encode()
+    try: _tok = json.load(urllib.request.urlopen(urllib.request.Request(c.get("token_uri") or "https://oauth2.googleapis.com/token", data=data), timeout=20))["access_token"]
+    except urllib.error.HTTPError as e: sys.exit(f"Google refused the sign-in ({e.code}); sign in again through a Google Workspace tool")
+    return _tok
+def call(method, path, body=None, ok404=False):
+    req = urllib.request.Request(API + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": "Bearer " + token(), "Content-Type": "application/json"})
+    try: return json.load(urllib.request.urlopen(req, timeout=30))
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410) and ok404: return None
+        sys.exit(f"Calendar error {e.code}: {e.read().decode(errors='replace')[:300]}")
+DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$"); MIN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$")
+def when(s, tz, end=False):
+    """A local time the way the API wants it. A whole-day end is the day after (the API's end is exclusive)."""
+    s = str(s or "").strip().replace(" ", "T")
+    if DAY.match(s): return {"date": (datetime.date.fromisoformat(s) + datetime.timedelta(days=1 if end else 0)).isoformat()}
+    if MIN.match(s): return {"dateTime": s if len(s) > 16 else s + ":00", "timeZone": tz}
+    sys.exit(f'bad time "{s}": use YYYY-MM-DDTHH:MM, or YYYY-MM-DD for a whole day')
+def instant(s, tz, end=False):
+    s = str(s or "").strip().replace(" ", "T")
+    if DAY.match(s): t = datetime.datetime.fromisoformat(s) + datetime.timedelta(days=1 if end else 0)
+    elif MIN.match(s): t = datetime.datetime.fromisoformat(s)
+    else: sys.exit(f'bad time "{s}"')
+    return t.replace(tzinfo=ZoneInfo(tz)).isoformat()
+def local(x, tz, end=False):
+    """An API time back to local text."""
+    if not x: return ""
+    if x.get("date"): return (datetime.date.fromisoformat(x["date"]) - datetime.timedelta(days=1 if end else 0)).isoformat()
+    return datetime.datetime.fromisoformat(x["dateTime"].replace("Z", "+00:00")).astimezone(ZoneInfo(tz)).strftime("%Y-%m-%dT%H:%M")
+def meet_of(e):
+    return e.get("hangoutLink") or next((p.get("uri", "") for p in (e.get("conferenceData") or {}).get("entryPoints", []) if p.get("entryPointType") == "video"), "")
+def mine(e):
+    me = next((a for a in e.get("attendees", []) if a.get("self")), None)
+    return me.get("responseStatus", "") if me else ("organizer" if (e.get("organizer") or {}).get("self") else "")
+def opts(args):
+    o, rest, i = {}, [], 0
+    while i < len(args):
+        if args[i].startswith("--"):
+            if i + 1 < len(args) and not args[i + 1].startswith("--"): o[args[i][2:]] = args[i + 1]; i += 2
+            else: o[args[i][2:]] = True; i += 1
+        else: rest.append(args[i]); i += 1
+    return o, rest
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+cmd = a[0]; o, rest = opts(a[1:]); tz = o.get("tz") if isinstance(o.get("tz"), str) else TZ
+if cmd == "get":
+    e = call("GET", "/events/" + urllib.parse.quote(rest[0]), ok404=True)
+    if e is None or e.get("status") == "cancelled": print(json.dumps({"exists": False})); sys.exit()
+    org = e.get("organizer") or {}
+    print(json.dumps({"exists": True, "id": e["id"], "title": e.get("summary", "(no title)"), "start": local(e.get("start"), tz), "end": local(e.get("end"), tz, True),
+        "allDay": bool((e.get("start") or {}).get("date")), "tz": tz, "organizer": org.get("displayName") or org.get("email", ""), "organizerEmail": org.get("email", ""),
+        "location": e.get("location", ""), "meet": meet_of(e), "link": e.get("htmlLink", ""), "description": re.sub(r"<[^>]+>", "", e.get("description", ""))[:4000], "myResponse": mine(e),
+        "recurring": bool(e.get("recurringEventId") or e.get("recurrence")),
+        "attendees": [{"email": x.get("email", ""), "name": x.get("displayName", ""), "response": x.get("responseStatus", ""), "self": bool(x.get("self")), "organizer": bool(x.get("organizer"))}
+                      for x in e.get("attendees", []) if not x.get("resource")][:60]}, ensure_ascii=False))
+elif cmd == "busy":
+    q = urllib.parse.urlencode({"timeMin": instant(rest[0], tz), "timeMax": instant(rest[1], tz, True), "singleEvents": "true", "orderBy": "startTime", "maxResults": "25"})
+    out = []
+    for e in call("GET", "/events?" + q).get("items", []):
+        if e.get("id") == o.get("skip") or e.get("status") == "cancelled" or mine(e) == "declined" or e.get("transparency") == "transparent": continue
+        if e.get("eventType") in ("workingLocation", "birthday"): continue
+        out.append({"id": e["id"], "title": e.get("summary", "(no title)"), "start": local(e.get("start"), tz), "end": local(e.get("end"), tz, True),
+                    "allDay": bool((e.get("start") or {}).get("date")), "myResponse": mine(e)})
+    print(json.dumps({"events": out}, ensure_ascii=False))
+elif cmd == "create":
+    if "by-owner" not in o: sys.exit("only __OWNER__ creates events that invite people, from the Drafts panel. Register it with `team-draft add --channel calendar`.")
+    x = json.load(open(rest[0], encoding="utf-8")); tz = x.get("tz") or tz
+    if not str(x.get("title") or "").strip(): sys.exit("the event needs a title")
+    s, e = when(x.get("start"), tz), when(x.get("end") or x.get("start"), tz, True)
+    if ("date" in s) != ("date" in e): sys.exit("start and end must both be days or both be times")
+    if "dateTime" in s and e["dateTime"] <= s["dateTime"]: sys.exit("the event ends before it starts")
+    guests = [g for g in dict.fromkeys(str(g).strip().lower() for g in x.get("guests") or []) if g]
+    bad = [g for g in guests if not re.match(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$", g)]
+    if bad: sys.exit("not an email address: " + ", ".join(bad))
+    body = {"summary": x["title"].strip(), "start": s, "end": e, "attendees": [{"email": g} for g in guests]}
+    if x.get("location"): body["location"] = x["location"]
+    if x.get("description"): body["description"] = x["description"]
+    if x.get("meet"): body["conferenceData"] = {"createRequest": {"requestId": uuid.uuid4().hex, "conferenceSolutionKey": {"type": "hangoutsMeet"}}}
+    r = call("POST", "/events?" + urllib.parse.urlencode({"sendUpdates": "all" if guests else "none", "conferenceDataVersion": "1"}), body)
+    print(json.dumps({"id": r["id"], "link": r.get("htmlLink", ""), "meet": meet_of(r)}))
+elif cmd == "rsvp":
+    if "by-owner" not in o: sys.exit("only __OWNER__ answers invitations, from the Drafts panel. Register it with `team-draft add --channel calendar --kind rsvp`.")
+    if rest[1] not in ("accepted", "declined", "tentative"): sys.exit("the answer must be accepted, declined or tentative")
+    e = call("GET", "/events/" + urllib.parse.quote(rest[0]), ok404=True)
+    if e is None or e.get("status") == "cancelled": sys.exit("that event no longer exists in the calendar")
+    att = e.get("attendees", [])
+    me = next((x for x in att if x.get("self")), None)
+    if not me: sys.exit("you are not on this event's guest list (it may have been sent to a group); answer it in Google Calendar")
+    me["responseStatus"] = rest[1]
+    call("PATCH", "/events/" + urllib.parse.quote(rest[0]) + "?sendUpdates=all", {"attendees": att})
+    print(json.dumps({"id": e["id"], "response": rest[1]}))
+else: print(__doc__); sys.exit(1)

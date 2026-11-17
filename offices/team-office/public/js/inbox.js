@@ -14,7 +14,7 @@ const api = async (path, body) => {
 };
 const office = () => window.office || {};
 const toast = (html, kind, ms) => office().toast && office().toast(html, kind, ms);
-const APP = { gmail: 'Gmail', whatsapp: 'WhatsApp', slack: 'Slack' };
+const APP = { gmail: 'Gmail', whatsapp: 'WhatsApp', slack: 'Slack', calendar: 'Google Calendar' };
 const PR_TEXT = { approved: 'Approved', changes: 'Changes requested', failing: 'Checks failing', review: 'Waiting for review', draft: 'Draft' };
 const PR_ORDER = ['approved', 'changes', 'failing', 'review', 'draft'];
 
@@ -116,12 +116,23 @@ function render(force) {
   } else if (tab === 'drafts') {
     body.innerHTML = open ? drafts.map((x) => {
       const p = people[x.from] || {}, app = APP[x.channel] || x.channel || 'the app';
+      if (x.channel === 'calendar') { // an event to create or an invitation to answer: he decides in the full view
+        const rsvp = x.kind === 'rsvp', n = (x.guests || []).length, d = new Date((x.start || '').length === 10 ? x.start + 'T00:00' : x.start);
+        const when = isNaN(d) ? '' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }) + ((x.start || '').length === 10 ? ', all day' : ` · ${x.start.slice(11, 16)} to ${(x.end || '').slice(11, 16)}`);
+        return `<div class="it draft" style="--c:${esc(p.color || '#2dd4bf')}">
+        <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc((p.name || x.from).split(' ')[0])}</button><i>${rsvp ? 'invitation to answer' : 'event to create'}</i><time>${esc(ago(x.updated || x.created))}</time></div>
+        <div class="t">${esc(x.title || 'Event')}</div>
+        <div class="m">${esc(when)}${rsvp ? ` · from ${esc(x.organizer || 'the organiser')} · proposed answer: ${esc({ accepted: 'accept', declined: 'decline', tentative: 'maybe' }[x.response] || '')}` : n ? ` · invites ${n}: ${esc(x.guests.map((g) => g.split('@')[0]).join(', '))}` : ' · no guests'}${x.meet && !rsvp ? ' · with Meet' : ''}</div>
+        ${x.why ? `<div class="b">${esc(x.why)}</div>` : ''}
+        <div class="acts">${readOnly ? '' : `<button type="button" class="pri" data-full="${esc(x.id)}">${rsvp ? 'Review and answer' : 'Review and create'}</button>`}${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">Open in Calendar</a>` : ''}</div>
+      </div>`;
+      }
       return `<div class="it draft" style="--c:${esc(p.color || '#2dd4bf')}">
         <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc((p.name || x.from).split(' ')[0])}</button><i>${esc(app)}</i><time>${esc(ago(x.updated || x.created))}</time></div>
         <div class="t">${esc(x.subject || x.to || 'Draft')}</div>
         <div class="m">To ${esc(x.to || x.chat || x.phone || '—')}${x.why ? ` · ${esc(x.why)}` : ''}</div>
         <div class="b">${esc(x.body || '')}</div>
-        <div class="acts">${x.link ? `<a class="pri" href="${esc(x.link)}" target="_blank" rel="noopener">Open in ${esc(app)}</a>` : ''}${readOnly ? '' : '<button type="button" data-full>Edit or ask about it</button>'}</div>
+        <div class="acts">${x.link ? `<a class="pri" href="${esc(x.link)}" target="_blank" rel="noopener">Open in ${esc(app)}</a>` : ''}${readOnly ? '' : `<button type="button" data-full="${esc(x.id)}">Edit or ask about it</button>`}</div>
       </div>`;
     }).join('') + (readOnly ? '<div class="grp">To edit a draft or ask its author about it, open the Business office.</div>' : '')
       : `<div class="empty">No drafts are waiting for you.<br>When the business team writes a message in your name, it shows up here to check before it goes out.${readOnly ? '' : '<div class="acts" style="justify-content:center"><button type="button" data-full>See sent and older drafts</button></div>'}</div>`;
@@ -181,7 +192,8 @@ pop.addEventListener('click', async (e) => {
   const pf = e.target.closest('[data-pf]');
   if (pf) { const [g, id] = pf.dataset.pf.split(/:(.*)/); prF[g] = id; try { localStorage.setItem('office.prf', JSON.stringify(prF)); } catch {} return render(true); }
   if (e.target.closest('[data-prrefresh]')) return refreshPrs(true);
-  if (e.target.closest('[data-full]')) { show(false); const b = $('#btn-drafts'); if (b) b.click(); return; }
+  const full = e.target.closest('[data-full]');
+  if (full) { show(false); const id = Number(full.dataset.full); if (id && window.__openDraft) window.__openDraft(id); else { const b = $('#btn-drafts'); if (b) b.click(); } return; }
   const who = e.target.closest('[data-who]');
   if (who) { const a = agentOf(who.dataset.who); if (a && office().select) { show(false); office().select(a.slug); } return; }
   const card = e.target.closest('.it'), b = e.target.closest('button');

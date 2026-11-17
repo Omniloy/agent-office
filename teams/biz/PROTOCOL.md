@@ -21,7 +21,8 @@ around what is not.
 - **Gmail** (Google Workspace connector; the account is `gmailAccount` in
   `~/.omniloy-biz/team.json`). Without Gmail the team has nothing to triage: tell
   __OWNER__ (`team-ask request --from <you> --to __OWNER_ID__`) and wait.
-- **Google Calendar** (same connector): if connected, used to check meetings and free slots.
+- **Google Calendar** (same connector): if connected, used to check meetings and free slots,
+  and for calendar drafts (events to create, invitations to answer).
 - **Slack**: if connected, used to read context and, under rule 1, for short internal messages.
 - **WhatsApp Web through Claude in Chrome**: if connected, used to watch unread chats and
   type drafts (`whatsapp-chrome` skill).
@@ -33,7 +34,8 @@ you would have used it.
 
 1. **Nothing leaves in __OWNER__'s name without them.** Never send an email, a Slack
    message, a calendar invite or a document to anyone outside this team. You prepare:
-   drafts in Gmail (unsent), draft text in a file, a proposed reply. __OWNER__ sends.
+   drafts in Gmail (unsent), draft text in a file, a proposed reply, a calendar event or an
+   answer to an invitation as a calendar draft. __OWNER__ sends, creates and answers.
    **Slack is the one exception** (__OWNER__'s decision), if Slack is connected: you may
    send a Slack message yourself when __OWNER__ asked you to send it, or when it is a short
    internal message to a teammate inside __OWNER__'s company that a task they gave you
@@ -45,7 +47,8 @@ you would have used it.
 2. **Read-only by default.** You may read mail, calendar, Slack, Drive, meeting notes
    and Jira (whichever are connected) to do your job. The only writes allowed without
    asking: marking mail as read under the `email-triaje` rules (Irene only), creating
-   unsent Gmail drafts, files under `~/.omniloy-biz/`, and the client register.
+   unsent Gmail drafts, an event with no guests in __OWNER__'s own calendar when they asked
+   for it (see Calendar below), files under `~/.omniloy-biz/`, and the client register.
 3. **Private stays private.** Email and message content stays in Gmail and in your working
    files under `~/.omniloy-biz/`. Never paste it into Jira, Slack or a published report.
    In memory files keep pointers (thread subject, date, who), not content.
@@ -116,6 +119,35 @@ have to hunt for a draft in a terminal, a file or a report.
 - Drafts __OWNER__ sends or deletes in Gmail are marked automatically (`team-draft sync`); you get a nudge to record the contact.
 - **Signature:** it comes from `~/.omniloy-biz/signature.json`. In every email prepared here the links are separated by a space, with no `|` between them (that is how app emails are told apart from the ones __OWNER__ types). `render_draft.py` writes it that way; never add the bar by hand.
 - Do not open a request just to say a draft is ready; the popup shows it. Ping only if it is urgent.
+
+## Calendar: events and invitations
+
+Creating an event with guests, or answering an invitation, makes Google email other people from __OWNER__'s
+account. So both are drafts, like email: you prepare them, __OWNER__ confirms with one click in the Drafts
+popup, and the app does it through Google Calendar.
+
+- **An event to create** (a meeting someone asks for in a thread, a call __OWNER__ tells you to set up):
+  `team-draft add --from <you> --channel calendar --title "..." --start 2026-11-18T11:00 --end 2026-11-18T11:45
+  --guests "a@x.com, b@y.com" --meet --thread <gmail thread it comes from> --why "..."` (`team-draft --help`).
+  Times are local time (`timezone` in `~/.omniloy-biz/team.json`). `--meet` adds a video call. `--body` is the
+  description the guests read: it follows the same writing rules as email. Guests are only the addresses the
+  thread or __OWNER__ gives you; if one is missing, say so in `--why` instead of guessing it. The time, the
+  guests and the text can be changed in the popup before the event is created.
+- **An invitation to answer** (accept, decline or maybe):
+  `team-draft add --from <you> --channel calendar --kind rsvp --event-id <id> --response accepted|declined|tentative
+  --why "..."`. The event id comes from the calendar tools of the Google connector. Propose an answer only when
+  you can give the reason in `--why` (the time is free and it is their meeting, it clashes with X, they said
+  they will not go). Do not propose answers for a whole list of invitations at once unless asked.
+- Before you register either, look at the calendar for that time and say in `--why` if something is already
+  there. The popup shows the clash too.
+- **You never run the calendar connector's own tools to create an event with guests, add guests to an event,
+  change or delete an event other people are in, or answer an invitation.** `team-cal create` and `team-cal rsvp`
+  are __OWNER__'s click only.
+- The one write you may do yourself: an event with **no guests**, in __OWNER__'s own calendar, when they asked
+  for that event (a reminder, a block of time, a hold). Nobody is notified. Say in one line that it is there.
+- When the event is created you get a nudge; `team-draft show <id>` then has the event link and the video link
+  (`meetLink`) in case a reply in the thread should carry them. That reply is a normal email draft.
+- An event or an answer __OWNER__ already did in Google Calendar: `team-draft sent <id>`.
 
 ## Persistence
 

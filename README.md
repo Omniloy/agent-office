@@ -103,6 +103,14 @@ The limit is 20,000 tokens by default. Change it in `~/.omniloy-team/memory-conf
 
 `team-memory status` lists every file with its estimated size.
 
+## Calendar drafts
+
+The business team never creates an event with guests or answers an invitation on its own, because Google would
+email other people from the owner's account. It registers a calendar draft instead
+(`team-draft add --channel calendar ...`), and the owner creates the event or answers the invitation with one click
+in the Drafts popup, which also shows what else is in the calendar at that time. `team-cal` does the Google Calendar
+calls with the sign-in the Google Workspace connector already holds (it needs the calendar permission).
+
 ## Safety
 
 - The servers listen on 127.0.0.1 only. The phone comes in through Tailscale, and only the Tailscale logins you
