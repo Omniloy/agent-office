@@ -317,7 +317,7 @@ export function createHub({ port, stuck, agents }) {
           }
         }
         items.sort((x, y) => (x.updated < y.updated ? 1 : -1));
-        json(res, 200, { port: 4340, items });
+        json(res, 200, { port: 4340, items, host: ((await readJson(path.join(HOME, '.omniloy-team', 'remote.json'), null)) || {}).host || '' }); // host: the computer's Tailscale name, for links that work on the owner's other devices
       } else if (req.method !== 'POST') json(res, 405, { error: 'post' });
       else {
         const b = await readBody(req).catch(() => ({}));
