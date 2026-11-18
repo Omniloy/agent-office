@@ -98,5 +98,5 @@ Here is my plan:
  ❯ 1. Yes
    2. No
 `);
-assert.deepEqual(indented && indented.options, ['1. Yes', '2. No']);
+assert.deepEqual(indented, { question: 'Do you want to proceed?', options: ['1. Yes', '2. No'] });
 console.log('indented question after a list: ok');

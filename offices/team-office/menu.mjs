@@ -55,7 +55,7 @@ export function parseMenu(screen) {
   for (let i = first - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (!line) { if (question.length) break; continue; }
-    if (/^[─━╌┄—_=]{3,}$/.test(line)) break;
+    if (/^[─━╌┄—_=]{3,}$/.test(line) || numbered.test(line)) break; // a rule or the agent's own list ends the question
     if (/^[☐☑□▣◻◼▪•]\s*/.test(line)) continue;
     if (/^[│┃┌└├┤┬┴┼╭╰╮╯]+/.test(line)) continue;
     question.unshift(line.replace(/^[│┃┌└├┤┬┴┼╭╰╮╯]+\s*/, '').trim());
