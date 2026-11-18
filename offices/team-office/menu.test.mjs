@@ -89,3 +89,14 @@ assert.equal(real.question, 'Do you want to proceed?');
 assert.equal(real.options.length, 4);
 assert.equal(real.options[3], '4. No');
 console.log('real Claude permission screen: ok');
+
+const indented = parseMenu(`
+Here is my plan:
+1. Read the file
+2. Run the test
+   Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+`);
+assert.deepEqual(indented && indented.options, ['1. Yes', '2. No']);
+console.log('indented question after a list: ok');

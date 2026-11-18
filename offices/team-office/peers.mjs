@@ -207,7 +207,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
         if (req.method !== 'GET' || !peer || !peer.chats || peer.status !== 'on' || !a || !chatLog) return json(res, 404, { error: 'not for visitors' });
         const person = { herdrName: a.herdrName, name: String(a.name || a.herdrName).split(' ')[0], role: a.role || '', color: a.color || '#888' };
         if (p === '/api/chat/status') return json(res, 200, { person, live: a.status !== 'offline', working: a.status === 'working' });
-        return json(res, 200, { ...(await chatLog(a.herdrName, Number(url.searchParams.get('pos')) || 0, url.searchParams.get('file') || '')), person });
+        return json(res, 200, { ...(await chatLog(a.herdrName, Number(url.searchParams.get('pos')) || 0, url.searchParams.get('file') || '')), menu: null, person }); // a visitor never sees a terminal menu
       }
       if (p.startsWith('/api/chat/')) return json(res, 404, { error: 'not for visitors' });
       if (req.method === 'GET') return json(res, 200, p === '/api/attention' ? { here: port, items: [], offices: [] } : p === '/api/artifacts' ? { port: 0, items: [] } : p === '/api/voice' ? { ready: false } : {});

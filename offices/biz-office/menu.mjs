@@ -32,7 +32,9 @@ export function parseMenu(screen) {
   if (at < 0) return null;
   let first = at, last = at;
   const inMenu = (line) => numbered.test(line) || !line.trim() || /^\s{3,}\S/.test(line) || /^\s*[─━╌┄—_=]{3,}\s*$/.test(line);
-  for (let i = at - 1; i >= 0 && inMenu(lines[i]); i--) if (option.test(lines[i])) first = i;
+  // Back from the cursor only as far as its option 1: anything above that (a question, a list in the agent's
+  // message) is not part of the menu, even when it is indented like a description line.
+  for (let i = at; i >= 0 && inMenu(lines[i]); i--) { const m = option.exec(lines[i]); if (m) { first = i; if (m[1] === '1') break; } }
   for (let i = at + 1; i < lines.length && inMenu(lines[i]); i++) if (option.test(lines[i])) last = i;
 
   const options = [];
@@ -40,7 +42,7 @@ export function parseMenu(screen) {
     const m = option.exec(line);
     if (m) options.push(`${m[1]}. ${m[2]}`);
   }
-  if (!options.length || options[0][0] !== '1') return null;
+  if (!options.length || options.some((o, i) => !o.startsWith(`${i + 1}. `))) return null; // 1, 2, 3… in order, no repeats
   let end = last; while (end + 1 < lines.length && inMenu(lines[end + 1])) end++;
   if (lines.slice(first, end + 1).some((line) => numbered.test(line) && Number(numbered.exec(line)[1]) > 9)) return null; // 10+: no single key picks it
   const after = lines.slice(last + 1);
