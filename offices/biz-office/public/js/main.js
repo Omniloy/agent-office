@@ -430,13 +430,13 @@ recapBox.onclick = () => recapBox.classList.remove('show');
 function renderAsks() {
   const a = selected && agentBy(selected), list = a ? asksOf(a) : [];
   asksBox.classList.toggle('show', list.length > 0);
-  asksBox.innerHTML = list.map((x) => `<div class="ask ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}">
+  asksBox.innerHTML = list.map((x) => `<div class="ask ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}"` : ''}>
     <div class="ahead"><b>${x.kind === 'request' ? 'Needs your answer' : 'Message for you'}</b><span>${esc(since(new Date(x.created).getTime()))}</span>
       ${x.ticket && asks.site ? `<a class="key" href="${esc(asks.site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
     <div class="atitle">${rich(x.title || '')}</div>${x.body ? `<div class="abody">${md(x.body)}</div>` : ''}
     ${x.kind === 'request'
       ? `${x.options.length ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
-         <div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>`
+         ${x.menu ? '' : '<div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>'}`
       : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
   </div>`).join('');
 }
@@ -468,11 +468,15 @@ async function pollAsks() {
 asksBox.addEventListener('click', async (e) => {
   const card = e.target.closest('.ask'), b = e.target.closest('button');
   if (!card || !b) return;
-  const id = Number(card.dataset.id);
+  const id = card.dataset.id;
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? card.querySelector('input').value.trim() : null);
   try {
     if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
-    else if (text) await api('/api/requests/answer', { id, text });
+    else if (text) {
+      const body = { id, text };
+      if (card.dataset.menuQuestion) { body.question = card.dataset.menuQuestion; body.options = JSON.parse(card.dataset.menuOptions || '[]'); }
+      await api('/api/requests/answer', body);
+    }
     else return;
     if (document.activeElement) document.activeElement.blur();
     asksSig = ''; pollAsks();

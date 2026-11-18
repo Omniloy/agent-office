@@ -20,7 +20,7 @@ you; your chat is served by every floor through `hub.mjs` (routes `/api/chat`, `
 - **Two apps, one per kind of floor** (a dev floor and a business floor). Each is a plain Node server (`server.mjs`, no dependencies) plus static files
   in `public/`. An app serves a different team when started with `TEAM_DIR=<team folder> PORT=<port>`.
 - **Shared files.** These are identical in both apps. Edit them in `team-office` and copy them to `biz-office`:
-  `hub.mjs`, `public/phone.css`, `public/sw.js`, `public/js/{phone,attention,floors,people,voice,chat,compose}.js`, `voice/`.
+  `hub.mjs`, `menu.mjs`, `public/phone.css`, `public/sw.js`, `public/js/{phone,attention,floors,people,voice,chat,compose}.js`, `voice/`.
   Check with `cmp` afterwards.
 - **Not shared** (each app has its own, similar but different): `server.mjs`, `public/index.html`,
   `public/js/main.js`, `public/js/world.js` (the 3D room), `requests.js`, and `inbox.js`/`drafts.js` where present.

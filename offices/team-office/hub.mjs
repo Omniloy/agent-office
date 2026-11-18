@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createPeers } from './peers.mjs';
+import { parseMenu } from './menu.mjs';
 
 const APP = path.dirname(fileURLToPath(import.meta.url)); // this office app's folder
 const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = path.join(SHARED, 'push');
@@ -112,10 +113,11 @@ async function sessionLog(t) {
 async function chatLog(name, pos, known) {
   let t = {}; try { t = JSON.parse(await hcOut(['get', name, '--json'])); } catch { /* not running */ }
   const live = t.state === 'live', working = !!(t.status && t.status.state === 'working'), blocked = !!(t.status && ['blocked', 'error'].includes(t.status.state));
+  const screen = live ? (await hcOut(['read', name, '--lines', '40'])).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[ \t]+$/gm, '').trim() : '';
+  const menu = blocked ? parseMenu(screen) : null;
   const file = live ? await sessionLog(t) : '';
   if (!file) { // not Claude Code (or not running): the screen is all there is
-    const screen = live ? (await hcOut(['read', name, '--lines', '80'])).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[ \t]+$/gm, '').trim() : '';
-    return { file: '', pos: 0, messages: [], live, working, blocked, screen };
+    return { file: '', pos: 0, messages: [], live, working, blocked, screen, menu };
   }
   const id = path.basename(file), first = id !== known || !pos;
   const size = (await fs.stat(file)).size, from = first ? Math.max(0, size - 700_000) : Math.min(pos, size);
@@ -139,7 +141,7 @@ async function chatLog(name, pos, known) {
       for (const x of c) { if (x.type === 'text' && x.text.trim()) out.push({ role: 'them', text: clipLong(x.text.trim()), ts }); else if (x.type === 'tool_use') out.push({ role: 'step', text: String(x.name || ''), ts }); }
     }
   }
-  return { file: id, pos: from + end, reset: first, messages: first ? out.slice(-60) : out, live, working, blocked };
+  return { file: id, pos: from + end, reset: first, messages: first ? out.slice(-60) : out, live, working, blocked, menu };
 }
 const clipLong = (s) => (s.length > 12000 ? `${s.slice(0, 12000)}\n…` : s);
 
@@ -150,13 +152,15 @@ export function createHub({ port, stuck, agents }) {
   const since = new Map(); // herdrName -> when they got stuck (so the same wait keeps one id)
   async function writeLocal() {
     let list = []; try { list = (stuck ? stuck() : []) || []; } catch { list = []; }
+    let all = []; try { all = (agents ? agents() : []) || []; } catch { all = []; }
     for (const k of [...since.keys()]) if (!list.some((a) => a.herdrName === k)) since.delete(k);
     for (const a of list) if (!since.has(a.herdrName)) since.set(a.herdrName, Date.now());
-    const items = list.filter((a) => Date.now() - since.get(a.herdrName) > 15_000).map((a) => { // a short stop is not a wait
+    const items = list.flatMap((a) => {
       const t = since.get(a.herdrName);
-      return { id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() };
+      if (a.menu) return [{ id: `menu:${a.herdrName}`, port, kind: 'request', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.question, 140), created: new Date(a.statusSince || t).toISOString() }];
+      if (Date.now() - t <= 15_000) return []; // a short stop is not a wait
+      return [{ id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() }];
     });
-    let all = []; try { all = (agents ? agents() : []) || []; } catch { all = []; }
     await writeJson(path.join(PUSH, `local-${port}.json`), { ts: Date.now(), items, people: all.length, working: all.filter((a) => a.status === 'working').length }); // the head count is what the building view shows
   }
   async function attention() {

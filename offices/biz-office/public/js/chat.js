@@ -56,6 +56,11 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .menu button:active { background: rgba(255, 255, 255, .08); }
 #chat .need { display: none; flex: none; margin: 6px 10px 0; padding: 9px 12px; border-radius: 11px; border: 0; background: var(--needs, #fbbf24); color: #201600; font: 600 14px var(--sans, system-ui, sans-serif); text-align: left; }
 #chat .need.on { display: block; }
+#chat .menu-card { flex: none; margin: 6px 10px 0; padding: 10px 12px; border-radius: 11px; border: 1px solid rgba(251, 191, 36, .55); background: rgba(251, 191, 36, .12); color: var(--text, #e8eaf2); }
+#chat .menu-card .q { font-size: 14px; font-weight: 650; line-height: 1.4; }
+#chat .menu-card .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#chat .menu-card button { max-width: 100%; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.1); color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+#chat .menu-card button:first-child { background: var(--needs, #fbbf24); border-color: var(--needs, #fbbf24); color: #201600; font-weight: 650; }
 #chat .detail { display: none; flex: 1; min-height: 0; flex-direction: column; }
 #chat.sec .detail { display: flex; } #chat.sec .log, #chat.sec .need { display: none; }
 #chat .detail #asks { flex: none; } #chat .detail .pbody { flex: 1; min-height: 0; }
@@ -192,7 +197,7 @@ body.embed #chat { display: none !important; }`;
   function rich(t) { return esc(t).split(/```/).map((part, i) => (i % 2 ? fence(part) : blocks(part))).join(''); }
 
   const shots = (h) => (window.compose ? window.compose.shots(h) : h); // attached pictures show as pictures
-  let who = '', file = '', pos = 0, timer = 0, open = false, run = 0, pending = [], lastStep = null, target = '', sec = '', status = '';
+  let who = '', file = '', pos = 0, timer = 0, open = false, run = 0, pending = [], lastStep = null, target = '', sec = '', status = '', currentMenu = null;
   const SEC = { overview: 'Overview', activity: 'Activity', terminal: 'Live screen', notes: 'Notes', artifacts: 'Artifacts' }, holder = $('.detail', box), artsB = $('.arts', box), artView = $('.artview', box);
   let arts = [], asking = '';
   const menu = $('.menu', box), need = $('.need', box), panel = $('#panel'), root = document.documentElement;
@@ -226,6 +231,7 @@ body.embed #chat { display: none !important; }`;
           let s = $('.scr', log); if (!s) { s = document.createElement('div'); s.className = 'm them scr'; log.append(s); }
           s.textContent = r.screen || ''; if (!r.live) s.remove();
         }
+        paintMenu(r.menu || null);
         if (!r.live && !$('.note', log)) { const n = document.createElement('div'); n.className = 'note'; n.textContent = `${r.person.name} is not running in Herdr right now.${r.person.admin ? ' Start him on the computer with: omniloy-admin start' : ''}`; log.append(n); }
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
@@ -261,8 +267,32 @@ body.embed #chat { display: none !important; }`;
     if (!sec && open) log.scrollTop = log.scrollHeight;
   }
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, innerHeight * 0.4)}px`; };
+  const freeMenu = (label) => /type something|tell Claude|chat about this/i.test(label);
+  const menuChoice = (menu, text) => menu && /^[1-9]$/.test(text) ? menu.options.find((x) => x.startsWith(`${text}. `)) : null;
+  function paintMenu(m) {
+    if (box.classList.contains('ro')) m = null;
+    currentMenu = m;
+    const old = $('[data-menu-card]', log);
+    if (!m) { if (old) old.remove(); return; }
+    const sig = JSON.stringify(m);
+    if (old && old.dataset.sig === sig) return;
+    if (old) old.remove();
+    const card = document.createElement('div'); card.className = 'menu-card'; card.dataset.menuCard = ''; card.dataset.sig = sig;
+    card.innerHTML = `<div class="q">${esc(m.question)}</div><div class="acts">${m.options.map((o) => `<button type="button" data-menu-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+    log.append(card);
+  }
+  async function answerMenu(label) {
+    const m = currentMenu, message = freeMenu(label) ? ta.value.trim() : '';
+    if (!m || !who) return;
+    try {
+      await api('/api/requests/answer', { id: `menu:${who}`, text: label, question: m.question, options: m.options, ...(message ? { message } : {}) });
+      if (message) { ta.value = ''; grow(); }
+      paintMenu(null); log.scrollTop = log.scrollHeight; err.textContent = '';
+    } catch (e) { err.textContent = e.message || 'Could not answer the menu.'; }
+  }
   async function send() {
     const text = ta.value.trim(); if (!text || !who) return;
+    const choice = menuChoice(currentMenu, text); if (choice) return answerMenu(choice);
     ta.value = ''; grow(); err.textContent = '';
     const el = document.createElement('div'); el.className = 'm you wait'; el.innerHTML = shots(esc(text)); log.append(el); log.scrollTop = log.scrollHeight;
     const p = { k: text.slice(0, 60), el }; pending.push(p);
@@ -320,6 +350,7 @@ body.embed #chat { display: none !important; }`;
     show(a.herdrName); section('artifacts');
   });
   log.addEventListener('pointerdown', () => menu.classList.remove('on'));
+  log.addEventListener('click', (e) => { const b = e.target.closest('[data-menu-answer]'); if (b) answerMenu(b.dataset.menuAnswer); });
   if (PHONE) { try { const f = Number(localStorage.getItem('office.chat.h')); if (f > 0.1 && f < 1) root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`); } catch { /* no storage: the usual height */ } } // the height you left it at (drag its top edge)
   if (panel && (!window.__GUEST__ || window.__GUEST__.chats)) { // a visitor reads chats only where that building allows it
     if (window.__GUEST__) box.classList.add('ro'); // picking someone opens their chat; their panel stays underneath for the sections

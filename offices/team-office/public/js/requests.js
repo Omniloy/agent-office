@@ -43,13 +43,13 @@ function render(d) {
   const n = reqs.length;
   if (!/^\(\d+ to answer\)/.test(document.title) || n) document.title = (n ? `(${n} to answer) ` : '') + document.title.replace(/^\(\d+ to answer\) /, '');
   box.classList.toggle('show', d.items.length > 0);
-  const card = (x) => `<div class="rq" data-id="${x.id}">
+  const card = (x) => `<div class="rq" data-id="${esc(x.id)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}"` : ''}>
     <div class="who"><i style="background:${esc(x.color)}"></i><b>${esc(x.name)}</b><span>${esc(x.role)}${x.via ? ' · via Lucía' : ''} · ${ago(x.created)}</span>
       ${x.ticket && site ? `<a href="${esc(site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
     <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
     ${EMBED ? '' : x.kind === 'request'
       ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>
-         <div class="acts"><input placeholder="Write an answer…"><button data-send>Send</button></div>`
+         ${x.menu ? '' : '<div class="acts"><input placeholder="Write an answer…"><button data-send>Send</button></div>'}`
       : `<div class="acts"><button data-read>Mark as read</button></div>`}
   </div>`;
   box.innerHTML = (reqs.length ? `<h3>Needs your answer · ${reqs.length}</h3>${reqs.map(card).join('')}` : '')
@@ -64,11 +64,15 @@ async function poll() {
 }
 box.addEventListener('click', async (e) => {
   const rq = e.target.closest('.rq'); if (!rq) return;
-  const id = Number(rq.dataset.id), b = e.target.closest('button'); if (!b) return;
+  const id = rq.dataset.id, b = e.target.closest('button'); if (!b) return;
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? rq.querySelector('input').value.trim() : null);
   try {
     if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
-    else if (text) await api('/api/requests/answer', { id, text }); else return;
+    else if (text) {
+      const body = { id, text };
+      if (rq.dataset.menuQuestion) { body.question = rq.dataset.menuQuestion; body.options = JSON.parse(rq.dataset.menuOptions || '[]'); }
+      await api('/api/requests/answer', body);
+    } else return;
     sig = ''; document.activeElement.blur(); poll();
   } catch (err) { b.textContent = err.message; }
 });

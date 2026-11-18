@@ -99,12 +99,12 @@ function render(force) {
   const body = pop.querySelector('.list');
   if (tab === 'requests') {
     body.innerHTML = items.length ? items.map((x) => `
-      <div class="it ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}" style="--c:${esc(x.color)}">
+      <div class="it ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}"` : ''} style="--c:${esc(x.color)}">
         <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc(x.name)}</button><i>${x.kind === 'request' ? 'needs your answer' : 'message'}</i><time>${esc(ago(x.created))}</time></div>
         <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
         ${x.kind === 'request'
           ? `${(x.options || []).length ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
-             <div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>`
+             ${x.menu ? '' : '<div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>'}`
           : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
       </div>`).join('') : `<div class="empty">No questions or messages are waiting for you.${notes ? '' : '<br>When someone on the team needs an answer, it shows up here.'}</div>`;
   } else if (tab === 'drafts') {
@@ -172,11 +172,15 @@ pop.addEventListener('click', async (e) => {
   if (who) { const a = agentOf(who.dataset.who); if (a && office().select) { show(false); office().select(a.slug); } return; }
   const card = e.target.closest('.it'), b = e.target.closest('button');
   if (!card || !b || !card.dataset.id) return;
-  const id = Number(card.dataset.id);
+  const id = card.dataset.id;
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? card.querySelector('input').value.trim() : null);
   try {
     if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
-    else if (text) await api('/api/requests/answer', { id, text });
+    else if (text) {
+      const body = { id, text };
+      if (card.dataset.menuQuestion) { body.question = card.dataset.menuQuestion; body.options = JSON.parse(card.dataset.menuOptions || '[]'); }
+      await api('/api/requests/answer', body);
+    }
     else return;
     if (document.activeElement) document.activeElement.blur();
     sig = ''; await poll(); if (office().refreshAsks) office().refreshAsks();
