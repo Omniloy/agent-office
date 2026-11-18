@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import assert from 'node:assert/strict';
 import { parseMenu } from './menu.mjs';
 
@@ -81,3 +82,10 @@ Which option should I use?
 `);
 assert.equal(tenOptions, null);
 console.log('menus with option 10 stay stuck: ok');
+
+// A real Claude Code permission prompt as `hc read` returns it, with its hint lines and hc's note below.
+const real = parseMenu(fs.readFileSync(new URL('./fixtures/claude-permission.txt', import.meta.url), 'utf8'));
+assert.equal(real.question, 'Do you want to proceed?');
+assert.equal(real.options.length, 4);
+assert.equal(real.options[3], '4. No');
+console.log('real Claude permission screen: ok');

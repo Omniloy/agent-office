@@ -18,7 +18,8 @@ export function parseMenu(screen) {
   const lines = String(screen || '')
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
     .split(/\r?\n/)
-    .map((line) => line.replace(/[ \t]+$/, ''));
+    .map((line) => line.replace(/[ \t]+$/, ''))
+    .filter((line) => !line.startsWith('[hc] ')); // hc's own note under a blocked screen
   const option = /^\s*(?:[❯›>]\s*)?([1-9])\.\s+(.+?)\s*$/;
   const numbered = /^\s*(?:[❯›>]\s*)?(\d+)\.\s+/;
   const footer = /^\s*(?:Enter|Return)\s+to\s+(?:select|choose)\b|\b(?:to\s+)?(?:navigate|select)\b.*(?:↑|↓|←|→)|\bEsc(?:ape)?\s+to\s+(?:cancel|go back)\b/i;
@@ -40,11 +41,13 @@ export function parseMenu(screen) {
     if (m) options.push(`${m[1]}. ${m[2]}`);
   }
   if (!options.length || options[0][0] !== '1') return null;
-  if (lines.slice(first, last + 1).some((line) => numbered.test(line) && Number(numbered.exec(line)[1]) > 9)) return null;
+  let end = last; while (end + 1 < lines.length && inMenu(lines[end + 1])) end++;
+  if (lines.slice(first, end + 1).some((line) => numbered.test(line) && Number(numbered.exec(line)[1]) > 9)) return null; // 10+: no single key picks it
   const after = lines.slice(last + 1);
   const hasFooter = after.some((line) => footer.test(line));
-  if (!/\s*[❯›>]\s*[1-9]\./.test(lines[at]) && !hasFooter) return null;
-  if (after.some((line) => line.trim() && !footer.test(line))) return null;
+  // With the cursor on an option it is a live menu, whatever the app prints under it (status lines, hints).
+  // Without one, only a menu footer and nothing else below makes it one.
+  if (!cursor.test(lines[at]) && (!hasFooter || after.some((line) => line.trim() && !footer.test(line)))) return null;
 
   const question = [];
   for (let i = first - 1; i >= 0; i--) {
