@@ -686,7 +686,7 @@ $('#feed-list').addEventListener('click', (e) => {
   if (openFeed.has(id)) openFeed.delete(id); else openFeed.add(id);
   li.classList.toggle('open');
 });
-$('#btn-watch').onclick = async (e) => { const on = !e.currentTarget.dataset.on; try { await api('/api/watchdog', { on }); e.currentTarget.dataset.on = on ? '1' : ''; e.currentTarget.textContent = `Watchdog: ${on ? 'on' : 'off'}`; toast(on ? '⚡ Watchdog on for this office' : 'Watchdog off for this office'); } catch (err) { toast(esc(err.message), 'err'); } };
+$('#btn-watch').onclick = async (e) => { const b = e.currentTarget, on = !b.dataset.on; try { await api('/api/watchdog', { on }); b.dataset.on = on ? '1' : ''; b.textContent = `Watchdog: ${on ? 'on' : 'off'}`; toast(on ? '⚡ Watchdog on for this office' : 'Watchdog off for this office'); } catch (err) { toast(esc(err.message), 'err'); } };
 $('#btn-feed').onclick = (e) => { e.currentTarget.classList.toggle('on'); $('#feed').classList.toggle('hidden'); };
 // A new browser tab. From the Herdr terminal view this opens the real browser (office-tty hands new windows to it).
 $('#btn-more').onclick = (e) => { e.stopPropagation(); $('#more').classList.toggle('open'); };
