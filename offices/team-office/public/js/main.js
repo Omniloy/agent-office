@@ -1,5 +1,6 @@
 // Page logic: live state from the local server, roster, detail panel, messaging.
 import { createWorld } from './world.js';
+import { THEMES, themeById, isTheme, DEFAULT_THEME } from './themes/index.js';
 
 const TOKEN = window.__TOKEN__;
 const $ = (s) => document.querySelector(s);
@@ -88,10 +89,15 @@ let state = null, selected = null, tab = 'overview', booted = false, termTimer =
 const seenFeed = new Set();
 const talking = new Map();
 const openFeed = new Set(); // feed messages the reader expanded
-const world = createWorld($('#scene'), $('#labels'), { onSelect: (slug) => select(slug), format: (t) => rich(t), onBoard: (id) => boardClick(id) });
+// The look of the room, one for the whole building (GET/POST /api/theme). The page arrives with it (no flash);
+// when the setting or the day's theme changes, the state says so and the page reloads with the new one.
+const THEME_ID = (() => { const v = window.__THEME__; if (isTheme(v)) return v; try { const x = sessionStorage.getItem('office.theme'); if (isTheme(x)) return x; } catch {} return DEFAULT_THEME; })();
+const theme = themeById(THEME_ID);
+window.officeRole = (r) => theme.title(r); // role title in this theme; the shared files use it when it is there (chat.js, people.js)
+const world = createWorld($('#scene'), $('#labels'), { onSelect: (slug) => select(slug), format: (t) => rich(t), onBoard: (id) => boardClick(id), theme });
 const EMBED = new URLSearchParams(location.search).has('embed'); // rendered for the Herdr tab: scene only
 if (EMBED) document.body.classList.add('embed');
-window.office = { world, ready: false, focus: (slug) => world.focus(slug || null, true), pause: (p) => world.setPaused(!!p) };
+window.office = { world, ready: false, theme: THEME_ID, focus: (slug) => world.focus(slug || null, true), pause: (p) => world.setPaused(!!p) };
 
 async function api(path, body) {
   const r = await fetch(path, {
@@ -181,7 +187,8 @@ function renderStats() {
     + `<div class="stat"><b>${cards}</b><span>open ${cards === 1 ? 'card' : 'cards'}</span></div>`;
   const HQ = (state.team && state.team.name) || 'Omniloy HQ';
   { const bn = document.querySelector('.brand b'); if (bn && bn.textContent !== HQ) { bn.textContent = HQ; document.querySelector('.brand .logo').textContent = HQ[0]; } }
-  { const ci = $('#cmd-input'); if (ci && state.agents[0] && !ci.dataset.named) { ci.dataset.named = 1; ci.placeholder = `Message @${state.agents[0].herdrName}, or @all for everyone`; } }
+  { const ci = $('#cmd-input'); if (ci && state.agents[0] && !ci.dataset.named) { ci.dataset.named = 1; ci.placeholder = theme.texts.composer.replace('{name}', state.agents[0].herdrName); } }
+  { const rn = $('#room-name'), t = theme.texts.room || ''; if (rn && rn.textContent !== t) { rn.textContent = t; rn.hidden = !t; } }
   document.title = c.blocked ? `(${c.blocked}) ${HQ}` : HQ;
 }
 
@@ -199,7 +206,7 @@ function renderRoster() {
   $('#roster').innerHTML = state.agents.map((a, i) => `
     <button class="card glass ${a.slug === selected ? 'sel' : ''}" data-slug="${esc(a.slug)}" style="--c:${esc(a.color)};--s:${COLOR[shown(a)]}">
       <div class="avatar">${esc(initials(a))}</div>
-      <div class="who"><b>${esc(a.name)}</b><span>${esc(a.role)}</span>${prBadge(a)}</div>
+      <div class="who"><b>${esc(a.name)}</b><span>${esc(theme.title(a.role))}</span>${prBadge(a)}</div>
       <div class="line">${rosterLine(a)}</div><kbd>${i + 1}</kbd>
     </button>`).join('');
 }
@@ -268,7 +275,7 @@ function renderPanel(full) {
   const s = shown(a), panel = $('#panel');
   panel.style.setProperty('--c', a.color);
   $('#phead').innerHTML = `<div class="avatar" style="--c:${esc(a.color)};--s:${COLOR[s]}">${esc(initials(a))}</div>
-    <div><h2>${esc(a.name)}</h2><p>${esc(a.role)} · <span class="pill" style="--s:${COLOR[s]}"><i class="dot ${s}"></i>${LABEL[s]}</span></p></div>
+    <div><h2>${esc(a.name)}</h2><p>${esc(theme.title(a.role))} · <span class="pill" style="--s:${COLOR[s]}"><i class="dot ${s}"></i>${LABEL[s]}</span></p></div>
     <button class="x" id="close" title="Close (Esc)">✕</button>`;
   $('#close').onclick = () => select(null);
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
@@ -559,6 +566,7 @@ function onState(s) {
     const was = before.get(`${a.slug}:${t.key}`);
     if (was && was !== t.status) world.pinCard(a.herdrName, `${t.key} → ${t.status}`);
   }
+  if (s.theme && isTheme(s.theme.effective) && s.theme.effective !== THEME_ID) themeChanged(s.theme.effective);
   world.setAgents(s.agents, { jira: s.jira, trace: pickTrace(s.trace) });
   if (cardsData) paintBoard();
   { const w = s.watchdog || {}, b = $('#btn-watch'); if (b) { b.textContent = `Watchdog: ${!w.on ? 'off' : w.running ? 'on' : 'on (not running)'}`; b.dataset.on = w.on ? '1' : ''; } }
@@ -589,6 +597,53 @@ function onState(s) {
   if (!s.hcOk) $('#banner').textContent = 'Herdr is not answering, so statuses may be stale. Is the Herdr app running?';
   renderStats(); renderRoster(); renderFeed(fresh); renderPanel(false);
 }
+// Another theme for the building: reload with it, once nobody is halfway through typing here.
+let themeWant = '';
+function themeChanged(id) {
+  if (themeWant === id) return;
+  themeWant = id;
+  let wait = 0; try { wait = 15000 - (Date.now() - Number(sessionStorage.getItem('office.themeReload') || 0)); } catch {}
+  if (wait > 0) { setTimeout(() => { themeWant = ''; if (state && state.theme && state.theme.effective === id) themeChanged(id); }, wait); return; } // never a reload loop
+  const go = () => {
+    const el = document.activeElement;
+    if (el && /INPUT|TEXTAREA/.test(el.tagName) && el.value && el.value.trim()) { setTimeout(go, 4000); return; }
+    try { sessionStorage.setItem('office.theme', themeWant); sessionStorage.setItem('office.themeReload', String(Date.now())); } catch {}
+    location.reload();
+  };
+  go();
+}
+// The picker in the top bar: owner only (not visitors from another building, not the Herdr view, not phones).
+if (!window.__GUEST__ && !EMBED && !PHONE) {
+  const tools = $('.tools'), btn = document.createElement('button'), menu = document.createElement('div');
+  btn.type = 'button'; btn.id = 'btn-theme'; btn.title = 'The look of every floor of this building'; btn.textContent = 'Theme';
+  menu.className = 'menu glass'; menu.id = 'theme-menu';
+  tools.insertBefore(btn, $('#btn-more')); tools.append(menu);
+  const items = [...THEMES.map((t) => ({ mode: 'fixed', theme: t.id, label: t.name })), { mode: 'daily', theme: '', label: 'Tema del día' }];
+  const paint = () => {
+    const cur = (state && state.theme) || { mode: 'fixed', theme: THEME_ID };
+    menu.innerHTML = items.map((x, i) => {
+      const on = x.mode === 'daily' ? cur.mode === 'daily' : cur.mode !== 'daily' && cur.theme === x.theme;
+      const note = x.mode === 'daily' ? (cur.mode === 'daily' ? `today ${esc((THEMES.find((t) => t.id === cur.effective) || {}).name || '')}` : 'changes every day') : on ? '✓' : '';
+      return `<button type="button" data-i="${i}"${on ? ' class="on"' : ''}><span>${esc(x.label)}</span><small>${note}</small></button>`;
+    }).join('');
+  };
+  btn.onclick = (e) => { e.stopPropagation(); $('#more').classList.remove('open'); paint(); menu.style.left = `${btn.offsetLeft}px`; menu.style.right = 'auto'; menu.classList.toggle('open'); };
+  addEventListener('click', (e) => { if (!e.target.closest('#theme-menu')) menu.classList.remove('open'); });
+  menu.addEventListener('click', async (e) => {
+    const b = e.target.closest('button[data-i]'); if (!b) return;
+    const x = items[Number(b.dataset.i)];
+    try {
+      const r = await api('/api/theme', { mode: x.mode, theme: x.theme || THEME_ID });
+      menu.classList.remove('open');
+      if (r.effective !== THEME_ID) { toast(`Theme: <b>${esc((THEMES.find((t) => t.id === r.effective) || {}).name || r.effective)}</b> for every floor`); themeWant = ''; try { sessionStorage.removeItem('office.themeReload'); } catch {} themeChanged(r.effective); }
+      else { if (state) state.theme = r; paint(); toast(x.mode === 'daily' ? 'Tema del día: a different theme every day' : 'Theme kept'); }
+    } catch (err) { toast(esc(err.message), 'err'); }
+  });
+  const css = document.createElement('style');
+  css.textContent = '#theme-menu { min-width: 210px; } #theme-menu button small { color: var(--dim); font-size: 11.5px; } #theme-menu button.on span { font-weight: 600; }';
+  document.head.append(css);
+}
+
 let stream = null;
 document.addEventListener('visibilitychange', () => { if (!document.hidden && stream && stream.readyState === EventSource.CLOSED) connect(); }); // a phone drops the stream when it sleeps
 function connect() {

@@ -4,6 +4,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { CopyShader } from 'three/addons/shaders/CopyShader.js';
+import { themeById, DEFAULT_THEME } from './themes/index.js';
 
 const BACK_Z = -9, LEFT_X = -13, DESK_Z = -5.4, SEAT_Z = -6.55, AISLE_Z = -3.3, WALL_H = 7.2, ROW_D = 4.4;
 const STAND_Y = 0.53, SEAT_Y = 0.72;
@@ -84,7 +90,9 @@ const ago = (ms) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60000
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const hex = (c) => `#${new THREE.Color(c).getHexString()}`;
 
-export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
+export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, theme: th }) {
+  const theme = th && th.base ? th : themeById(th || DEFAULT_THEME); // the look of the room: themes/index.js
+  const title = theme.title, texts = theme.texts;
   const escText = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const fmt = format || escText;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -92,7 +100,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = theme.exposure != null ? theme.exposure : 1.08;
   sceneEl.appendChild(renderer.domElement);
   const labels = new CSS2DRenderer({ element: labelsEl });
 
@@ -142,14 +150,6 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   sun.shadow.bias = -0.0004;
   sun.shadow.radius = 4;
   scene.add(hemi, sun);
-  const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
-  {
-    const sky = surface(256, 128), c = sky.ctx, gr = c.createLinearGradient(0, 0, 0, 128);
-    gr.addColorStop(0, '#8fc7ff'); gr.addColorStop(1, '#e6f4ff'); c.fillStyle = gr; c.fillRect(0, 0, 256, 128);
-    c.fillStyle = 'rgba(255,255,255,.9)';
-    for (const [x, y, r] of [[46, 52, 15], [66, 46, 21], [92, 54, 14], [176, 80, 13], [196, 73, 19], [220, 82, 12]]) { c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); }
-    windowMat.map = sky.tex;
-  }
   let lightMode = 'auto', dayNow = -1;
   const C = (a, b, f) => new THREE.Color(a).lerp(new THREE.Color(b), f);
   function dayFactor() {
@@ -162,19 +162,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     if (Math.abs(f - dayNow) < 0.002) return;
     dayNow = f;
     const gold = lightMode === 'auto' ? Math.max(0, 1 - Math.abs(f - 0.45) / 0.45) : 0; // sunrise and sunset
-    scene.background = C(0x0b1022, 0xc5dcf2, f).lerp(new THREE.Color(0xf2b98a), gold * 0.4);
-    scene.fog.color.copy(scene.background);
-    hemi.intensity = 1.3 + f * 0.35;
-    hemi.color = C(0xaab4f5, 0xffffff, f);
-    hemi.groundColor = C(0x2a2740, 0x6b5648, f);
-    sun.intensity = 1.0 + f * 2.1;
-    sun.color = C(0x9db0ff, 0xfff1d6, f).lerp(new THREE.Color(0xff9d5c), gold * 0.6);
-    sun.position.set(-9 - gold * 5, 16 - gold * 7, 11); // lower sun, longer shadows
-    for (const m of sunPatches) { m.material.opacity = f * 0.2; m.material.color.copy(C(0xfff0c8, 0xffc78a, gold)); }
-    windowMat.color = C(0x2b3b80, 0xffffff, f);
-    scene.environmentIntensity = 0.14 + f * 0.22;
+    hook('daylight', f, gold); // sky, fog, sun, ambient and the room's own lamps (themes/oficina.js)
     for (const s of stations.values()) s.lamp.intensity = s.online ? 10 - f * 7 : 0;
-    for (const l of roomLamps) l.intensity = 24 - f * 20;
   }
 
   // wall clock: shows the real time
@@ -185,6 +174,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     if (d.getMinutes() === clockMinute) return;
     clockMinute = d.getMinutes();
     const c = wallClock.ctx;
+    if (theme.clockFace) { try { theme.clockFace(c, d); wallClock.tex.needsUpdate = true; return; } catch (e) { console.warn('theme clockFace', e); } }
     c.fillStyle = '#fbfaf6'; c.fillRect(0, 0, 256, 256);
     c.strokeStyle = '#23283a'; c.lineCap = 'round';
     for (let i = 0; i < 12; i++) {
@@ -201,163 +191,59 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   drawClock();
 
   // ---------------------------------------------------------------- room
+  // The room itself comes from the theme (themes/index.js has the contract; themes/oficina.js is the default look).
   const room = new THREE.Group();
   scene.add(room);
-  const roomLamps = [], sunPatches = [];
-  {
-    const f = surface(1024, 1024), g = f.ctx;
-    g.fillStyle = '#c59d74'; g.fillRect(0, 0, 1024, 1024);
-    for (let row = 0; row < 16; row++) {
-      let x = (row % 2) * -90;
-      while (x < 1024) {
-        const w = 150 + ((row * 37 + x) % 90);
-        const shade = 190 + ((row * 53 + x * 7) % 26);
-        g.fillStyle = `rgb(${shade + 8},${shade - 34},${shade - 76})`;
-        g.fillRect(x + 1, row * 64 + 1, w - 2, 62);
-        x += w;
-      }
-    }
-    for (let i = 0; i < 520; i++) { // grain
-      const gx = (i * 197) % 1024, gy = (i * 89) % 1024;
-      g.fillStyle = i % 2 ? 'rgba(0,0,0,.05)' : 'rgba(255,255,255,.05)';
-      g.fillRect(gx, gy, 40 + ((i * 13) % 90), 1.5);
-    }
-    f.tex.wrapS = f.tex.wrapT = THREE.RepeatWrapping;
-    f.tex.repeat.set(4, 3);
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(26, 18), mat(0xffffff, { map: f.tex, roughness: 0.55 }));
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    room.add(floor, box(26.6, 0.6, 18.6, 0x1b1f2e, { y: -0.31, cast: false }));
-    const ground = new THREE.Mesh(new THREE.CircleGeometry(70, 48), mat(0x141827, { roughness: 1 }));
-    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.62;
-    room.add(ground);
-
-    const wall = mat(0xf0e9dd);
-    room.add(box(26.6, WALL_H, 0.3, 0, { m: wall, y: WALL_H / 2, z: BACK_Z - 0.15 }));
-    room.add(box(0.3, WALL_H, 18.3, 0, { m: wall, x: LEFT_X - 0.15, y: WALL_H / 2, z: 0.15 }));
-    room.add(box(26, 0.22, 0.08, 0x3a3f52, { y: 0.11, z: BACK_Z + 0.04, cast: false }), box(0.08, 0.22, 18, 0x3a3f52, { x: LEFT_X + 0.04, y: 0.11, cast: false }));
-    // clerestory windows along the back wall, one big window on the left wall
-    for (let i = 0; i < 5; i++) {
-      const x = -10.4 + i * 5.2;
-      room.add(box(4.4, 1.25, 0.1, 0x2d3246, { x, y: 6.25, z: BACK_Z + 0.03, cast: false }));
-      const pane = new THREE.Mesh(new THREE.PlaneGeometry(4.15, 1.0), windowMat);
-      pane.position.set(x, 6.25, BACK_Z + 0.09);
-      room.add(pane, box(0.06, 1.0, 0.04, 0x2d3246, { x, y: 6.25, z: BACK_Z + 0.11, cast: false }));
-    }
-    room.add(box(0.1, 3.9, 5.6, 0x2d3246, { x: LEFT_X + 0.03, y: 3.5, z: 5.3, cast: false }));
-    for (let i = 0; i < 2; i++) {
-      const pane = new THREE.Mesh(new THREE.PlaneGeometry(2.55, 3.6), windowMat);
-      pane.rotation.y = Math.PI / 2;
-      pane.position.set(LEFT_X + 0.09, 3.5, 3.95 + i * 2.7);
-      room.add(pane);
-    }
-
-    // bookshelf and a wall clock in the back corner
-    {
-      const sx = -11.75, sz = BACK_Z + 0.3, shelfM = mat(0xcaa778, { roughness: 0.6 });
-      room.add(box(1.8, 3.4, 0.05, 0, { m: shelfM, x: sx, y: 1.7, z: sz - 0.2 }), box(0.06, 3.4, 0.46, 0, { m: shelfM, x: sx - 0.9, y: 1.7, z: sz }), box(0.06, 3.4, 0.46, 0, { m: shelfM, x: sx + 0.9, y: 1.7, z: sz }));
-      const bookM = [0x7c9cff, 0xfbbf24, 0xfb7185, 0x34d399, 0xf3ead9, 0x6b7489, 0xc084fc].map((c) => mat(c, { roughness: 0.8 }));
-      for (let r = 0; r < 5; r++) {
-        const y = 0.06 + r * 0.82;
-        room.add(box(1.8, 0.05, 0.46, 0, { m: shelfM, x: sx, y, z: sz, cast: false }));
-        if (r === 4) break;
-        let x = sx - 0.82;
-        for (let k = 0; x < sx + 0.66; k++) {
-          const w = 0.075 + ((r * 7 + k * 3) % 5) * 0.02, h = 0.42 + ((r * 5 + k * 11) % 6) * 0.045;
-          if ((r + k) % 7 !== 5) room.add(box(w, h, 0.3, 0, { m: bookM[(r * 3 + k) % bookM.length], x: x + w / 2, y: y + 0.025 + h / 2, z: sz + 0.02, cast: false }));
-          x += w + 0.014;
-        }
-      }
-      const faceMesh = new THREE.Mesh(new THREE.CircleGeometry(0.56, 40), new THREE.MeshBasicMaterial({ map: wallClock.tex, toneMapped: false }));
-      faceMesh.position.set(sx, 4.55, BACK_Z + 0.075);
-      const rim = cyl(0.62, 0.62, 0.07, 0x23283a, { x: sx, y: 4.55, z: BACK_Z + 0.035, seg: 40 });
-      rim.rotation.x = Math.PI / 2;
-      room.add(rim, faceMesh);
-    }
-
-    // sunlight falling on the floor through the side window
-    {
-      const sp = surface(64, 128), c = sp.ctx, grad = c.createLinearGradient(0, 0, 0, 128);
-      grad.addColorStop(0, 'rgba(255,255,255,0)'); grad.addColorStop(0.25, 'rgba(255,255,255,1)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
-      c.fillStyle = grad; c.fillRect(6, 0, 52, 128);
-      for (let i = 0; i < 2; i++) {
-        const geo = new THREE.PlaneGeometry(2.3, 6.2);
-        geo.rotateX(-Math.PI / 2); geo.rotateY(Math.PI / 2 - 0.38);
-        const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: sp.tex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-        m.position.set(LEFT_X + 3.6, 0.03, 3.6 + i * 2.7);
-        room.add(m); sunPatches.push(m);
-      }
-    }
-
-    // lounge
-    const rug = new THREE.Mesh(new THREE.CircleGeometry(3.3, 48), mat(0x35406e, { roughness: 1 }));
-    rug.rotation.x = -Math.PI / 2; rug.position.set(-1, 0.012, 3.2); rug.receiveShadow = true;
-    const rug2 = new THREE.Mesh(new THREE.RingGeometry(2.7, 2.85, 48), mat(0xe9d9b8, { roughness: 1 }));
-    rug2.rotation.x = -Math.PI / 2; rug2.position.set(-1, 0.016, 3.2);
-    room.add(rug, rug2);
-    const sofa = new THREE.Group();
-    sofa.add(box(3.4, 0.5, 1.2, 0x5b6ee1, { y: 0.45, r: 0.12 }), box(3.4, 0.9, 0.35, 0x4f61cf, { y: 0.85, z: -0.5, r: 0.12 }),
-      box(0.35, 0.75, 1.2, 0x4f61cf, { x: -1.6, y: 0.6, r: 0.1 }), box(0.35, 0.75, 1.2, 0x4f61cf, { x: 1.6, y: 0.6, r: 0.1 }),
-      box(0.7, 0.3, 0.5, 0xfbbf24, { x: -0.9, y: 0.85, z: -0.2, r: 0.1 }), box(0.7, 0.3, 0.5, 0xfb7185, { x: 0.95, y: 0.85, z: -0.2, r: 0.1 }));
-    sofa.position.set(-10.6, 0, 3.6); sofa.rotation.y = Math.PI / 2;
-    room.add(sofa, cyl(0.8, 0.8, 0.08, 0xf3ead9, { x: -8, y: 0.5, z: 3.6, seg: 32 }), cyl(0.08, 0.3, 0.5, 0x2d3246, { x: -8, y: 0.25, z: 3.6 }));
-    for (const [x, z, c] of [[-2.6, 4.6, 0xfb7185], [0.7, 4.9, 0x34d399], [-0.9, 1.6, 0xfbbf24]]) {
-      const bag = new THREE.Mesh(new THREE.SphereGeometry(0.62, 20, 14), mat(c));
-      bag.scale.y = 0.62; bag.position.set(x, 0.36, z); bag.castShadow = true;
-      room.add(bag);
-    }
-    // coffee bar
-    room.add(box(1.3, 1.05, 3.6, 0xf3ead9, { x: 10.6, y: 0.525, z: 0.6, r: 0.06 }), box(1.4, 0.08, 3.7, 0x6b4a33, { x: 10.6, y: 1.09, z: 0.6 }),
-      box(0.62, 0.8, 0.6, 0x23283a, { x: 10.7, y: 1.53, z: -0.3, r: 0.06 }), box(0.3, 0.06, 0.3, 0xd1d5db, { x: 10.45, y: 1.2, z: -0.3 }),
-      cyl(0.09, 0.07, 0.16, 0xffffff, { x: 10.4, y: 1.21, z: 0.7 }), cyl(0.09, 0.07, 0.16, 0xfbbf24, { x: 10.5, y: 1.21, z: 1.0 }),
-      cyl(0.28, 0.28, 0.9, 0x9bd3ff, { x: 10.7, y: 1.6, z: 1.9, m: mat(0x9bd3ff, { transparent: true, opacity: 0.7, roughness: 0.2 }) }));
-    const led = new THREE.Mesh(new THREE.SphereGeometry(0.04), new THREE.MeshBasicMaterial({ color: 0x34d399 }));
-    led.position.set(10.38, 1.75, -0.2);
-    room.add(led);
-    // plants + floor lamps
-    for (const [x, z, s] of [[12, -8, 1.25], [-12.1, 8, 1.1], [12, 7.6, 1], [7.9, 7.9, 0.8]]) {
-      const p = new THREE.Group();
-      p.add(cyl(0.36, 0.27, 0.6, 0xe7dccb, { y: 0.3 }));
-      for (let i = 0; i < 6; i++) {
-        const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.38, 10, 8), mat([0x2f9e62, 0x3bb273, 0x268752][i % 3]));
-        leaf.scale.set(0.55, 1.5, 0.55);
-        leaf.position.set(Math.cos(i * 1.05) * 0.26, 1.05 + (i % 2) * 0.25, Math.sin(i * 1.05) * 0.26);
-        leaf.rotation.set(Math.sin(i) * 0.5, 0, Math.cos(i * 1.05) * -0.45);
-        leaf.castShadow = true;
-        p.add(leaf);
-      }
-      p.position.set(x, 0, z); p.scale.setScalar(s);
-      room.add(p);
-    }
-    for (const [x, z] of [[-11.6, 0.9], [11.8, 3.6], [-4.9, 6.9]]) {
-      room.add(cyl(0.3, 0.34, 0.06, 0x23283a, { x, y: 0.03, z }), cyl(0.03, 0.03, 3.1, 0x23283a, { x, y: 1.55, z }));
-      const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 0.5, 20, 1, true), new THREE.MeshBasicMaterial({ color: 0xffe2a8, side: THREE.DoubleSide, toneMapped: false }));
-      shade.position.set(x, 3.2, z);
-      const l = new THREE.PointLight(0xffd9a0, 8, 13, 1.7);
-      l.position.set(x, 3.0, z);
-      room.add(shade, l);
-      roomLamps.push(l);
-    }
+  const myTheme = {};
+  const k = {
+    THREE, scene, room, renderer, camera, hemi, sun, PHONE, TOUCH, texts, title, base: theme.base, my: myTheme,
+    C: { BACK_Z, LEFT_X, RIGHT_X: 13, FRONT_Z: 9, WALL_H, DESK_Z, SEAT_Z, AISLE_Z, ROW_D },
+    mat, box, cyl, rod: (a, b, r, m) => rod(a, b, r, m), surface, wrap, hex, smooth, hashOf, mix: C,
+    glow: (color, n = 1) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(n), toneMapped: false }),
+    dayFactor,
+    desks: () => { try { return [...stations.values()].map((s) => ({ slug: s.slug, agent: s.agent, x: s.x, z: DESK_Z + s.z, row: s.row })); } catch { return []; } },
+    frontZ: () => { try { return zA(lastAisle()); } catch { return AISLE_Z; } },
+    spots: { board: { x: LEFT_X + 1.5, z: -2.1 }, white: { x: 8.54, z: 6.58 }, coffee: { x: 9.3, z: 0.7 } },
+  };
+  const hookFail = new Set();
+  function hook(name, ...args) { // a theme part that throws is skipped (and said once), the room keeps working
+    const fn = theme[name];
+    if (typeof fn !== 'function') return undefined;
+    try { return fn.call(theme, k, ...args); } catch (e) { if (!hookFail.has(name)) { hookFail.add(name); console.warn(`theme ${theme.id}: ${name}`, e); } return undefined; }
   }
+  hook('shell');
+  hook('decor');
+  // the wall clock in the back corner: shows the real time
+  const clockFace = new THREE.Mesh(new THREE.CircleGeometry(0.56, 40), new THREE.MeshBasicMaterial({ map: wallClock.tex, toneMapped: false }));
+  clockFace.position.set(-11.75, 4.55, BACK_Z + 0.075);
+  const clockRim = cyl(0.62, 0.62, 0.07, 0x23283a, { x: -11.75, y: 4.55, z: BACK_Z + 0.035, seg: 40 });
+  clockRim.rotation.x = Math.PI / 2;
+  room.add(clockRim, clockFace);
 
   // team board (left wall) + traceability whiteboard (free standing)
   let boardMesh = null, traceMesh = null;
+  const fx = {}; // the frames a theme may restyle (hook 'fixtures')
   const board = surface(1600, 800);
   {
     const m = boardMesh = new THREE.Mesh(new THREE.PlaneGeometry(8.2, 4.1), new THREE.MeshBasicMaterial({ map: board.tex, toneMapped: false }));
     m.rotation.y = Math.PI / 2; m.position.set(LEFT_X + 0.1, 3.55, -3.2);
-    room.add(m, box(0.1, 4.3, 8.4, 0x23283a, { x: LEFT_X + 0.04, y: 3.55, z: -3.2, cast: false }));
+    fx.board = { mesh: m, frame: box(0.1, 4.3, 8.4, 0x23283a, { x: LEFT_X + 0.04, y: 3.55, z: -3.2, cast: false }) };
+    room.add(m, fx.board.frame);
   }
   const traceBoard = surface(1000, 640);
   {
     const g = new THREE.Group();
     const m = traceMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.9, 2.5), new THREE.MeshBasicMaterial({ map: traceBoard.tex, toneMapped: false }));
     m.position.set(0, 2.35, 0.06);
-    g.add(m, box(4.1, 2.7, 0.1, 0xd9dde6, { y: 2.35 }), cyl(0.05, 0.05, 2.2, 0x8891a5, { x: -1.8, y: 1.1 }), cyl(0.05, 0.05, 2.2, 0x8891a5, { x: 1.8, y: 1.1 }),
-      box(0.12, 0.08, 1.1, 0x8891a5, { x: -1.8, y: 0.04 }), box(0.12, 0.08, 1.1, 0x8891a5, { x: 1.8, y: 0.04 }));
+    const frame = box(4.1, 2.7, 0.1, 0xd9dde6, { y: 2.35 }), legs = [cyl(0.05, 0.05, 2.2, 0x8891a5, { x: -1.8, y: 1.1 }), cyl(0.05, 0.05, 2.2, 0x8891a5, { x: 1.8, y: 1.1 }),
+      box(0.12, 0.08, 1.1, 0x8891a5, { x: -1.8, y: 0.04 }), box(0.12, 0.08, 1.1, 0x8891a5, { x: 1.8, y: 0.04 })];
+    g.add(m, frame, ...legs);
     g.position.set(9.4, 0, 5.6); g.rotation.y = -0.72;
     room.add(g);
+    fx.trace = { group: g, mesh: m, frame, legs };
   }
+  fx.clock = { face: clockFace, rim: clockRim };
+  hook('fixtures', fx);
   // The wall board. Cards and filter chips are clickable: every rectangle drawn is kept in boardHits
   // (canvas coordinates) and a click on the wall is matched against them.
   let boardHits = [], boardModel = null, boardLast = null;
@@ -382,9 +268,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     boardLast = [agents, jira];
     const g = board.ctx, W = 1600, H = 800, M = boardModel || {};
     boardHits = [];
-    g.fillStyle = '#10131f'; g.fillRect(0, 0, W, H);
-    g.fillStyle = '#eceff7'; g.font = '600 40px system-ui'; g.textBaseline = 'middle'; g.textAlign = 'left';
-    g.fillText('Team board', 44, 56);
+    const bs = theme.boardStyle || {};
+    g.fillStyle = bs.bg || '#10131f'; g.fillRect(0, 0, W, H);
+    g.fillStyle = bs.ink || '#eceff7'; g.font = '600 40px system-ui'; g.textBaseline = 'middle'; g.textAlign = 'left';
+    g.fillText(texts.board, 44, 56);
     // text cut to a width, with an ellipsis
     const fit = (text, maxW) => {
       text = String(text || '');
@@ -441,7 +328,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       g.textAlign = 'right'; g.fillText(count, x + cw - 16, y0 + 24); g.textAlign = 'left';
       g.fillText(fit(a.name.replace(/\s*\(temp\)/i, '').split(' ').slice(0, a.temp ? 2 : 1).join(' '), cw - 44 - cwid), x + 16, y0 + 24);
       g.font = '500 19px system-ui'; g.globalAlpha = 0.85;
-      g.fillText(fit(a.role, cw - 32), x + 16, y0 + 49); g.globalAlpha = 1;
+      g.fillText(fit(title(a.role), cw - 32), x + 16, y0 + 49); g.globalAlpha = 1;
       if (!tickets.length) {
         g.fillStyle = '#5d6780'; g.font = '22px system-ui';
         g.fillText(fit(jira && jira.error ? 'Jira not reachable' : M.show ? 'None' : 'No open cards', cw - 32), x + 16, y0 + 102);
@@ -461,37 +348,27 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const th = JSON.stringify(trace || null);
     if (th === traceHash) return;
     traceHash = th;
-    const g = traceBoard.ctx, W = 1000, H = 640;
-    g.fillStyle = '#fbfbf8'; g.fillRect(0, 0, W, H);
+    const g = traceBoard.ctx, W = 1000, H = 640, ts = theme.traceStyle || {};
+    g.fillStyle = ts.bg || '#fbfbf8'; g.fillRect(0, 0, W, H);
     g.textBaseline = 'middle'; g.textAlign = 'left';
-    g.fillStyle = '#1f2433'; g.font = '600 38px system-ui';
+    g.fillStyle = ts.ink || '#1f2433'; g.font = '600 38px system-ui';
     const t = trace && trace[0];
-    g.fillText(t ? `Traceability · ${t.project}` : 'Traceability matrix', 40, 58);
+    g.fillText(t ? `${texts.trace} · ${t.project}` : texts.traceEmpty, 40, 58);
     if (!t) { g.fillStyle = '#8891a5'; g.font = '28px system-ui'; g.fillText('This team has no matrix yet.', 40, 130); g.fillText('Click the board to show another team\'s.', 40, 172); traceBoard.tex.needsUpdate = true; return; }
     g.fillStyle = '#6b7489'; g.font = '26px system-ui';
     g.fillText(`${t.total} active requirements · ${t.noVerif} without a verification ticket`, 40, 108);
     const rows = [['To develop', t.counts.todo, '#94a3b8'], ['In development', t.counts.doing, '#2563eb'], ['Implemented', t.counts.built, '#d97706'], ['Verified', t.counts.verified, '#16a34a'], ['Other', t.counts.other, '#c4c9d6']];
     rows.forEach(([name, v, c], i) => {
       const y = 180 + i * 84;
-      g.fillStyle = '#1f2433'; g.font = '28px system-ui'; g.fillText(name, 40, y);
+      g.fillStyle = ts.ink || '#1f2433'; g.font = '28px system-ui'; g.fillText(name, 40, y);
       g.fillStyle = '#eceef3'; g.beginPath(); g.roundRect(300, y - 20, 560, 40, 10); g.fill();
       if (v) { g.fillStyle = c; g.beginPath(); g.roundRect(300, y - 20, Math.max(14, 560 * v / Math.max(1, t.total)), 40, 10); g.fill(); }
-      g.fillStyle = '#1f2433'; g.font = '600 30px system-ui'; g.fillText(String(v), 884, y);
+      g.fillStyle = ts.ink || '#1f2433'; g.font = '600 30px system-ui'; g.fillText(String(v), 884, y);
     });
     g.fillStyle = '#8891a5'; g.font = '22px system-ui';
     g.fillText(`local copy built ${String(t.built || '').replace('T', ' ')}`, 40, H - 36);
     traceBoard.tex.needsUpdate = true;
   }
-
-  // a little cleaning robot that wanders the open floor
-  const robot = new THREE.Group();
-  robot.add(cyl(0.34, 0.36, 0.14, 0x23283a, { y: 0.09, seg: 28 }));
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshBasicMaterial({ color: 0x7c9cff }));
-  eye.position.set(0, 0.17, 0.22);
-  robot.add(eye);
-  robot.position.set(3, 0, 2);
-  let robotDir = 0.7;
-  scene.add(robot);
 
   // ---------------------------------------------------------------- stations + characters
   // a thin bar between two points (lamp arms, pens)
@@ -525,6 +402,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const add = (parent, mesh) => { mesh.castShadow = true; mesh.userData.slug = agent.slug; parent.add(mesh); pickables.push(mesh); return mesh; };
     const at = (mesh, x, y, z) => { mesh.position.set(x, y, z); return mesh; };
     // torso: rounded, wider at the shoulders, with a collar and a neck
+    const hairs = [], hairy = (m) => { hairs.push(m); return m; };
     const torso = add(upper, new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.26, 6, 18), shirt));
     torso.position.y = 0.37; torso.scale.set(1.2, 1, 0.84);
     at(add(upper, new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.3, 0.12, 20), pants)), 0, 0.05, 0).scale.z = 0.82;
@@ -551,18 +429,18 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     mouth.position.set(0, -0.145, 0.282);
     head.add(mouth);
     // hair
-    const cap = add(head, new THREE.Mesh(new THREE.SphereGeometry(0.335, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.56), hair));
+    const cap = hairy(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.335, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.56), hair)));
     cap.rotation.x = -0.3; cap.scale.set(1, 1.04, 1);
     if (look.style === 'long') {
-      at(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.66, 0.24, 3, 0.11), hair)), 0, -0.24, -0.2);
-      for (const sx of [-1, 1]) at(add(head, new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.34, 4, 10), hair)), sx * 0.285, -0.2, 0.0);
+      at(hairy(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.66, 0.24, 3, 0.11), hair))), 0, -0.24, -0.2);
+      for (const sx of [-1, 1]) at(hairy(add(head, new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.34, 4, 10), hair))), sx * 0.285, -0.2, 0.0);
     } else if (look.style === 'bun') {
-      at(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), hair)), 0, 0.33, -0.18);
-      at(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.1, 0.12, 2, 0.045), hair)), 0, 0.22, 0.25).rotation.z = 0.1;
+      at(hairy(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), hair))), 0, 0.33, -0.18);
+      at(hairy(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.1, 0.12, 2, 0.045), hair))), 0, 0.22, 0.25).rotation.z = 0.1;
     } else if (look.style === 'fringe') {
-      at(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.52, 0.13, 0.15, 2, 0.055), hair)), 0, 0.2, 0.24).rotation.z = -0.1;
+      at(hairy(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.52, 0.13, 0.15, 2, 0.055), hair))), 0, 0.2, 0.24).rotation.z = -0.1;
     } else {
-      at(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 10), hair)), 0.03, 0.27, 0.13).scale.set(1.5, 0.55, 0.9);
+      at(hairy(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 10), hair))), 0.03, 0.27, 0.13).scale.set(1.5, 0.55, 0.9);
     }
     if (look.glasses) {
       for (const sx of [-1, 1]) at(add(head, new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.013, 8, 22), dark)), sx * 0.118, 0.025, 0.3);
@@ -597,7 +475,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     phone.visible = false; armR.add(phone);
     const card = box(0.3, 0.02, 0.22, 0xfff3c4, { y: -0.52, z: 0.16, cast: false });
     card.visible = false; armL.add(card);
-    return { root, body, hips, upper, head, eyes, mouth, armL, armR, legL, legR, mug, phone, card };
+    const ch = { root, body, hips, upper, head, eyes, mouth, armL, armR, legL, legR, mug, phone, card, torso, collar, look, hair: hairs,
+      mats: { shirt, shirtDark, pants, skin, skinDark, hair, dark, white }, wear: add };
+    hook('outfit', ch, agent); // the theme dresses them: caps, coats, uniforms, badges
+    return ch;
   }
 
   function glyphSprite(text, color) {
@@ -615,20 +496,26 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const reg = (m) => { m.userData.slug = agent.slug; pickables.push(m); return m; };
     // desk: wooden top on a white frame with steel feet
     const wood = mat(0xd8b88a, { roughness: 0.5 }), frame = mat(0xf7f4ee, { roughness: 0.6 }), steel = mat(0x8b93a6, { roughness: 0.35, metalness: 0.7 });
-    g.add(reg(box(3.0, 0.08, 1.5, 0, { m: wood, y: 1.0, z: DESK_Z, r: 0.035 })), reg(box(2.74, 0.56, 0.05, 0, { m: frame, y: 0.68, z: DESK_Z + 0.63 })),
+    const props = { mats: { wood, frame, steel } }; // the default desk props by name, for the theme's station hook
+    props.desk = [reg(box(3.0, 0.08, 1.5, 0, { m: wood, y: 1.0, z: DESK_Z, r: 0.035 })), reg(box(2.74, 0.56, 0.05, 0, { m: frame, y: 0.68, z: DESK_Z + 0.63 })),
       box(0.06, 0.92, 1.26, 0, { m: frame, x: -1.37, y: 0.5, z: DESK_Z }), box(0.06, 0.92, 1.26, 0, { m: frame, x: 1.37, y: 0.5, z: DESK_Z }),
-      box(0.1, 0.05, 1.42, 0, { m: steel, x: -1.37, y: 0.025, z: DESK_Z }), box(0.1, 0.05, 1.42, 0, { m: steel, x: 1.37, y: 0.025, z: DESK_Z }));
+      box(0.1, 0.05, 1.42, 0, { m: steel, x: -1.37, y: 0.025, z: DESK_Z }), box(0.1, 0.05, 1.42, 0, { m: steel, x: 1.37, y: 0.025, z: DESK_Z })];
+    g.add(...props.desk);
     const strip = box(2.74, 0.06, 0.03, 0, { y: 0.93, z: DESK_Z + 0.67, cast: false, m: new THREE.MeshBasicMaterial({ color: STATUS_COLOR.idle, toneMapped: false }) });
     const plate = surface(512, 128);
-    plate.ctx.fillStyle = hex(color); plate.ctx.beginPath(); plate.ctx.roundRect(0, 0, 512, 128, 22); plate.ctx.fill();
-    plate.ctx.fillStyle = '#fff'; plate.ctx.textAlign = 'center'; plate.ctx.textBaseline = 'middle';
-    plate.ctx.font = '700 46px system-ui'; plate.ctx.fillText(agent.name, 256, 48);
-    plate.ctx.font = '500 30px system-ui'; plate.ctx.globalAlpha = 0.85; plate.ctx.fillText(agent.role, 256, 96);
+    let painted = false;
+    if (theme.plate) { try { theme.plate(plate.ctx, { name: agent.name, title: title(agent.role), color: hex(color) }); painted = true; } catch (e) { console.warn('theme plate', e); plate.ctx.reset && plate.ctx.reset(); } }
+    if (!painted) {
+      plate.ctx.fillStyle = hex(color); plate.ctx.beginPath(); plate.ctx.roundRect(0, 0, 512, 128, 22); plate.ctx.fill();
+      plate.ctx.fillStyle = '#fff'; plate.ctx.textAlign = 'center'; plate.ctx.textBaseline = 'middle';
+      plate.ctx.font = '700 46px system-ui'; plate.ctx.fillText(agent.name, 256, 48);
+      plate.ctx.font = '500 30px system-ui'; plate.ctx.globalAlpha = 0.85; plate.ctx.fillText(title(agent.role), 256, 96);
+    }
     const plateMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.42), new THREE.MeshBasicMaterial({ map: plate.tex, toneMapped: false, transparent: true }));
     plateMesh.position.set(0, 0.64, DESK_Z + 0.66);
     g.add(strip, reg(plateMesh));
     // on the desk: mat, laptop, mug, books, pen cup, a small plant, an arm lamp
-    g.add(box(1.5, 0.012, 0.72, 0, { m: mat(0x2f3447, { roughness: 0.95 }), y: 1.047, z: DESK_Z - 0.3, cast: false }));
+    g.add(props.mat = box(1.5, 0.012, 0.72, 0, { m: mat(0x2f3447, { roughness: 0.95 }), y: 1.047, z: DESK_Z - 0.3, cast: false }));
     const lap = new THREE.Group(), alu = mat(0xc9ced9, { roughness: 0.35, metalness: 0.5 });
     lap.add(box(0.76, 0.03, 0.5, 0, { m: alu, y: 0.015, r: 0.012 }));
     const lid = box(0.76, 0.5, 0.025, 0, { m: alu, y: 0.26, z: 0.26, r: 0.012 });
@@ -641,29 +528,33 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     lap.position.set(0, 1.053, DESK_Z - 0.42);
     const handle = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.014, 6, 14), mat(0xffffff));
     handle.position.set(0.84, 1.12, DESK_Z - 0.2);
-    g.add(lap, cyl(0.09, 0.075, 0.15, 0xffffff, { x: 0.75, y: 1.12, z: DESK_Z - 0.2 }), handle,
-      box(0.42, 0.07, 0.3, [0x7c9cff, 0xfbbf24, 0xfb7185, 0x34d399][idx % 4], { x: -0.95, y: 1.08, z: DESK_Z + 0.2, r: 0.012 }),
+    props.laptop = lap; props.mug = [cyl(0.09, 0.075, 0.15, 0xffffff, { x: 0.75, y: 1.12, z: DESK_Z - 0.2 }), handle];
+    props.books = [box(0.42, 0.07, 0.3, [0x7c9cff, 0xfbbf24, 0xfb7185, 0x34d399][idx % 4], { x: -0.95, y: 1.08, z: DESK_Z + 0.2, r: 0.012 }),
       box(0.38, 0.06, 0.27, 0xf3ead9, { x: -0.93, y: 1.145, z: DESK_Z + 0.2, r: 0.012 }),
-      box(0.34, 0.05, 0.24, [0x34d399, 0xfb7185, 0x7c9cff, 0xfbbf24][idx % 4], { x: -0.96, y: 1.2, z: DESK_Z + 0.21, r: 0.012 }),
-      cyl(0.065, 0.055, 0.14, 0x2b3142, { x: -0.5, y: 1.115, z: DESK_Z - 0.5 }));
-    for (let i = 0; i < 3; i++) g.add(rod(new THREE.Vector3(-0.5 + (i - 1) * 0.025, 1.15, DESK_Z - 0.5), new THREE.Vector3(-0.5 + (i - 1) * 0.07, 1.33, DESK_Z - 0.5 + (i - 1) * 0.02), 0.011, mat([0xfbbf24, 0xfb7185, 0x7c9cff][i])));
-    g.add(cyl(0.1, 0.075, 0.14, 0xe7dccb, { x: 1.08, y: 1.115, z: DESK_Z - 0.5 }));
+      box(0.34, 0.05, 0.24, [0x34d399, 0xfb7185, 0x7c9cff, 0xfbbf24][idx % 4], { x: -0.96, y: 1.2, z: DESK_Z + 0.21, r: 0.012 })];
+    props.pens = [cyl(0.065, 0.055, 0.14, 0x2b3142, { x: -0.5, y: 1.115, z: DESK_Z - 0.5 })];
+    g.add(lap, ...props.mug, ...props.books, props.pens[0]);
+    for (let i = 0; i < 3; i++) g.add(props.pens[i + 1] = rod(new THREE.Vector3(-0.5 + (i - 1) * 0.025, 1.15, DESK_Z - 0.5), new THREE.Vector3(-0.5 + (i - 1) * 0.07, 1.33, DESK_Z - 0.5 + (i - 1) * 0.02), 0.011, mat([0xfbbf24, 0xfb7185, 0x7c9cff][i])));
+    props.plant = [cyl(0.1, 0.075, 0.14, 0xe7dccb, { x: 1.08, y: 1.115, z: DESK_Z - 0.5 })];
+    g.add(props.plant[0]);
     for (let i = 0; i < 5; i++) {
       const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), mat([0x2f9e62, 0x3bb273, 0x268752][i % 3]));
       leaf.scale.set(0.5, 1.5, 0.5);
       leaf.position.set(1.08 + Math.cos(i * 1.26) * 0.07, 1.3 + (i % 2) * 0.05, DESK_Z - 0.5 + Math.sin(i * 1.26) * 0.07);
       leaf.rotation.set(Math.sin(i * 1.26) * 0.5, 0, Math.cos(i * 1.26) * -0.5);
-      g.add(leaf);
+      g.add(leaf); props.plant.push(leaf);
     }
     const lampM = mat(0x23283a, { roughness: 0.4, metalness: 0.4 }), elbow = new THREE.Vector3(1.2, 1.5, DESK_Z + 0.3), tip = new THREE.Vector3(0.98, 1.68, DESK_Z + 0.22);
-    g.add(cyl(0.13, 0.15, 0.04, 0, { m: lampM, x: 1.12, y: 1.065, z: DESK_Z + 0.25 }), rod(new THREE.Vector3(1.12, 1.08, DESK_Z + 0.25), elbow, 0.018, lampM), rod(elbow, tip, 0.018, lampM));
+    const lampG = props.lamp = new THREE.Group(); // the desk lamp: base, arm, shade, bulb and its light
+    g.add(lampG);
+    lampG.add(cyl(0.13, 0.15, 0.04, 0, { m: lampM, x: 1.12, y: 1.065, z: DESK_Z + 0.25 }), rod(new THREE.Vector3(1.12, 1.08, DESK_Z + 0.25), elbow, 0.018, lampM), rod(elbow, tip, 0.018, lampM));
     const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.16, 0.17, 18, 1, true), mat(color.clone().lerp(new THREE.Color(0x1b1f2e), 0.25), { side: THREE.DoubleSide, roughness: 0.5 }));
     shade.position.copy(tip).add(new THREE.Vector3(-0.03, -0.04, 0)); shade.rotation.z = -0.45; shade.castShadow = true;
     const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffe2a8, toneMapped: false }));
     bulb.position.set(0.93, 1.6, DESK_Z + 0.22);
     const lamp = new THREE.PointLight(0xffd9a0, 0, 7, 1.8);
     lamp.position.set(0.8, 2.1, DESK_Z + 0.1);
-    g.add(shade, bulb, lamp);
+    lampG.add(shade, bulb, lamp);
     // status orb on the desk corner
     const orb = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), new THREE.MeshBasicMaterial({ color: STATUS_COLOR.idle, toneMapped: false }));
     orb.position.set(-1.15, 1.2, DESK_Z + 0.5);
@@ -682,13 +573,14 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       chair.add(leg, wheel);
     }
     chair.position.set(0, 0, SEAT_Z - 0.04);
-    g.add(chair);
+    g.add(chair); props.chair = chair;
     // wall screen
     const scr = surface(960, 560);
     const screen = reg(new THREE.Mesh(new THREE.PlaneGeometry(3.9, 2.275), new THREE.MeshBasicMaterial({ map: scr.tex, toneMapped: false })));
     screen.position.set(0, 0, BACK_Z + 0.16);
     const wall = new THREE.Group();
-    wall.add(screen, box(4.1, 2.47, 0.12, 0x151926, { y: 0, z: BACK_Z + 0.08 }), box(4.1, 0.07, 0.14, 0, { y: -1.25, z: BACK_Z + 0.08, m: new THREE.MeshBasicMaterial({ color, toneMapped: false }), cast: false }));
+    props.bezel = box(4.1, 2.47, 0.12, 0x151926, { y: 0, z: BACK_Z + 0.08 });
+    wall.add(screen, props.bezel, box(4.1, 0.07, 0.14, 0, { y: -1.25, z: BACK_Z + 0.08, m: new THREE.MeshBasicMaterial({ color, toneMapped: false }), cast: false }));
     wall.position.y = 3.75;
     scene.add(wall);
     // selection pad
@@ -735,7 +627,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     tag.innerHTML = '<div class="bubble"></div><div class="doing"></div><div class="chip"><i class="dot"></i><b></b><span></span></div>';
     tag.querySelector('b').textContent = agent.temp ? agent.name.replace(/\s*\(temp\)/, '') : agent.name.split(' ')[0];
     if (agent.temp) { const c = tag.querySelector('.chip'); c.style.borderStyle = 'dashed'; c.style.borderColor = '#fbbf24'; }
-    tag.querySelector('span').textContent = agent.role;
+    tag.querySelector('span').textContent = title(agent.role);
     tag.querySelector('.chip').addEventListener('click', () => onSelect(agent.slug));
     const label = new CSS2DObject(tag);
     label.center.set(0.5, 1);
@@ -768,9 +660,11 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       seed: (hashOf(agent.slug) % 1000) / 100, steps: [], pending: [], mode: 'seat', pose: '', phase: 0, hurry: false,
       listenUntil: 0, talkingUntil: 0, nextBreak: 40 + Math.random() * 90, bubbleTimer: 0, cur: {},
       idx, stack, load, prLoad, flags, halo, ask, note, draft, askReq: 0, askNote: 0, askDraft: 0, at: 'desk', kind: 'code', kindWant: 'code', kindSince: 0, placeSince: -99, carry: false, sip: false,
+      props, screen,
     };
     ch.root.position.set(0, 0, SEAT_Z);
     stations.set(agent.slug, st);
+    hook('station', st); // the theme's desk props and look
     return st;
   }
 
@@ -783,7 +677,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     g.textBaseline = 'middle'; g.textAlign = 'left';
     g.fillStyle = a.online ? a.color : '#1c2030'; g.fillRect(0, 0, W, 52);
     g.fillStyle = '#fff'; g.font = '600 25px system-ui';
-    g.fillText(`${a.name}  ·  ${a.role}`, 20, 27);
+    g.fillText(`${a.name}  ·  ${title(a.role)}`, 20, 27);
     g.textAlign = 'right'; g.font = '600 22px system-ui';
     g.fillText(a.online ? `${STATUS_TEXT[a.status]} · ${ago(a.statusSince)}` : 'offline', W - 20, 27);
     g.textAlign = 'left';
@@ -1242,9 +1136,38 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   });
   renderer.domElement.addEventListener('wheel', () => { tween = null; }, { passive: true });
 
+  // Glow (bloom), for themes that ask for it (theme.bloom), never on phones. The scene is drawn into an offscreen
+  // picture that three treats like the screen (tone mapping and sRGB done in each material, so toneMapped:false
+  // screens keep their exact colours), the bright parts are blurred on top, and a plain copy puts it on screen.
+  // If pictures come too slowly with it, it switches itself off for this page.
+  let composer = null, bloomPass = null;
+  const B = theme.bloom;
+  if (!PHONE && B && B.strength > 0) {
+    try {
+      const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+      rt.texture.colorSpace = THREE.SRGBColorSpace;
+      rt.isXRRenderTarget = true; // three 0.170: "like the screen" for tone mapping and colour space (WebGLRenderer getProgram)
+      composer = new EffectComposer(renderer, rt);
+      composer.renderTarget2.isXRRenderTarget = true; composer.renderTarget2.texture.colorSpace = THREE.SRGBColorSpace;
+      composer.addPass(new RenderPass(scene, camera));
+      bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), B.strength, B.radius != null ? B.radius : 0.4, B.threshold != null ? B.threshold : 1);
+      composer.addPass(bloomPass);
+      composer.addPass(new ShaderPass(CopyShader)); // already tone mapped and sRGB: copied as is (OutputPass would do both twice)
+    } catch (e) { console.warn('bloom off', e); composer = null; }
+  }
+  let slowFor = 0, lastFrameAt = 0;
+  const KEEP_BLOOM = /[?&]bloom=1\b/.test(location.search); // ?bloom=1: never switch it off (tests on slow software GL)
+  function watchSpeed(nowMs) { // a second of pictures more than 70 ms apart: the glow costs too much here
+    const gap = nowMs - lastFrameAt; lastFrameAt = nowMs;
+    if (!composer || gap > 500 || KEEP_BLOOM) return; // a paused or hidden page is not slow
+    slowFor = gap > 70 ? slowFor + gap : Math.max(0, slowFor - gap * 0.5);
+    if (slowFor > 1500) { console.info('office: bloom switched off, frames were slow'); composer.dispose(); composer = null; bloomPass = null; }
+  }
+
   function resize() {
     const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
     renderer.setSize(w, h); labels.setSize(w, h);
+    if (composer) { composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); }
     camera.aspect = w / h;
     camera.fov = w / h < 1 ? 58 : w / h < 1.5 ? 44 : 36;
     camera.updateProjectionMatrix();
@@ -1304,13 +1227,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     }
     tickLinks(dt);
     tickTravel(dt, t);
-    robot.position.x += Math.sin(robotDir) * dt * 0.9; robot.position.z += Math.cos(robotDir) * dt * 0.9;
-    const rz = Math.min(5, zA(lastAisle()) + 1.5);
-    if (robot.position.x < -5.5 || robot.position.x > 7 || robot.position.z < rz || robot.position.z > 7.2) {
-      robot.position.x = Math.min(7, Math.max(-5.5, robot.position.x)); robot.position.z = Math.min(7.2, Math.max(rz, robot.position.z));
-      robotDir += 2 + Math.random() * 2;
-    }
-    robot.rotation.y = robotDir;
+    hook('tick', dt, t); // the theme's moving decor (Oficina: the cleaning robot)
     if (tween) {
       tween.t = Math.min(1, tween.t + dt / 0.9);
       const e = 1 - Math.pow(1 - tween.t, 3);
@@ -1323,7 +1240,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       camera.position.x += tx - controls.target.x; camera.position.z += tz - controls.target.z; controls.target.x = tx; controls.target.z = tz;
     }
     controls.update();
-    renderer.render(scene, camera);
+    if (composer) composer.render(dt); else renderer.render(scene, camera);
+    watchSpeed(nowMs);
     labels.render(scene, camera);
     tickBoard();
     tidyLabels();

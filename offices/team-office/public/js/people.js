@@ -9,6 +9,7 @@ function start() {
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const office = () => window.office || {};
+  const roleOf = (r) => (window.officeRole ? window.officeRole(r) : r); // the role as the room's theme names it; the Role field edits the real one
   const PHONE = document.documentElement.classList.contains('phone');
   const HARNESS = { 'claude': 'Claude', 'claude-work': 'Claude · work account', 'claude-personal': 'Claude · personal account', codex: 'Codex' };
   const hname = (id) => HARNESS[id] || id;
@@ -107,7 +108,7 @@ body.embed #people { display: none !important; }`;
       title.textContent = 'Roles & people';
       body.innerHTML = data.teams.map((t) => `
         <div class="grp"><b>${esc(t.name)}</b>${t.people.length} people</div>
-        ${t.people.map((p) => `<button type="button" class="row" data-who="${esc(p.herdrName)}"><i style="background:${esc(p.color)}"></i><b>${esc(p.name)}${p.lead ? '<em>lead</em>' : ''}</b><span>${esc(p.role)}</span><u>${esc(hname(p.runtime))}<br>${esc((t.runtimes.find((r) => r.id === p.runtime) || {}).codex ? data.codexModel || 'Codex model' : p.model || '')}</u><s>›</s></button>`).join('')}
+        ${t.people.map((p) => `<button type="button" class="row" data-who="${esc(p.herdrName)}"><i style="background:${esc(p.color)}"></i><b>${esc(p.name)}${p.lead ? '<em>lead</em>' : ''}</b><span>${esc(roleOf(p.role))}</span><u>${esc(hname(p.runtime))}<br>${esc((t.runtimes.find((r) => r.id === p.runtime) || {}).codex ? data.codexModel || 'Codex model' : p.model || '')}</u><s>›</s></button>`).join('')}
         <button type="button" class="row plain" data-proto="${t.port}"><b>Team protocol</b><s>›</s></button>
         <button type="button" class="row plain" data-add="${t.port}"><b>+ Add a person</b><s>›</s></button>`).join('');
       foot.innerHTML = '';
@@ -126,7 +127,7 @@ body.embed #people { display: none !important; }`;
     } else if (view.name === 'add') {
       const t = team(view.port);
       title.innerHTML = `New person<small>${esc(t.name)}</small>`;
-      const all = data.teams.flatMap((x) => x.people.map((p) => [p.herdrName, `${p.name.split(' ')[0]} · ${p.role} (${x.name})`]));
+      const all = data.teams.flatMap((x) => x.people.map((p) => [p.herdrName, `${p.name.split(' ')[0]} · ${roleOf(p.role)} (${x.name})`]));
       body.innerHTML = `<form>
         <div class="two">${field('Name', '<input name="name" placeholder="First name and surname" autocomplete="off">')}${field('Role', '<input name="role" placeholder="e.g. Development" autocomplete="off">')}</div>
         ${field('Start from', select('like', [['', 'A blank role'], ...all], ''), 'Copies that person\'s instructions, harness and model, with the new name in place of theirs. You can edit everything before they start.')}

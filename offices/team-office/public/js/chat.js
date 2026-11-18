@@ -11,6 +11,7 @@ function start() {
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const office = () => window.office || {};
+  const roleOf = (r) => (window.officeRole ? window.officeRole(r) : r); // the role as the room's theme names it (team office)
   const api = (p, b) => office().api(p, b);
   const PHONE = document.documentElement.classList.contains('phone');
 
@@ -229,7 +230,7 @@ body.embed #chat { display: none !important; }`;
         if (!r.live && !$('.note', log)) { const n = document.createElement('div'); n.className = 'note'; n.textContent = `${r.person.name} is not running in Herdr right now.${r.person.admin ? ' Start him on the computer with: omniloy-admin start' : ''}`; log.append(n); }
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
-        status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : r.person.role; sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
+        status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : roleOf(r.person.role); sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
         need.classList.toggle('on', !!target && !!$('#asks.show')); // they asked something: the question and its answers are in Overview
         if (stick || r.reset) log.scrollTop = log.scrollHeight;
       }
