@@ -1156,13 +1156,17 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       composer.addPass(new ShaderPass(CopyShader)); // already tone mapped and sRGB: copied as is (OutputPass would do both twice)
     } catch (e) { console.warn('bloom off', e); composer = null; }
   }
-  let slowFor = 0, lastFrameAt = 0;
+  let slowFor = 0, slowN = 0, lastFrameAt = 0;
   const KEEP_BLOOM = /[?&]bloom=1\b/.test(location.search); // ?bloom=1: never switch it off (tests on slow software GL)
-  function watchSpeed(nowMs) { // a second of pictures more than 70 ms apart: the glow costs too much here
-    const gap = nowMs - lastFrameAt; lastFrameAt = nowMs;
-    if (!composer || gap > 500 || KEEP_BLOOM) return; // a paused or hidden page is not slow
-    slowFor = gap > 70 ? slowFor + gap : Math.max(0, slowFor - gap * 0.5);
-    if (slowFor > 1500) { console.info('office: bloom switched off, frames were slow'); composer.dispose(); composer = null; bloomPass = null; }
+  // A paused or hidden page draws nothing for a while: the first picture after it has no gap worth judging.
+  const resumeSpeed = () => { lastFrameAt = 0; };
+  document.addEventListener('visibilitychange', resumeSpeed);
+  function watchSpeed(nowMs) { // more than 1.5 s of pictures over 70 ms apart (at least 4 of them): the glow costs too much here
+    const gap = lastFrameAt ? nowMs - lastFrameAt : 0; lastFrameAt = nowMs;
+    if (!composer || !gap || KEEP_BLOOM || document.hidden) return;
+    if (gap > 70) { slowFor += Math.min(gap, 2000); slowN++; } // a very slow picture counts too (one long stall alone is not enough)
+    else { slowFor = Math.max(0, slowFor - gap * 0.5); if (!slowFor) slowN = 0; }
+    if (slowFor > 1500 && slowN >= 4) { console.info('office: bloom switched off, frames were slow'); composer.dispose(); composer = null; bloomPass = null; }
   }
 
   function resize() {
@@ -1502,6 +1506,28 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       }
     }
   }
+  // What a departed person's desk, character, wall screen and signs held on the GPU is freed, except what the rest
+  // of the room still shows (a theme shares some materials and textures between desks; three uploads again
+  // anything disposed that a later desk reuses).
+  function freeUnused(roots) {
+    const geos = new Set(), mats = new Set(), texs = new Set();
+    const take = (o, G, M, T) => {
+      if (o.geometry) G.add(o.geometry);
+      for (const m of [].concat(o.material || [])) {
+        M.add(m);
+        for (const v of Object.values(m)) if (v && v.isTexture) T.add(v);
+        if (m.uniforms) for (const u of Object.values(m.uniforms)) if (u && u.value && u.value.isTexture) T.add(u.value);
+      }
+    };
+    for (const r of roots) r.traverse((o) => take(o, geos, mats, texs));
+    const used = { g: new Set(), m: new Set(), t: new Set() };
+    scene.traverse((o) => take(o, used.g, used.m, used.t));
+    for (const t of [scene.background, scene.environment]) if (t && t.isTexture) used.t.add(t);
+    geos.forEach((g) => used.g.has(g) || g.dispose());
+    mats.forEach((m) => used.m.has(m) || m.dispose());
+    texs.forEach((t) => used.t.has(t) || t.dispose());
+    renderer.shadowMap.needsUpdate = true;
+  }
   function tickTravel(dt, t) {
     if (!trips.length && !visitors.size && !fxs.length) return;
     try { tickTrips(t); tickVisitors(dt, t); tickFx(dt); } catch (e) { console.warn('travel', e); }
@@ -1526,10 +1552,11 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       for (const [slug, st] of [...stations]) {
         if (here.has(slug)) continue;
         try {
-          scene.remove(st.group); scene.remove(st.ch.root); st.tag.remove();
-          scene.remove(st.wall); [...st.glyphs, ...st.zs, st.alert, st.ask, st.note, st.draft].forEach((s) => scene.remove(s));
+          const parts = [st.group, st.ch.root, st.wall, ...st.glyphs, ...st.zs, st.alert, st.ask, st.note, st.draft];
+          parts.forEach((o) => scene.remove(o)); st.tag.remove(); if (st.art) st.art.element.remove();
           for (let i = pickables.length - 1; i >= 0; i--) if (pickables[i].userData.slug === slug) pickables.splice(i, 1);
-        } catch {}
+          freeUnused(parts);
+        } catch (e) { console.warn('desk removal', e); }
         stations.delete(slug);
         if (selected === slug) selected = null;
         if (hovered === slug) hovered = null;
@@ -1645,7 +1672,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
     setLight(mode) { lightMode = mode; dayNow = -1; applyLight(); },
     order: () => order,
     // Stops drawing entirely (used when the Herdr tab showing the office is not on screen).
-    setPaused(paused) { renderer.setAnimationLoop(paused ? null : frame); },
+    setPaused(paused) { renderer.setAnimationLoop(paused ? null : frame); resumeSpeed(); },
     setBottomInset(px) { px = Math.max(0, Math.round(px || 0)); if (px !== inset) { inset = px; resize(); } },
     view(pos, target) { flyTo(new THREE.Vector3(...pos), new THREE.Vector3(...target)); },
     zoom() { return camera.position.distanceTo(controls.target) / controls.maxDistance; }, // 1 = as far out as it goes (floors.js shows the building there)

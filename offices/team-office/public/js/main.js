@@ -93,7 +93,9 @@ const openFeed = new Set(); // feed messages the reader expanded
 // when the setting or the day's theme changes, the state says so and the page reloads with the new one.
 const THEME_ID = (() => { const v = window.__THEME__; if (isTheme(v)) return v; try { const x = sessionStorage.getItem('office.theme'); if (isTheme(x)) return x; } catch {} return DEFAULT_THEME; })();
 const theme = themeById(THEME_ID);
-window.officeRole = (r) => theme.title(r); // role title in this theme; the shared files use it when it is there (chat.js, people.js)
+// Role title in this theme; the shared files use it when it is there (chat.js, people.js). The Business floor
+// (port 4318, its own office app) is not themed: its people keep their real roles wherever this page lists them.
+window.officeRole = (r, team) => (team && String(team.port) === '4318' ? r : theme.title(r));
 const world = createWorld($('#scene'), $('#labels'), { onSelect: (slug) => select(slug), format: (t) => rich(t), onBoard: (id) => boardClick(id), theme });
 const EMBED = new URLSearchParams(location.search).has('embed'); // rendered for the Herdr tab: scene only
 if (EMBED) document.body.classList.add('embed');
@@ -612,36 +614,55 @@ function themeChanged(id) {
   };
   go();
 }
-// The picker in the top bar: owner only (not visitors from another building, not the Herdr view, not phones).
-if (!window.__GUEST__ && !EMBED && !PHONE) {
-  const tools = $('.tools'), btn = document.createElement('button'), menu = document.createElement('div');
-  btn.type = 'button'; btn.id = 'btn-theme'; btn.title = 'The look of every floor of this building'; btn.textContent = 'Theme';
-  menu.className = 'menu glass'; menu.id = 'theme-menu';
-  tools.insertBefore(btn, $('#btn-more')); tools.append(menu);
+// The picker: owner only (not visitors from another building, not the Herdr view). On a computer it is a button in
+// the top bar with its menu; on a phone it is a "Theme" row in the More sheet that opens the choices under it.
+if (!window.__GUEST__ && !EMBED) {
   const items = [...THEMES.map((t) => ({ mode: 'fixed', theme: t.id, label: t.name })), { mode: 'daily', theme: '', label: 'Tema del día' }];
-  const paint = () => {
-    const cur = (state && state.theme) || { mode: 'fixed', theme: THEME_ID };
-    menu.innerHTML = items.map((x, i) => {
-      const on = x.mode === 'daily' ? cur.mode === 'daily' : cur.mode !== 'daily' && cur.theme === x.theme;
-      const note = x.mode === 'daily' ? (cur.mode === 'daily' ? `today ${esc((THEMES.find((t) => t.id === cur.effective) || {}).name || '')}` : 'changes every day') : on ? '✓' : '';
-      return `<button type="button" data-i="${i}"${on ? ' class="on"' : ''}><span>${esc(x.label)}</span><small>${note}</small></button>`;
-    }).join('');
-  };
-  btn.onclick = (e) => { e.stopPropagation(); $('#more').classList.remove('open'); paint(); menu.style.left = `${btn.offsetLeft}px`; menu.style.right = 'auto'; menu.classList.toggle('open'); };
-  addEventListener('click', (e) => { if (!e.target.closest('#theme-menu')) menu.classList.remove('open'); });
-  menu.addEventListener('click', async (e) => {
-    const b = e.target.closest('button[data-i]'); if (!b) return;
-    const x = items[Number(b.dataset.i)];
+  const cur = () => (state && state.theme) || { mode: 'fixed', theme: THEME_ID, effective: THEME_ID };
+  const nameOf = (id) => (THEMES.find((t) => t.id === id) || {}).name || '';
+  const isOn = (x, c) => (x.mode === 'daily' ? c.mode === 'daily' : c.mode !== 'daily' && c.theme === x.theme);
+  const noteOf = (x, c) => (x.mode === 'daily' ? (c.mode === 'daily' ? `today ${nameOf(c.effective)}` : 'changes every day') : isOn(x, c) ? '✓' : '');
+  async function choose(x, done) {
     try {
       const r = await api('/api/theme', { mode: x.mode, theme: x.theme || THEME_ID });
-      menu.classList.remove('open');
-      if (r.effective !== THEME_ID) { toast(`Theme: <b>${esc((THEMES.find((t) => t.id === r.effective) || {}).name || r.effective)}</b> for every floor`); themeWant = ''; try { sessionStorage.removeItem('office.themeReload'); } catch {} themeChanged(r.effective); }
-      else { if (state) state.theme = r; paint(); toast(x.mode === 'daily' ? 'Tema del día: a different theme every day' : 'Theme kept'); }
+      if (state) state.theme = r;
+      done();
+      if (r.effective !== THEME_ID) { toast(`Theme: <b>${esc(nameOf(r.effective) || r.effective)}</b> for every floor`); themeWant = ''; try { sessionStorage.removeItem('office.themeReload'); } catch {} themeChanged(r.effective); }
+      else { toast(x.mode === 'daily' ? 'Tema del día: a different theme every day' : 'Theme kept'); }
     } catch (err) { toast(esc(err.message), 'err'); }
-  });
+  }
   const css = document.createElement('style');
-  css.textContent = '#theme-menu { min-width: 210px; } #theme-menu button small { color: var(--dim); font-size: 11.5px; } #theme-menu button.on span { font-weight: 600; }';
+  css.textContent = '#theme-menu { min-width: 210px; } #theme-menu button small { color: var(--dim); font-size: 11.5px; } #theme-menu button.on span { font-weight: 600; }'
+    + ' .pmenu > button.theme-opt { min-height: 46px; padding-left: 34px; font-size: 14.5px; } .pmenu > button.theme-opt.on span { font-weight: 600; color: var(--accent); }';
   document.head.append(css);
+  if (!PHONE) {
+    const tools = $('.tools'), btn = document.createElement('button'), menu = document.createElement('div');
+    btn.type = 'button'; btn.id = 'btn-theme'; btn.title = 'The look of every floor of this building'; btn.textContent = 'Theme';
+    menu.className = 'menu glass'; menu.id = 'theme-menu';
+    tools.insertBefore(btn, $('#btn-more')); tools.append(menu);
+    const paint = () => { const c = cur(); menu.innerHTML = items.map((x, i) => `<button type="button" data-i="${i}"${isOn(x, c) ? ' class="on"' : ''}><span>${esc(x.label)}</span><small>${esc(noteOf(x, c))}</small></button>`).join(''); };
+    btn.onclick = (e) => { e.stopPropagation(); $('#more').classList.remove('open'); paint(); menu.style.left = `${btn.offsetLeft}px`; menu.style.right = 'auto'; menu.classList.toggle('open'); };
+    addEventListener('click', (e) => { if (!e.target.closest('#theme-menu')) menu.classList.remove('open'); });
+    menu.addEventListener('click', (e) => { const b = e.target.closest('button[data-i]'); if (b) choose(items[Number(b.dataset.i)], () => { menu.classList.remove('open'); paint(); }); });
+  } else { // phone.js builds the More sheet after this file runs: wait for it, then put the rows before "Switch office"
+    const wait = (n = 0) => {
+      const sheet = $('#sheet-more .pmenu'); if (!sheet) { if (n < 40) setTimeout(() => wait(n + 1), 300); return; }
+      const head = document.createElement('button'); head.type = 'button'; head.id = 'btn-theme';
+      const opts = items.map((x) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'theme-opt'; b.style.display = 'none'; b.onclick = () => choose(x, paint); return b; });
+      let open = false;
+      function paint() {
+        const c = cur();
+        head.innerHTML = `Theme<small>${esc(nameOf(c.effective || c.theme) || 'Oficina')}${c.mode === 'daily' ? ' · del día' : ''} ${open ? '⌄' : '›'}</small>`;
+        opts.forEach((b, i) => { const x = items[i]; b.classList.toggle('on', isOn(x, c)); b.innerHTML = `<span>${esc(x.label)}</span><small>${esc(noteOf(x, c))}</small>`; b.style.display = open ? '' : 'none'; });
+      }
+      head.onclick = () => { open = !open; paint(); if (open) opts[opts.length - 1].scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }; // the choices sit under the fold otherwise
+      const sw = [...sheet.children].find((x) => /Switch office/.test(x.textContent));
+      for (const el of [head, ...opts]) sheet.insertBefore(el, sw || null);
+      paint();
+      $('#tabbar') && $('#tabbar').addEventListener('click', () => { if (open) { open = false; paint(); } }); // the menu comes back closed
+    };
+    wait();
+  }
 }
 
 let stream = null;
