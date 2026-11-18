@@ -56,3 +56,28 @@ Here is my plan:
 `);
 assert.deepEqual(withList, { question: 'Do you want to proceed?', options: ['1. Yes', '2. No'] });
 console.log('menu below a numbered list: ok');
+
+const ordinaryList = parseMenu(`
+Plan:
+1. Do this
+2. Do that
+`);
+assert.equal(ordinaryList, null);
+console.log('ordinary numbered list is not a menu: ok');
+
+const tenOptions = parseMenu(`
+Which option should I use?
+❯ 1. One
+  2. Two
+  3. Three
+  4. Four
+  5. Five
+  6. Six
+  7. Seven
+  8. Eight
+  9. Nine
+  10. Ten
+ Enter to select · ↑/↓ to navigate · Esc to cancel
+`);
+assert.equal(tenOptions, null);
+console.log('menus with option 10 stay stuck: ok');

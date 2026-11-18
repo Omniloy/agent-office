@@ -43,7 +43,7 @@ function render(d) {
   const n = reqs.length;
   if (!/^\(\d+ to answer\)/.test(document.title) || n) document.title = (n ? `(${n} to answer) ` : '') + document.title.replace(/^\(\d+ to answer\) /, '');
   box.classList.toggle('show', d.items.length > 0);
-  const card = (x) => `<div class="rq" data-id="${esc(x.id)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}"` : ''}>
+  const card = (x) => `<div class="rq" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}" data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : ''}>
     <div class="who"><i style="background:${esc(x.color)}"></i><b>${esc(x.name)}</b><span>${esc(x.role)}${x.via ? ' · via Lucía' : ''} · ${ago(x.created)}</span>
       ${x.ticket && site ? `<a href="${esc(site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
     <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
@@ -67,10 +67,15 @@ box.addEventListener('click', async (e) => {
   const id = rq.dataset.id, b = e.target.closest('button'); if (!b) return;
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? rq.querySelector('input').value.trim() : null);
   try {
+    if (rq.dataset.menuQuestion && /type something|tell Claude|chat about this/i.test(text)) {
+      const chat = (window.office || {}).chat;
+      if (chat && chat.open) return chat.open(rq.dataset.from);
+      throw new Error('Open this person’s chat to type the answer.');
+    }
     if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
     else if (text) {
       const body = { id, text };
-      if (rq.dataset.menuQuestion) { body.question = rq.dataset.menuQuestion; body.options = JSON.parse(rq.dataset.menuOptions || '[]'); }
+      if (rq.dataset.menuQuestion) { body.question = rq.dataset.menuQuestion; body.options = JSON.parse(rq.dataset.menuOptions || '[]'); body.menuId = rq.dataset.menuId; body.terminalId = rq.dataset.terminalId; }
       await api('/api/requests/answer', body);
     } else return;
     sig = ''; document.activeElement.blur(); poll();

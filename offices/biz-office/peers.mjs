@@ -130,7 +130,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
   setInterval(() => crossFloor().catch(() => {}), 3000).unref();
 
   // ---- the guest listener
-  const QUIET = { screen: [], activity: [], nowDoing: '', lastSaid: '', memory: null, tickets: [], prs: [], description: '', statusMsg: '' };
+  const QUIET = { screen: [], activity: [], nowDoing: '', lastSaid: '', memory: null, tickets: [], prs: [], description: '', statusMsg: '', menu: null };
   const guestState = async () => {
     const t = await readJson(path.join(HOME, mine.dir, 'team.json'), {});
     let list = []; try { list = agents() || []; } catch { /* starting */ }

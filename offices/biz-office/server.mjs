@@ -12,7 +12,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createHub } from './hub.mjs';
-import { parseMenu } from './menu.mjs';
+import { menuInstance, parseMenu, terminalId } from './menu.mjs';
 
 const HOME = os.homedir();
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -344,7 +344,8 @@ async function buildAgent(p, team, names) {
   ]);
   if (scr.ok) {
     agent.screen = screenLines(scr.stdout);
-    agent.menu = status === 'blocked' ? parseMenu(scr.stdout) : null;
+    const parsed = status === 'blocked' ? parseMenu(scr.stdout) : null;
+    agent.menu = parsed ? menuInstance(term, parsed) : null;
   }
   let items = [];
   if (file) { try { items = await parsedTranscript(file, account.kind, names); } catch {} }
@@ -458,7 +459,7 @@ async function loadRequests() {
   const open = items.filter((x) => x.status === 'open' && mine.has(x.from)); // only this team's people
   const menus = state.agents.filter((a) => a.status === 'blocked' && a.menu).map((a) => ({
     id: `menu:${a.herdrName}`, kind: 'request', from: a.herdrName, name: shortName(a.name || a.herdrName), role: a.role || '', color: a.color || '#888',
-    title: a.menu.question, body: a.statusMsg && a.statusMsg !== a.menu.question ? a.statusMsg : '', /* what it asks for, e.g. "approve Bash: git push" */ options: a.menu.options, created: new Date(a.statusSince || Date.now()).toISOString(), menu: true,
+    title: a.menu.question, body: a.statusMsg && a.statusMsg !== a.menu.question ? a.statusMsg : '', /* what it asks for, e.g. "approve Bash: git push" */ options: a.menu.options, menuId: a.menu.id, terminalId: a.menu.terminalId, notifyId: `menu:${a.herdrName}:${a.menu.id}`, created: new Date(a.statusSince || Date.now()).toISOString(), menu: true,
   }));
   return {
     site: team.jira && team.jira.site,
@@ -485,27 +486,35 @@ async function liveMenu(name) {
   if (!g.ok || !t) return { ok: false, menu: null };
   if (!t.status || !['blocked', 'error'].includes(t.status.state)) return { ok: true, menu: null }; // not waiting on anything
   const r = await run(HC, ['read', name, '--lines', '40']);
-  return r.ok ? { ok: true, menu: parseMenu(r.stdout) } : { ok: false, menu: null };
+  const parsed = r.ok ? parseMenu(r.stdout) : null;
+  return r.ok ? { ok: true, menu: parsed ? menuInstance(t, parsed) : null, terminalId: terminalId(t) } : { ok: false, menu: null };
 }
+const menuAnswers = new Map();
 async function answerMenu(body) {
   const id = String(body.id || ''), name = id.slice('menu:'.length), question = String(body.question || ''), options = Array.isArray(body.options) ? body.options.map(String) : [];
-  const live = await liveMenu(name), menu = live.menu;
-  if (!live.ok || !menu || menu.question !== question || JSON.stringify(menu.options) !== JSON.stringify(options)) return { code: 409, body: { error: 'The question changed; open Live screen.' } };
-  const label = String(body.text || '').trim(), m = /^(?:([1-9])\.\s)/.exec(label), digit = m && m[1];
-  if (!digit || !menu.options.includes(label)) return { code: 400, body: { error: 'That option is no longer on screen.' } };
-  const key = await run(HC, ['keys', name, digit], { timeout: 30000 });
-  if (!key.ok) return { code: 502, body: { error: clip(oneLine(key.stderr || key.stdout), 240) || 'Could not press that option.' } };
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-  const after = await liveMenu(name);
-  if (!after.ok) return { code: 502, body: { error: 'Could not read the screen; open Live screen.' } };
-  if (after.menu) return { code: 409, body: { error: 'The menu is still open; open Live screen.' } };
-  const message = String(body.message || '').trim();
-  if (message && freeMenu(label)) {
-    const sent = await run(HC, ['send', '--json', name, '--', message], { timeout: 120000 });
-    if (!sent.ok) return { code: 502, body: { error: clip(oneLine(sent.stderr || sent.stdout), 240) || 'The follow-up text was not sent.' } };
+  if (menuAnswers.has(name)) return { code: 409, body: { error: 'Another answer is already in progress; open Live screen.' } };
+  const lock = Symbol(name); menuAnswers.set(name, lock);
+  try {
+    const live = await liveMenu(name), menu = live.menu;
+    if (!live.ok || !menu || menu.question !== question || JSON.stringify(menu.options) !== JSON.stringify(options) || menu.id !== String(body.menuId || '') || live.terminalId !== String(body.terminalId || '')) return { code: 409, body: { error: 'The question changed; open Live screen.' } };
+    const label = String(body.text || '').trim(), m = /^(?:([1-9])\.\s)/.exec(label), digit = m && m[1];
+    if (!digit || !menu.options.includes(label)) return { code: 400, body: { error: 'That option is no longer on screen.' } };
+    const key = await run(HC, ['keys', name, digit], { timeout: 30000 });
+    if (!key.ok) return { code: 502, body: { error: clip(oneLine(key.stderr || key.stdout), 240) || 'Could not press that option.' } };
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const after = await liveMenu(name);
+    if (!after.ok) return { code: 502, body: { error: 'Could not read the screen; open Live screen.' } };
+    if (after.menu) return { code: 409, body: { error: 'The menu is still open; open Live screen.' } };
+    const message = String(body.message || '').trim();
+    if (message && freeMenu(label)) {
+      const sent = await run(HC, ['send', '--json', name, '--', message], { timeout: 120000 });
+      if (!sent.ok) return { code: 502, body: { error: clip(oneLine(sent.stderr || sent.stdout), 240) || 'The follow-up text was not sent.' } };
+    }
+    scheduleRefresh();
+    return { code: 200, body: { ok: true, gone: true, sent: !!message && freeMenu(label) } };
+  } finally {
+    if (menuAnswers.get(name) === lock) menuAnswers.delete(name);
   }
-  scheduleRefresh();
-  return { code: 200, body: { ok: true, gone: true, sent: !!message && freeMenu(label) } };
 }
 
 async function deliver(name, text) {

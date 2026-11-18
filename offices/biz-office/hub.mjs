@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createPeers } from './peers.mjs';
-import { parseMenu } from './menu.mjs';
+import { menuInstance, parseMenu } from './menu.mjs';
 
 const APP = path.dirname(fileURLToPath(import.meta.url)); // this office app's folder
 const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = path.join(SHARED, 'push');
@@ -114,7 +114,8 @@ async function chatLog(name, pos, known) {
   let t = {}; try { t = JSON.parse(await hcOut(['get', name, '--json'])); } catch { /* not running */ }
   const live = t.state === 'live', working = !!(t.status && t.status.state === 'working'), blocked = !!(t.status && ['blocked', 'error'].includes(t.status.state));
   const screen = live ? (await hcOut(['read', name, '--lines', '40'])).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[ \t]+$/gm, '').trim() : '';
-  const menu = blocked ? parseMenu(screen) : null;
+  const parsed = blocked ? parseMenu(screen) : null;
+  const menu = parsed ? menuInstance(t, parsed) : null;
   const file = live ? await sessionLog(t) : '';
   if (!file) { // not Claude Code (or not running): the screen is all there is
     return { file: '', pos: 0, messages: [], live, working, blocked, screen, menu };
@@ -157,7 +158,7 @@ export function createHub({ port, stuck, agents }) {
     for (const a of list) if (!since.has(a.herdrName)) since.set(a.herdrName, Date.now());
     const items = list.flatMap((a) => {
       const t = since.get(a.herdrName);
-      if (a.menu) return [{ id: `menu:${a.herdrName}`, port, kind: 'request', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.question, 140), created: new Date(a.statusSince || t).toISOString() }];
+      if (a.menu) return [{ id: `menu:${a.herdrName}:${a.menu.id}`, port, kind: 'request', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.question, 140), created: new Date(a.statusSince || t).toISOString() }];
       if (Date.now() - t <= 15_000) return []; // a short stop is not a wait
       return [{ id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() }];
     });

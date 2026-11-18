@@ -285,7 +285,7 @@ body.embed #chat { display: none !important; }`;
     const m = currentMenu, message = freeMenu(label) ? ta.value.trim() : '';
     if (!m || !who) return;
     try {
-      await api('/api/requests/answer', { id: `menu:${who}`, text: label, question: m.question, options: m.options, ...(message ? { message } : {}) });
+      await api('/api/requests/answer', { id: `menu:${who}`, text: label, question: m.question, options: m.options, menuId: m.id, terminalId: m.terminalId, ...(message ? { message } : {}) });
       if (message) { ta.value = ''; grow(); }
       paintMenu(null); log.scrollTop = log.scrollHeight; err.textContent = '';
     } catch (e) { err.textContent = e.message || 'Could not answer the menu.'; }

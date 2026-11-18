@@ -458,7 +458,7 @@ recapBox.onclick = () => recapBox.classList.remove('show');
 function renderAsks() {
   const a = selected && agentBy(selected), list = a ? asksOf(a) : [];
   asksBox.classList.toggle('show', list.length > 0);
-  asksBox.innerHTML = list.map((x) => `<div class="ask ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}"` : ''}>
+  asksBox.innerHTML = list.map((x) => `<div class="ask ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}" data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : ''}>
     <div class="ahead"><b>${x.kind === 'request' ? 'Needs your answer' : 'Message for you'}</b><span>${esc(since(new Date(x.created).getTime()))}</span>
       ${x.ticket && asks.site ? `<a class="key" href="${esc(asks.site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
     <div class="atitle">${rich(x.title || '')}</div>${x.body ? `<div class="abody">${md(x.body)}</div>` : ''}
@@ -484,9 +484,9 @@ async function pollAsks() {
     if (sig === asksSig) return;
     asksSig = sig;
     asks = { items: d.items || [], more: d.withLucia ?? d.withLead ?? 0, site: d.site || '' };
-    const ids = new Set(asks.items.map((x) => x.id));
+    const ids = new Set(asks.items.map((x) => x.notifyId || x.id));
     if (asksSeen) for (const x of asks.items) {
-      if (asksSeen.has(x.id) || x.kind !== 'request') continue;
+      if (asksSeen.has(x.notifyId || x.id) || x.kind !== 'request') continue;
       toast(`<i class="dot blocked"></i><b>${esc(x.name)}</b> has a question for you<button type="button" class="go" data-go="requests">Open</button>`, '', 12000); chime([880, 660]);
     }
     asksSeen = ids;
@@ -499,10 +499,14 @@ asksBox.addEventListener('click', async (e) => {
   const id = card.dataset.id;
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? card.querySelector('input').value.trim() : null);
   try {
+    if (card.dataset.menuQuestion && /type something|tell Claude|chat about this/i.test(text)) {
+      if (office().chat && office().chat.open) return office().chat.open(card.dataset.from || (asks.items.find((x) => String(x.id) === id) || {}).from);
+      throw new Error('Open this person’s chat to type the answer.');
+    }
     if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
     else if (text) {
       const body = { id, text };
-      if (card.dataset.menuQuestion) { body.question = card.dataset.menuQuestion; body.options = JSON.parse(card.dataset.menuOptions || '[]'); }
+      if (card.dataset.menuQuestion) { body.question = card.dataset.menuQuestion; body.options = JSON.parse(card.dataset.menuOptions || '[]'); body.menuId = card.dataset.menuId; body.terminalId = card.dataset.terminalId; }
       await api('/api/requests/answer', body);
     }
     else return;
