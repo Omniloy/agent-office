@@ -698,7 +698,7 @@ async function loadRequests() {
   }
   const menus = state.agents.filter((a) => a.status === 'blocked' && a.menu).map((a) => ({
     id: `menu:${a.herdrName}`, kind: 'request', from: a.herdrName, name: shortName(a.name || a.herdrName), role: a.role || '', color: a.color || '#888',
-    title: a.menu.question, body: a.statusMsg && a.statusMsg !== a.menu.question ? a.statusMsg : '', // what it asks for, e.g. "approve Bash: git push" options: a.menu.options, created: new Date(a.statusSince || Date.now()).toISOString(), menu: true,
+    title: a.menu.question, body: a.statusMsg && a.statusMsg !== a.menu.question ? a.statusMsg : '', /* what it asks for, e.g. "approve Bash: git push" */ options: a.menu.options, created: new Date(a.statusSince || Date.now()).toISOString(), menu: true,
   }));
   return {
     site: team.jira && team.jira.site,
