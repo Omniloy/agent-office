@@ -279,8 +279,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       while (text.length > 1 && g.measureText(text + '…').width > maxW) text = text.slice(0, -1);
       return text.trimEnd() + '…';
     };
-    // filter chips, right of the title
-    let cx = 276;
+    // filter chips, right of the title (a theme's longer title pushes them right)
+    let cx = Math.max(276, Math.ceil(44 + g.measureText(texts.board).width + 20)); const cx0 = cx;
     g.font = '600 21px system-ui';
     for (const c of M.chips || []) {
       const label = `${c.label} ${c.n}`, w = g.measureText(label).width + 30;
@@ -290,7 +290,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       boardHits.push({ x: cx, y: 30, w, h: 52, id: `filter:${c.id}` });
       cx += w + 10;
     }
-    if (!(M.chips || []).length) { g.fillStyle = '#7f8aa3'; g.font = '26px system-ui'; g.fillText('open cards by who has to move them', 270, 59); }
+    if (!(M.chips || []).length) { g.fillStyle = '#7f8aa3'; g.font = '26px system-ui'; g.fillText(texts.boardSub || 'open cards by who has to move them', cx0 - 6, 59); }
     const TONE = { approval: ['#ddd6fe', '#5b21b6'], waiting: ['#fde68a', '#8a6a12'], caught: ['#fecaca', '#991b1b'], working: ['#d9f99d', '#3f6212'], idle: ['#fff3c4', '#7a6a2c'], done: ['#dcfce7', '#166534'] };
     const card = (t, x, y, w, tone) => {
       const [bg, fg] = TONE[tone] || TONE.idle;
@@ -331,7 +331,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       g.fillText(fit(title(a.role), cw - 32), x + 16, y0 + 49); g.globalAlpha = 1;
       if (!tickets.length) {
         g.fillStyle = '#5d6780'; g.font = '22px system-ui';
-        g.fillText(fit(jira && jira.error ? 'Jira not reachable' : M.show ? 'None' : 'No open cards', cw - 32), x + 16, y0 + 102);
+        g.fillText(fit(jira && jira.error ? 'Jira not reachable' : M.show ? 'None' : texts.noCards || 'No open cards', cw - 32), x + 16, y0 + 102);
       }
       const off = scrollOf(a.slug, tickets.length, shown); boardCols.push({ id: a.slug, x, y: y0, w: cw, h: bh, len: tickets.length, shown });
       const o0 = Math.floor(off), fr = off - o0;
@@ -354,7 +354,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     g.fillStyle = ts.ink || '#1f2433'; g.font = '600 38px system-ui';
     const t = trace && trace[0];
     g.fillText(t ? `${texts.trace} · ${t.project}` : texts.traceEmpty, 40, 58);
-    if (!t) { g.fillStyle = '#8891a5'; g.font = '28px system-ui'; g.fillText('This team has no matrix yet.', 40, 130); g.fillText('Click the board to show another team\'s.', 40, 172); traceBoard.tex.needsUpdate = true; return; }
+    if (!t) { g.fillStyle = '#8891a5'; g.font = '28px system-ui'; const th = texts.traceHint || ['This team has no matrix yet.', 'Click the board to show another team\'s.']; g.fillText(th[0] || '', 40, 130); g.fillText(th[1] || '', 40, 172); traceBoard.tex.needsUpdate = true; return; }
     g.fillStyle = '#6b7489'; g.font = '26px system-ui';
     g.fillText(`${t.total} active requirements · ${t.noVerif} without a verification ticket`, 40, 108);
     const rows = [['To develop', t.counts.todo, '#94a3b8'], ['In development', t.counts.doing, '#2563eb'], ['Implemented', t.counts.built, '#d97706'], ['Verified', t.counts.verified, '#16a34a'], ['Other', t.counts.other, '#c4c9d6']];
@@ -679,7 +679,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     g.fillStyle = '#fff'; g.font = '600 25px system-ui';
     g.fillText(`${a.name}  ·  ${title(a.role)}`, 20, 27);
     g.textAlign = 'right'; g.font = '600 22px system-ui';
-    g.fillText(a.online ? `${STATUS_TEXT[a.status]} · ${ago(a.statusSince)}` : 'offline', W - 20, 27);
+    const sw = texts.status || {}; // a theme may translate the status words (texts.status { working, idle, blocked, offline, now })
+    g.fillText(a.online ? `${sw[a.status] || STATUS_TEXT[a.status]} · ${ago(a.statusSince).replace(/^now$/, sw.now || 'now')}` : sw.offline || 'offline', W - 20, 27);
     g.textAlign = 'left';
     if (!a.online) {
       g.fillStyle = '#3a4256'; g.font = '30px system-ui'; g.textAlign = 'center';

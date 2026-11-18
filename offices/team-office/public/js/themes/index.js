@@ -17,6 +17,9 @@
 //                       bar ('' = nothing). board / trace: titles painted on the wall board and the whiteboard
 //                       (trace gets " · <project>"; traceEmpty is used with no matrix, default = trace).
 //                       composer: command bar placeholder, {name} = the first person's @name.
+//                       Optional: boardSub (board line when there are no filter chips), noCards (empty board
+//                       column), status { working, idle, blocked, offline, now } (status words on the wall screens).
+//                       traceHint: ['line 1', 'line 2'], the whiteboard's text when the team has no matrix.
 //   exposure            tone mapping exposure (Oficina 1.08).
 //   bloom               { strength, radius = 0.4, threshold = 1 } or null. Glow, off on phones and when frames get
 //                       slow. The picture is tone mapped before the glow, so only colours above `threshold` glow:
