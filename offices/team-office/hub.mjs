@@ -133,6 +133,7 @@ async function chatLog(name, pos, known) {
       let text = typeof c === 'string' ? c : Array.isArray(c) && !c.some((x) => x.type === 'tool_result') ? c.filter((x) => x.type === 'text').map((x) => x.text).join('\n') : '';
       text = text.trim(); if (!text) continue;
       let from = '';
+      const paste = /^<pasted_content id="[^"]*">\s*([\s\S]*?)\s*<\/pasted_content[^>]*>$/.exec(text); if (paste) text = paste[1]; // a long message arrives wrapped as a paste: without this it was skipped and its bubble stayed last forever
       const m = /^<hc from="([^"]*)">([\s\S]*?)(<\/hc>)?\s*$/.exec(text);
       if (m) { from = m[1].split(' ').pop(); text = m[2].trim(); } else if (text.startsWith('<')) continue; // reminders, commands, notifications
       const mate = from && who[from] && from !== name ? who[from] : null;
