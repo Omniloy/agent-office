@@ -138,6 +138,13 @@ a = sys.argv[1:]
 if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
 os.makedirs(D, exist_ok=True); lock = open(F + ".lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)
 d = load(); cmd = a[0]; o, rest = opts(a[1:])
+# A draft goes out in the owner's name: it never names the team (team-names keeps the list of names).
+if cmd in ("add", "body", "set"):
+    _t = [o[k] for k in ("body", "subject", "title") if isinstance(o.get(k), str)] + [kv.split("=", 1)[1] for kv in rest[1:] if cmd == "set" and kv.split("=", 1)[0] in ("subject", "title")]
+    if isinstance(o.get("body-file"), str) and os.path.isfile(os.path.expanduser(o["body-file"])): _t.append(open(os.path.expanduser(o["body-file"]), encoding="utf-8", errors="replace").read())
+    try: _r = subprocess.run([os.path.expanduser("~/.local/bin/team-names"), "check", "--text", "\n".join(_t)], capture_output=True, text=True) if _t else None
+    except Exception: _r = None
+    if _r is not None and _r.returncode == 1: sys.exit("refused: " + _r.stderr.strip())
 
 if cmd == "add":
     for k in ("from", "channel") + (() if o.get("channel") == "calendar" else ("to",)):

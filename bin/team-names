@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""team-names: nothing that leaves the office names the team. The people of the team (their names are in every
+team.json) exist only inside the office: its chat, requests, cards, memory and pages for __OWNER__. A commit, a pull
+request, a Jira card, an email, a chat message, a shared document or a file in a product repository reads as
+__OWNER__'s own work: it says what was done, never who on the team did it.
+
+  team-names check FILE | -            check a text before it goes out (exit 1 and the names found, when it has any)
+  team-names check --text "..."
+  team-names real "Pablo García" --why "contact at the client"
+                                       a real person shares a name with someone on the team: register the exact words
+                                       once (as they appear in the text, e.g. "Pablo García", "Hola Pablo") and they pass
+  team-names real                      what is registered, by whom and why
+  team-names who                       the names that are checked
+
+How to write instead: say what was done, in the first person or with no subject ("I checked", "the deploy was
+rolled back"), never "Daniel did X", "according to Lucía", "the QA agent".
+
+The check also runs by itself (a hook of Claude Code) before a commit, a pull request, a Jira, Slack, Gmail or Google
+Docs write, a text typed into a web page, and before a document is written outside the office folders. __OWNER__ turns
+that on once per computer (agents do not run these):
+  team-names install                   adds the hook to every Claude Code account on this computer (a backup is kept)
+  team-names status                    says where it is on"""
+import sys, os, re, json, glob, unicodedata, datetime, shutil
+HOME = os.path.expanduser("~")
+REAL = f"{HOME}/.omniloy-team/real-people.json"
+def flat(s): return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+def people():
+    """Every persona and temp of every team: {word or full name, accents removed: name as written}."""
+    out = {}
+    for f in glob.glob(f"{HOME}/.omniloy-*/team.json"):
+        try: t = json.load(open(f, encoding="utf-8"))
+        except Exception: continue
+        ps = list(t.get("personas") or [])
+        try: ps += json.load(open(os.path.dirname(f) + "/temps.json", encoding="utf-8"))
+        except Exception: pass
+        own = flat(str((t.get("owner") or {}).get("name") or "")).lower()
+        for p in ps:
+            name = str(p.get("name") or "").strip()
+            if len(name) < 3: continue
+            first = name.split()[0]
+            for n in {name, first}:
+                if len(n) >= 3 and flat(n).lower() != own: out[flat(n)] = n
+    return out
+def reals():
+    try: return json.load(open(REAL, encoding="utf-8"))
+    except Exception: return []
+def find(text):
+    """The team names in a text, as written. Capital letter needed (so 'clara' the adjective passes); accents optional."""
+    t = flat(str(text))
+    t = re.sub(r"(?im)^\s*(co-authored-by|signed-off-by|claude-session):.*$", "", t)
+    for r in sorted((flat(x.get("words", "")) for x in reals()), key=len, reverse=True):
+        if r: t = t.replace(r, " ")
+    names = people(); hits = []
+    for n in sorted(names, key=len, reverse=True):
+        if re.search(r"(?<![\w@/.])" + re.escape(n) + r"(?![\w@])", t):
+            if not any(n in flat(h) for h in hits): hits.append(names[n])
+    return hits
+ADVICE = ('Outside the office nobody on the team is named: write what was done, in the first person or with no subject, and send it again. '
+          'If a name belongs to a real person, register the exact words once and repeat: team-names real "Name Surname" --why "who they are".')
+
+# ---- the hook: which tool calls take a text out of the office, and the text they carry
+INSIDE = [f"{HOME}/.omniloy-", f"{HOME}/.claude", f"{HOME}/.codex", f"{HOME}/.config/", f"{HOME}/.local/", f"{HOME}/.cowork", f"{HOME}/Library/", "/tmp/", "/private/tmp/", "/private/var/", "/var/folders/"]
+DOCS = (".md", ".mdx", ".txt", ".rst", ".adoc", ".tex", ".html", ".htm")
+OUT_CMD = re.compile(r"\bgit\b[^\n;|&]*\b(commit|tag|notes)\b|\bgh\s+(pr|issue|release|gist)\s+(create|edit|comment|review|merge|close)\b|\bgh\s+api\b|\bglab\s+(mr|issue|release)\b")
+FILE_ARG = re.compile(r"(?:-F|--file|--body-file|--notes-file|--input|--template)[= ]+(['\"]?)([^\s'\"]+)\1")
+READS = re.compile(r"^(get|list|search|read|query|fetch|lookup|inspect|browse|check|download|export|resolve|debug|authenticate|complete_auth|start_google_auth|tabs_|navigate|find$|compare|extract|index|render|select|suggest|atlassianuserinfo|guide|open|switch|resize|upload_image|gif)")
+SKIP_SERVER = re.compile(r"supabase|^rea$|^granola$|^plan$", re.I)
+def inside(path):
+    p = os.path.abspath(os.path.expanduser(str(path)))
+    return any(p.startswith(x) for x in INSIDE) or bool(re.search(r"/(agent-office|[a-z]+-office)/", p + "/"))
+def leaves(v, key=""):
+    if isinstance(v, str):
+        if not re.search(r"(email|_id|Id|url|cursor|path|token)$", key) and key not in ("id", "user_google_email"): yield v
+    elif isinstance(v, dict):
+        for k, x in v.items(): yield from leaves(x, str(k))
+    elif isinstance(v, list):
+        for x in v: yield from leaves(x, key)
+def outgoing(tool, inp):
+    """(what it is, text) when this tool call takes a text out of the office; else None."""
+    if tool == "Bash":
+        c = str(inp.get("command") or "")
+        if not OUT_CMD.search(c): return None
+        extra = []
+        for m in FILE_ARG.finditer(c):
+            f = os.path.expanduser(m.group(2))
+            if os.path.isfile(f) and os.path.getsize(f) < 2_000_000:
+                try: extra.append(open(f, encoding="utf-8", errors="replace").read())
+                except Exception: pass
+        return "this command (a commit, a pull request or an issue)", "\n".join([c] + extra)
+    if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit") or re.search(r"filesystem__(write_file|edit_file|append_file)$", tool):
+        path = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") or ""
+        if not path or inside(path) or not str(path).lower().endswith(DOCS): return None
+        parts = [inp.get(k) for k in ("content", "new_string", "new_source")] + [e.get("new_string") or e.get("newText") for e in inp.get("edits") or [] if isinstance(e, dict)]
+        return f"the document {path}", "\n".join(str(x) for x in parts if x)
+    if tool.startswith("mcp__"):
+        bits = tool.split("__"); server, short = bits[1], (bits[-1] if len(bits) > 2 else "")
+        if SKIP_SERVER.search(server) or "filesystem" in server: return None
+        s = re.sub(r"^slack_", "", short).lower()
+        if "chrome" in server.lower() or "browser" in server.lower():
+            text = "\n".join(str(inp.get(k)) for k in ("text", "value") if isinstance(inp.get(k), str))
+            return ("the text typed into a web page", text) if text.strip() else None
+        if READS.match(s) and s != "find_and_replace_doc": return None
+        return f"what {short} writes", "\n".join(leaves(inp))
+    return None
+def hook():
+    try:
+        ev = json.load(sys.stdin); got = outgoing(str(ev.get("tool_name") or ""), ev.get("tool_input") or {})
+        hits = find(got[1]) if got else []
+    except Exception: sys.exit(0)   # a broken check must never stop the work
+    if hits:
+        sys.stderr.write(f"BLOCKED by team-names: {got[0]} leaves the office and names someone on the team: {', '.join(hits)}. {ADVICE}\n"); sys.exit(2)
+    sys.exit(0)
+
+# ---- turning the hook on (the owner's own command)
+ENTRY = {"matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", "hooks": [{"type": "command", "command": 'python3 "$HOME/.local/bin/team-names" hook'}]}
+def accounts():
+    dirs = [f"{HOME}/.claude"]
+    for f in glob.glob(f"{HOME}/.omniloy-*/team.json"):
+        try:
+            for a in json.load(open(f)).get("accounts") or []:
+                if a.get("kind") == "claude" and a.get("configDir"): dirs.append(os.path.expanduser(a["configDir"]))
+        except Exception: pass
+    return [d for d in dict.fromkeys(dirs) if os.path.isdir(d)]
+def is_on(s): return any("team-names" in str(h.get("command", "")) for e in (s.get("hooks") or {}).get("PreToolUse") or [] for h in e.get("hooks") or [])
+def settings(d):
+    f = d + "/settings.json"
+    try: return f, json.load(open(f, encoding="utf-8"))
+    except FileNotFoundError: return f, {}
+
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+cmd = a[0]
+if cmd == "hook": hook()
+elif cmd == "check":
+    if len(a) > 2 and a[1] == "--text": text = a[2]
+    elif len(a) > 1 and a[1] != "-": text = open(os.path.expanduser(a[1]), encoding="utf-8", errors="replace").read()
+    else: text = sys.stdin.read()
+    hits = find(text)
+    if hits: sys.exit(f"names someone on the team: {', '.join(hits)}. {ADVICE}")
+    print("ok: no team names")
+elif cmd == "who": print(", ".join(sorted(set(people().values()))))
+elif cmd == "real":
+    if len(a) == 1:
+        for x in reals(): print(f'{x.get("words")}\t{x.get("why")}\t{x.get("by", "")}\t{x.get("at", "")}')
+        sys.exit()
+    why = a[a.index("--why") + 1] if "--why" in a and a.index("--why") + 1 < len(a) else ""
+    words = a[1].strip()
+    if not why.strip(): sys.exit('--why is required: who this real person is, e.g. --why "contact at the client"')
+    if len(words) < 6 or " " not in words: sys.exit('register the words as they appear in the text, with something that tells the person apart: "Pablo García", "Hola Pablo", "Dr. Elena Ruiz". A bare first name would let the team be named again.')
+    r = [x for x in reals() if x.get("words") != words] + [{"words": words, "why": why.strip(), "by": os.environ.get("HERDR_NAME") or os.environ.get("USER", ""), "at": datetime.datetime.now().isoformat(timespec="minutes")}]
+    os.makedirs(os.path.dirname(REAL), exist_ok=True); json.dump(r, open(REAL, "w", encoding="utf-8"), indent=1, ensure_ascii=False); print(f'ok: "{words}" is a real person and passes the check')
+elif cmd in ("install", "status"):
+    for d in accounts():
+        f, s = settings(d)
+        if cmd == "status" or is_on(s): print(f'{"on " if is_on(s) else "OFF"} {f}'); continue
+        if os.path.exists(f): shutil.copy2(f, f + ".bak-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+        s.setdefault("hooks", {}).setdefault("PreToolUse", []).append(ENTRY)
+        json.dump(s, open(f, "w", encoding="utf-8"), indent=2, ensure_ascii=False); print(f"on  {f} (sessions started from now on check names; open ones need a restart)")
+else: print(__doc__); sys.exit(1)

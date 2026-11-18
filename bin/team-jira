@@ -46,6 +46,13 @@ def _labels(ls):
 if c == "comment" and len(a) > 2: _clean(a[2])
 if c == "create" and len(a) > 5: _labels(a[5].split(","))
 if c == "label": _labels(a[2:])
+# Nothing in Jira names the team (team-names keeps the list of names).
+def _names(*texts):
+    try: r = subprocess.run([os.path.expanduser("~/.local/bin/team-names"), "check", "--text", "\n".join(t for t in texts if t)], capture_output=True, text=True)
+    except Exception: return
+    if r.returncode == 1: sys.exit("refused: " + r.stderr.strip())
+if c == "comment" and len(a) > 2: _names(a[2])
+if c == "create" and len(a) > 3: _names(*a[3:5])
 if c == "search":
     want = int(a[2]) if len(a)>2 else 50; got = 0; tok = None   # Jira gives at most 100 per page: ask for the next ones
     while got < want:

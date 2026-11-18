@@ -52,8 +52,9 @@ about 15 minutes. Everything else is installed during setup.
 
 Apps, tools, panels and skills are replaced. Your team folders (people, protocols, memory, requests) are never
 overwritten; when the repo has a newer protocol it is left next to yours as `PROTOCOL.md.new`.
-One section is the exception: "Commands for the owner's terminal" in each protocol is brought up to date (your file
-as it was is kept as a `.bak`), so agents in an existing office also hand over commands as Run buttons.
+Two sections are the exception and are brought up to date in each protocol (your file as it was is kept as a
+`.bak`): "Commands for the owner's terminal", so agents in an existing office also hand over commands as Run
+buttons, and "Names outside the office". The update also turns on the check on team names (below).
 
 ## Connecting two computers as buildings
 
@@ -133,4 +134,10 @@ calls with the sign-in the Google Workspace connector already holds (it needs th
 - Another building reaches a floor only through an ssh tunnel to its guest listener (127.0.0.1). A visitor sees the
   room and can write to the floor's lead, nothing else; agents of two buildings talk only after both owners connect them.
 - Agents never merge, deploy, change production, or send messages in your name. The business floor makes drafts.
+- Nothing that leaves the office names the team. What agents write outside (commits, pull requests, Jira, email,
+  Slack, shared documents, documents in your product repositories) reads as your own work. `team-names` holds the
+  rule: the installer adds it to Claude Code as a check before each of those writes (`team-names status` shows
+  where it is on, `team-names install` turns it on), and `team-jira` and `team-draft` refuse a text that names
+  someone on the team. A real person who shares a name with an agent is registered once with `team-names real`.
+  Codex has no such check before each write: there the rule rests on the protocol and on those two tools.
 - Tokens live in the macOS Keychain or in each tool's own sign-in; they are not in this repo or in any file it writes.

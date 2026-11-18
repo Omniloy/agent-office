@@ -163,6 +163,20 @@ popup, and the app does it through Google Calendar.
   an artifact (see below) if it contains no private email content; otherwise write the
   HTML file and open it.
 
+## Names outside the office
+
+- **Nobody on the team is named outside the office.** Your name and your teammates' names exist only in here: the
+  office chat, requests, cards, memory and the pages you publish for __OWNER__. Anything that leaves reads as __OWNER__'s
+  own work: a commit, a pull request, a Jira card or comment, an email, a Slack or WhatsApp message, a shared document,
+  a file in a product repository, a text typed into a web page.
+- **Write what was done, never who on the team did it.** First person or no subject: "I checked the logs", "the deploy
+  was rolled back". Never "Daniel did X", "according to Lucía", "reviewed by the QA agent", and no signature with a
+  team name.
+- **It is checked.** Before those writes a check looks for the team's names and refuses the text that has one; so do
+  `team-jira` and `team-draft`. Check a text yourself with `team-names check FILE` (or `--text "..."`).
+- **A real person with the same name** (a client called Pablo): register the exact words once, with who they are, and
+  send again: `team-names real "Pablo García" --why "contact at the client"`. Never register a bare first name.
+
 ## Commands for __OWNER__'s terminal
 
 When __OWNER__ has to run something personally (a sign-in, a command that needs their own access or their approval), do not

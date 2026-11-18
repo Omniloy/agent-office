@@ -44,7 +44,7 @@ class Run:
     def render(self, text):
         for k, v in self.tokens.items(): text = text.replace(k, v)
         return text
-    def carry_section(self, src, dst, head):
+    def carry_section(self, src, dst, head, what="the section on commands for the owner's terminal"):
         """One section of a protocol that is otherwise kept follows the repo: how to hand the owner a command must match
         what the apps and tools do now, or every agent keeps describing commands in prose. The previous file is kept as a .bak."""
         if not (os.path.exists(src) and os.path.exists(dst)): return
@@ -60,7 +60,7 @@ class Run:
         if out == old: return
         if not self.dry:
             shutil.copy2(dst, f"{dst}.bak-{STAMP}"); open(dst, "w", encoding="utf-8").write(out)
-        self.say(f"{dst}: the section on commands for the owner's terminal was brought up to date (the file as it was: {os.path.basename(dst)}.bak-{STAMP})")
+        self.say(f"{dst}: {what} was brought up to date (the file as it was: {os.path.basename(dst)}.bak-{STAMP})")
     def put(self, src, dst, mode=None, keep_existing=False, backup=False):
         """Copy one file, filling in the placeholders when it is text. Returns True when dst changed."""
         raw = open(src, "rb").read()
@@ -127,6 +127,7 @@ class Run:
             else: self.say(f"{d}/team.json exists: kept as it is")
             for f in ("PROTOCOL.md", "HANDBOOK.md"):
                 if os.path.exists(f"{src}/{f}") and self.put(f"{src}/{f}", f"{d}/{f}", keep_existing=True): self.say(f"{d}/{f} written")
+            self.carry_section(f"{src}/PROTOCOL.md", f"{d}/PROTOCOL.md", "## Names outside the office", "the rule that nothing outside the office names the team")
             self.carry_section(f"{src}/PROTOCOL.md", f"{d}/PROTOCOL.md", "## Commands for ")
             for p in json.load(open(f"{src}/team.json"))["personas"]:
                 m = f"{d}/memory/{p['slug']}.md"
@@ -186,6 +187,13 @@ class Run:
                 r = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", f], capture_output=True, text=True)
                 if r.returncode: self.warn.append(f"{label} could not be loaded: {r.stderr.strip()[:200]}")
             self.say(f"{label} installed (starts at login{', kept alive' if keep else ''})")
+    def names(self):
+        """Nothing that leaves the office names the team: the check runs before every outgoing write in Claude Code."""
+        if "claude" not in (self.cfg.get("runtimes") or ["claude"]): self.warn.append("Codex has no check before each write: there the rule on team names rests on the protocol and on team-jira and team-draft"); return
+        if self.dry: self.say("team-names install: the check on team names would be turned on in Claude Code"); return
+        r = subprocess.run(["/usr/bin/python3", f"{BIN}/team-names", "install"], capture_output=True, text=True)
+        if r.returncode: self.warn.append(f"the check on team names could not be turned on: {r.stderr.strip()[:200]}; run `team-names install` yourself")
+        else: self.say("the check on team names is on: " + "; ".join(r.stdout.strip().splitlines()))
     def record(self):
         if self.dry: return
         os.makedirs(APPS, exist_ok=True)
@@ -205,9 +213,12 @@ def check():
     cl, cx = which("claude"), which("codex")
     line(bool(cl or cx), "an agent CLI", ", ".join(x for x in (cl and "claude", cx and "codex") if x) or "install Claude Code or Codex")
     for name in ("team-office", "biz-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
-    for t in ("team-ask", "team-card", "team-person", "team-peer", "omniloy-team", "office-restart", "team-artifact", "team-memory"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
+    for t in ("team-ask", "team-card", "team-person", "team-peer", "omniloy-team", "office-restart", "team-artifact", "team-memory", "team-names"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
     for kind, d in TEAMS.items(): line(os.path.exists(f"{d}/team.json"), f"team folder {d}")
     line(os.path.isdir(f"{HERDR}/mods/team-requests"), "Herdr panels")
+    try: on = subprocess.run(["/usr/bin/python3", f"{BIN}/team-names", "status"], capture_output=True, text=True).stdout
+    except Exception: on = ""
+    line(bool(on.strip()) and "OFF" not in on, "check on team names (nothing outside the office names the team)", "" if on.strip() and "OFF" not in on else "team-names install")
     def up(port, path="/health"):
         try: return urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=4).status == 200
         except Exception: return False
@@ -243,7 +254,7 @@ def main():
     bad = [r for r in cfg.get("runtimes") or [] if r not in ("claude", "codex")]
     if bad or not cfg.get("runtimes"): sys.exit('config: runtimes must list what is installed: ["claude"], ["codex"] or ["claude", "codex"]')
     r = Run(cfg, a.dry_run)
-    r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr()
+    r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
     if not a.no_services: r.services()
     r.record()
     for w in r.warn: print("NOTE: " + w)
