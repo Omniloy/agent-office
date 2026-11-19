@@ -372,6 +372,8 @@ export default {
   },
   exposure: 1.05,
   bloom: { strength: 0.85, radius: 0.5, threshold: 1 },
+  // the captain (Product, else Lead) sits on the command dais in the middle of the bridge (themes/index.js: centre)
+  centre: { roles: ['Product', 'Lead'], x: -1.5, z: 4.2, lift: 0.24 },
   boardStyle: { bg: '#050b16', ink: '#7dd3fc' },
   traceStyle: { bg: '#081627', ink: '#cfefff' }, // a dark glass display like the board, not an office whiteboard
 
@@ -700,7 +702,7 @@ export default {
       c.scale.setScalar(s); c.position.set(x, 0.24, z); c.rotation.y = ry; room.add(c);
       return c;
     };
-    chair(CX, CZ + 0.3, 0, true, M.red);
+    my.captainChair = chair(CX, CZ + 0.3, 0, true, M.red);
     chair(CX - 1.35, CZ + 0.55, -0.18, false, M.seat); chair(CX + 1.35, CZ + 0.55, 0.18, false, M.seat);
     for (const sx of [-1, 1]) { // helm and operations consoles, facing the captain
       const g = new THREE.Group();
@@ -1139,6 +1141,9 @@ export default {
   },
 
   // ---------------------------------------------------------------- animation (cheap: no allocation)
+  layout(k) { // the decor's empty captain's chair gives way to the centre desk when someone sits there
+    if (k.my.captainChair) k.my.captainChair.visible = !k.centre();
+  },
   tick(k, dt, t) {
     const my = k.my;
     if (my.planet) { my.planet.rotation.y += dt * 0.012; my.planet.material.uniforms.shift.value = (t * 0.0025) % 1; }

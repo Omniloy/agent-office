@@ -254,6 +254,8 @@ export default {
   },
   exposure: 0.9,
   bloom: { strength: 0.5, radius: 0.55, threshold: 1 },
+  // the director médico (Product, else Lead) works at a desk in the middle of the ward (themes/index.js: centre)
+  centre: { roles: ['Product', 'Lead'] },
   boardStyle: { bg: '#0d1c22', ink: '#5eead4' },
   traceStyle: { bg: '#fbfdfc', ink: '#0f2f2b' },
 
@@ -1021,12 +1023,12 @@ export default {
       p.lamp.position.set(0.2, 0, 0.3);
     }
     // the status light's dark stand becomes a white call-light housing with a teal band (the light itself is world.js's)
-    for (const o of g.children) {
+    for (const o of st.info ? st.info.orb.children : g.children) {
       const q = o.geometry && o.geometry.parameters;
       if (o.isMesh && q && q.radiusTop === 0.07 && q.radiusBottom === 0.09 && Math.abs(o.position.x + 1.15) < 0.01) {
         o.material = m.white;
-        const band = k.cyl(0.092, 0.092, 0.025, 0, { m: m.teal, x: o.position.x, y: o.position.y + 0.02, z: o.position.z }); band.castShadow = false; g.add(band);
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.012, 8, 24), m.chrome); ring.rotation.x = Math.PI / 2; ring.position.set(o.position.x, o.position.y + 0.11, o.position.z); g.add(ring);
+        const band = k.cyl(0.092, 0.092, 0.025, 0, { m: m.teal, x: o.position.x, y: o.position.y + 0.02, z: o.position.z }); band.castShadow = false; o.parent.add(band);
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.1, 0.012, 8, 24), m.chrome); ring.rotation.x = Math.PI / 2; ring.position.set(o.position.x, o.position.y + 0.11, o.position.z); o.parent.add(ring);
         break;
       }
     }
@@ -1190,6 +1192,9 @@ export default {
   },
 
   // ------------------------------------------------------------ animation
+  layout(k) { // the operating island in the middle gives way to the centre desk when someone sits there
+    if (k.my.island) k.my.island.visible = !k.centre();
+  },
   tick(k, dt, t) {
     const my = k.my;
     // monitors: the sweeping traces, about 25 updates a second
