@@ -74,6 +74,7 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .log .m th, #chat .log .m td { border: 1px solid var(--line, rgba(255,255,255,.18)); padding: 5px 8px; text-align: left; vertical-align: top; max-width: 250px; overflow-wrap: normal; word-break: normal; hyphens: none; }
 #chat .log .m:has(table) { max-width: 100%; align-self: stretch; }
 #chat .log .m th { background: rgba(255, 255, 255, .07); font-weight: 600; }
+#chat .log .m blockquote { margin: 6px 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--line, rgba(255,255,255,.25)); }
 #chat .log .m ul, #chat .log .m ol { margin: 4px 0; padding-left: 20px; white-space: normal; } #chat .log .m li { margin: 2px 0; }
 #chat.on { display: flex; }
 #chat header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line, rgba(255,255,255,.1)); flex: none; }
@@ -222,6 +223,11 @@ body.embed #chat { display: none !important; }`;
         let h = `<div class="tw"><table><tr>${row(L[i]).map((c) => `<th>${inline(c)}</th>`).join('')}</tr>`;
         for (i += 2; i < L.length && isRow(L[i]); i++) h += `<tr>${row(L[i]).map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`;
         i--; out.push({ html: `${h}</table></div>` }); continue;
+      }
+      const q = /^\s*&gt; ?(.*)$/; // a quote (> lines; the text is already escaped): its own lists, tables and links inside
+      if (q.test(L[i])) {
+        const inner = []; for (; i < L.length && q.test(L[i]); i++) inner.push(q.exec(L[i])[1]);
+        i--; out.push({ html: `<blockquote>${blocks(inner.join('\n').replace(/^\n+|\n+$/g, ''))}</blockquote>` }); continue;
       }
       const m = /^\s*(?:([-*•])|(\d+)[.)])\s+(.*)$/.exec(L[i]);
       if (m) {
