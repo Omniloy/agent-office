@@ -240,8 +240,9 @@ body.embed #chat { display: none !important; }`;
   const near = () => log.scrollTop + log.clientHeight >= log.scrollHeight - 80;
   function add(m, live) {
     if (m.role === 'step') { // consecutive steps fold into one quiet line
-      if (lastStep && lastStep.el.isConnected && log.lastElementChild === lastStep.el) { lastStep.n++; lastStep.el.textContent = `· ${lastStep.n} steps (${m.text})`; return; }
-      const el = document.createElement('div'); el.className = 'st'; el.textContent = `· 1 step (${m.text})`; lastStep = { el, n: 1 }; log.append(el); return;
+      const tail = [...log.children].filter((x) => !x.classList.contains('typing')).pop(); // the typing row sits last: it does not break a run of steps
+      if (lastStep && lastStep.el.isConnected && tail === lastStep.el) { lastStep.n++; if (!lastStep.tools.includes(m.text)) lastStep.tools.push(m.text); lastStep.el.textContent = `${lastStep.n} steps (${lastStep.tools.slice(0, 4).join(', ')}${lastStep.tools.length > 4 ? '…' : ''})`; return; }
+      const el = document.createElement('div'); el.className = 'st'; el.textContent = `1 step (${m.text})`; lastStep = { el, n: 1, tools: [m.text] }; log.append(el); return;
     }
     if (m.role === 'you') { const k = m.text.slice(0, 60); const i = pending.findIndex((x) => x.k === k || m.text.includes(x.k)); if (i >= 0) { pending[i].el.remove(); pending.splice(i, 1); } }
     const el = document.createElement('div'); el.className = `m ${m.role}`;
