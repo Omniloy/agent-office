@@ -130,7 +130,9 @@ async function endedLog(file, st) { // no "finished" mark: it is over when its l
     if (!lines[i]) continue;
     let o; try { o = JSON.parse(lines[i]); } catch { continue; }
     if (o.type !== 'assistant' && o.type !== 'user') continue;
-    done = o.type === 'assistant' && !!o.message && o.message.stop_reason === 'end_turn'; break;
+    const c = o.message && o.message.content, said = typeof c === 'string' ? c : Array.isArray(c) && c[0] && c[0].type === 'text' ? c[0].text : '';
+    // a closed answer, or stopped: a cancelled workflow or Esc leaves "[Request interrupted by user]" as the last word
+    done = (o.type === 'assistant' && !!o.message && o.message.stop_reason === 'end_turn') || (o.type === 'user' && /^\[Request interrupted/.test(said)); break;
   }
   endedAt.set(file, { key, done }); if (endedAt.size > 400) endedAt.delete(endedAt.keys().next().value);
   return done;
