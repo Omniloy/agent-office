@@ -120,6 +120,7 @@ function start() {
     const b = e.target.closest('button'); if (!b) return;
     const t = b.dataset.t;
     if (office().chat && office().chat.isOpen()) office().chat.close(); // the chat is a sheet like the others: one at a time
+    if (t !== 'floors' && office().floors && office().floors.hide && document.querySelector('#floors.on')) office().floors.hide(); // the building covers the room: any other tab leaves it first
     if (t === 'office') { open(null); for (const k of Object.keys(isUp)) if (isUp[k]()) shut[k](); click('#btn-home'); }
     else if (t === 'you' && !has.inbox()) { // no For you panel in this office: its list of requests comes up as the sheet
       const box = $('#requests'), on = !isUp.reqs();
