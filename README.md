@@ -81,7 +81,7 @@ Everything travels inside ssh tunnels between 127.0.0.1 ports; no new port is op
 |---|---|---|
 | `offices/team-office`, `offices/biz-office` | `~/.omniloy-office/` | The office web apps (Node, no build step) |
 | `services/artifacts` | `~/.omniloy-office/artifacts` | Local pages server (port 4340) |
-| `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `team-peer`, `omniloy-team`, `office-restart`, `team-memory` and friends |
+| `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `team-peer`, `omniloy-team`, `office-restart`, `office-up` (recover after a reboot), `team-memory` and friends |
 | `teams/dev`, `teams/biz`, `teams/admin` | `~/.omniloy-team`, `~/.omniloy-biz`, `~/.omniloy-admin` | Team definition, protocol, memory |
 | `teams/*/agents` | `~/.claude/agents/` | Each person's instructions |
 | `skills/` | `~/.claude/skills`, `~/.codex/skills` | Skills every agent gets |

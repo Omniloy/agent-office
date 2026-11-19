@@ -103,7 +103,8 @@ until step 6; everything above that should be ok.
 
 What the installer did (so you can tell the user): apps in `~/.omniloy-office`, tools in `~/.local/bin`, the three
 team folders, role instructions in `~/.claude/agents`, skills, Herdr panels and layout, and two background
-services (`com.omniloy.artifacts`, and `com.omniloy.offices` which starts the floors at login).
+services (`com.omniloy.artifacts`, and `com.omniloy.office-up` which runs `office-up` at login: it starts the floors and the watchdog, and brings back the
+people who were running when the Mac went down, each in their own previous conversation, so they pick up where they were).
 
 ## Step 5. Herdr layout
 
@@ -274,6 +275,7 @@ they differed. People who are running keep their old instructions until their ne
 | What you see | What to do |
 |---|---|
 | `office-restart` says a floor DID NOT COME BACK | Run it by hand to read the error: `cd ~/.omniloy-office/team-office && PORT=4317 node server.mjs`. Usual causes: Node older than 20, `npm install` did not run (no `node_modules`), the port is taken. |
+| After a reboot or a crash a floor is down, the watchdog stopped, or people sit at a plain shell | `office-up` (safe to run any time; `office-up --dry` shows what it would do). It runs by itself at login once Herdr answers. If a fresh shift was started after the crash, `office-up --before <time of the crash>` after stopping them resumes the conversation from before it. |
 | The office says "Herdr is not answering" | The Herdr app is closed or `hc` is not on PATH for the server. Open Herdr; check `hc ls`; `office-restart all`. |
 | Everyone is offline after `omniloy-team start` | `omniloy-team ls`. A FAILED line shows the CLI's error: not signed in, or the CLI is not on PATH inside Herdr. |
 | `team-jira` says Jira is not set up | Expected without Jira. With Jira: `jira.site` and `jira.email` in `~/.omniloy-team/team.json`, then step 7. |

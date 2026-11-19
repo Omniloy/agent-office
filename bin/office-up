@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""office-up [--dry] [--before <ISO time>] [--wait <seconds>]   bring the office back after a reboot or a crash.
+
+  1. Floors: every office server that does not answer is started (office-restart <port>, which keeps page tokens).
+  2. Watchdog: `team-watch run` is started again if it is not running (in the "watchdog" terminal).
+  3. People: everyone whose Herdr terminal is still there but fell back to a plain shell (what Herdr leaves after a
+     reboot or when the agent died) is started again IN THEIR PREVIOUS CONVERSATION (`--resume <session>`), with a
+     message that says what happened. They keep everything they knew; background workflows and subagents did not
+     survive, so they check what is on disk and redo only what is missing. Codex people get a fresh shift start.
+     People stopped on purpose (`omniloy-<team> stop`: the terminal is gone) are left alone.
+
+  --dry       print what would be done, change nothing
+  --before T  resume the newest conversation last written before T (default: now). Use it when a fresh shift
+              was started after the crash and you want the conversation from before it, e.g. --before 19:28
+  --say NAME=TEXT  add TEXT to the resume message for NAME (e.g. an instruction that was lost in the crash)
+  --wait S    wait up to S seconds for Herdr to answer first (default 0; the login job uses 600)
+Safe to run any time: what is already running is not touched. Log of the login job: ~/.omniloy-team/logs/office-up.log"""
+import json, os, sys, glob, re, subprocess, time, datetime
+HOME = os.path.expanduser("~"); BIN = f"{HOME}/.local/bin"; HC = f"{BIN}/hc"
+SHELLS = {"zsh", "bash", "sh", "fish", "login", "-zsh", "-bash"}
+NOTE = ("The Mac restarted (or your terminal stopped) and this conversation was interrupted; it has just been resumed. "
+        "Background tasks, workflows, subagents and monitors you had running did not survive. Check what you were "
+        "doing, look at what is already on disk, redo only what is missing (restart a workflow only if its outputs are "
+        "incomplete), and give __OWNER__ a short status.")
+a = sys.argv[1:]
+DRY = "--dry" in a
+def opt(k, d):
+    return a[a.index(k) + 1] if k in a and a.index(k) + 1 < len(a) else d
+if "-h" in a or "--help" in a: print(__doc__); sys.exit(0)
+WAIT = int(opt("--wait", "0"))
+SAY = dict(v.split("=", 1) for i, v in enumerate(a) if i and a[i - 1] == "--say" and "=" in v)
+b = opt("--before", "")
+if b:
+    if re.fullmatch(r"\d{1,2}:\d{2}", b): b = datetime.date.today().isoformat() + "T" + b.zfill(5)
+    BEFORE = datetime.datetime.fromisoformat(b).timestamp()
+else: BEFORE = time.time()
+def log(s): print(("would: " if DRY else "") + s, flush=True)
+def sh(*c, **k): return subprocess.run(c, capture_output=True, text=True, **k)
+
+# 1. floors (they do not need Herdr)
+st = sh("/usr/bin/python3", f"{BIN}/office-restart", "status").stdout
+for name, port in re.findall(r"^(.+?) \((\d+)\): DOWN", st, re.M):
+    log(f"floor {name} ({port}) is down: starting it")
+    if not DRY: print("  " + sh("/usr/bin/python3", f"{BIN}/office-restart", port).stdout.strip())
+
+# Herdr must answer before terminals can be started
+def terminals():
+    try: return json.loads(sh(HC, "ls", "--all", "--json").stdout)["terminals"]
+    except Exception: return None
+t0 = time.time(); T = terminals()
+while T is None and time.time() - t0 < WAIT: time.sleep(10); T = terminals()
+if T is None: print("Herdr does not answer (is the Herdr app open?): floors done, people and watchdog skipped"); sys.exit(1)
+def fin(x):  # `hc ls` leaves out when a terminal finished; `hc get` has it
+    if x.get("state") != "live" and not x.get("finished_ms"):
+        try: x["finished_ms"] = json.loads(sh(HC, "get", x["address"], "--json").stdout).get("finished_ms") or 0
+        except Exception: x["finished_ms"] = 0
+    return x
+T = [fin(x) for x in T if x.get("name")]
+R = {}  # name -> its terminal: the live one if any, else the most recently finished; local terminals only
+for x in T:
+    k = x.get("name")
+    if not k or "/" in x.get("address", ""): continue
+    o = R.get(k)
+    if o is None or (x.get("state") == "live") > (o.get("state") == "live") or (
+            x.get("state") == o.get("state") != "live" and (x.get("finished_ms") or 0) > (o.get("finished_ms") or 0)): R[k] = x
+def dead(x):
+    """Back at a plain shell (Herdr after a reboot), or the agent died on its own in the last 12 hours.
+    Not revived: stopped on purpose (hc kill / omniloy-<team> stop) or quit normally (exit 0)."""
+    if x.get("state") == "live": return (x.get("agent") or "").split("/")[-1] in SHELLS
+    if x.get("reason") == "killed" or x.get("exit_code") == 0: return False
+    return time.time() * 1000 - (x.get("finished_ms") or 0) < 12 * 3600 * 1000
+
+# 2. watchdog
+if os.path.exists(f"{BIN}/team-watch") and not re.search(r"^\S*python\S*\s+\S*team-watch run", sh("ps", "-axo", "command").stdout, re.M):
+    if "watchdog" in R and R["watchdog"].get("state") == "live" and dead(R["watchdog"]):
+        log("watchdog is not running: starting it in its terminal")
+        if not DRY: sh(HC, "send", "watchdog", "--", "team-watch run")
+    else:
+        log("watchdog is not running: starting it")
+        if not DRY: sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", "watchdog", "--cwd", f"{HOME}/.omniloy-team", "--", f"{BIN}/team-watch", "run")
+
+# 3. people
+def cfgdir(cmd):
+    """Where this runtime keeps its conversations: CLAUDE_CONFIG_DIR, also when set by a wrapper script."""
+    p = cmd if os.path.isabs(cmd) else (sh("/usr/bin/which", cmd).stdout.strip() or cmd)
+    try:
+        m = re.search(r'CLAUDE_CONFIG_DIR="?([^"\n]+)"?', open(p, errors="ignore").read(4000))
+        if m: return os.path.expandvars(m.group(1).replace("$HOME", HOME))
+    except Exception: pass
+    return os.environ.get("CLAUDE_CONFIG_DIR") or f"{HOME}/.claude"
+def last_session(cmd, cwd, slug):
+    d = f"{cfgdir(cmd)}/projects/" + re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    best = (0, None)
+    for f in glob.glob(f"{d}/*.jsonl"):
+        m = os.path.getmtime(f)
+        if m >= BEFORE or m <= best[0]: continue
+        try:
+            with open(f, errors="ignore") as h: head = "".join(h.readline() for _ in range(8))
+        except Exception: continue
+        if f'"agentSetting":"{slug}"' in head or f'"agentSetting":"{slug}-' in head: best = (m, os.path.basename(f)[:-6])
+    return best
+spaces = json.loads(sh(f"{BIN}/herdr-app", "ls").stdout or "{}").get("spaces", [])
+n = 0
+for tj in sorted(glob.glob(f"{HOME}/.omniloy-*/team.json")):
+    team = os.path.dirname(tj)
+    try: t = json.load(open(tj))
+    except Exception: continue
+    prefix = t.get("tabPrefix", "team-")
+    sp = [x["id"] for x in spaces if any(tb["id"].startswith(prefix) for tb in x.get("tabs", []))]
+    for p in t.get("personas", []):
+        name = p.get("herdrName"); x = R.get(name)
+        if not name or not x or not dead(x): continue
+        rt = t["runtimes"].get(p.get("runtime"))
+        if not rt: log(f"{name}: unknown runtime {p.get('runtime')}, skipped"); continue
+        mk = lambda r: [s.replace("{slug}", p["slug"]).replace("{teamDir}", team) for s in r["argv"]]
+        argv = mk(rt); when, sid, rk = 0, None, p.get("runtime")
+        if not rt.get("promptFromFile"):  # newest conversation on any Claude account; resume it on the account that holds it
+            for k, r in sorted(t["runtimes"].items(), key=lambda kv: kv[0] != p.get("runtime")):
+                if r.get("promptFromFile"): continue
+                w, i = last_session(mk(r)[0], team, p["slug"])
+                if i and w > when: when, sid, rk, argv = w, i, k, mk(r)
+        if sid:
+            argv += ["--resume", sid, NOTE + ("\n\n" + SAY[name] if name in SAY else "")]
+            how = f"resumed conversation {sid[:8]} from {datetime.datetime.fromtimestamp(when):%Y-%m-%d %H:%M}" + (f" on {rk}" if rk != p.get("runtime") else "")
+        else:
+            kick = p.get("kickoff") or (f"Start your shift: read {team.replace(HOME, '~')}/PROTOCOL.md, team.json and your memory file, "
+                                        "run your Jira sweep, and give __OWNER__ a short status. Don't create or change any Jira tickets or code until __OWNER__ gives you a task.")
+            if rt.get("promptFromFile"):
+                body = open(f"{HOME}/.claude/agents/{p['slug']}.md").read().split("---", 2)[2].strip()
+                kick = body + "\n\n" + kick
+            argv.append(kick); how = "fresh shift start (no earlier conversation found)"
+        log(f"{name} ({p.get('name')}): {how}")
+        n += 1
+        if DRY: continue
+        sh(HC, "kill", name); time.sleep(0.5)
+        labels = sum([["--label", l] for l in ([f"herdr.space={sp[0]}"] if sp else []) +
+                      [f"herdr.tab={prefix}{name}", f"team.persona={p['slug']}", f"team.runtime={rk}"]], [])
+        r = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", team, *labels, "--", *argv)
+        if r.returncode: print(f"  FAILED: {r.stderr.strip()[:200]}"); continue
+        if p.get("tabName"):
+            time.sleep(1.5); sh(f"{BIN}/herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": p["tabName"]}))
+print(f"office-up: {n} {'would be ' if DRY else ''}restarted; everything else was already running")
