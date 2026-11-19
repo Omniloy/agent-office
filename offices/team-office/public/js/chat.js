@@ -57,6 +57,14 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .menu button:active { background: rgba(255, 255, 255, .08); }
 #chat .need { display: none; flex: none; margin: 6px 10px 0; padding: 9px 12px; border-radius: 11px; border: 0; background: var(--needs, #fbbf24); color: #201600; font: 600 14px var(--sans, system-ui, sans-serif); text-align: left; }
 #chat .need.on { display: block; }
+/* the terminal is asking something (a permission): its question and options, answered from here */
+#chat .tq { display: none; flex: none; margin: 8px 10px 0; padding: 12px; border-radius: 13px; border: 1px solid var(--needs, #fbbf24); background: rgba(251, 191, 36, .08); max-height: 55%; overflow-y: auto; }
+#chat .tq.on { display: block; } #chat.sec .tq, #chat.art .tq, #chat.wkl .tq, #chat.wkv .tq, #chat.ro .tq { display: none; }
+#chat .tq b { display: block; font: 600 14px var(--sans, system-ui, sans-serif); color: var(--needs, #fbbf24); }
+#chat .tq code { display: block; margin: 6px 0; padding: 6px 8px; border-radius: 7px; background: rgba(0, 0, 0, .3); font: 12px/1.45 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+#chat .tq p { margin: 4px 0 8px; font-size: 14px; line-height: 1.4; }
+#chat .tq button { display: flex; gap: 8px; width: 100%; min-height: 40px; margin-top: 6px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line, rgba(255,255,255,.2)); background: rgba(255, 255, 255, .05); color: inherit; font: 500 14px/1.35 var(--sans, system-ui, sans-serif); text-align: left; cursor: pointer; }
+#chat .tq button:hover { background: rgba(255, 255, 255, .11); } #chat .tq button i { font-style: normal; color: var(--muted, #8d97b0); flex: none; } #chat .tq.busy button { opacity: .5; pointer-events: none; }
 #chat .detail { display: none; flex: 1; min-height: 0; flex-direction: column; }
 #chat.sec .detail { display: flex; } #chat.sec .log, #chat.sec .need { display: none; }
 #chat .detail #asks { flex: none; } #chat .detail .pbody { flex: 1; min-height: 0; }
@@ -178,7 +186,7 @@ body.embed #chat { display: none !important; }`;
   box.id = 'chat';
   box.innerHTML = `<header><button type="button" class="back" aria-label="Back">‹</button><div class="av"></div><div class="who"><b class="nm"></b><small></small></div><button type="button" class="stop" title="Stop what they are doing">Stop</button><button type="button" class="arts none" aria-label="Their artifacts" title="Pages they have published"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z"/><path d="M14 3.5V8h4M10 12.5h5M10 16h5"/></svg><i></i></button><button type="button" class="dots" aria-label="More about them">⋯</button><button type="button" class="x" aria-label="Close">✕</button></header>
 <div class="menu"><button type="button" class="chat" data-tab="">Chat</button><button type="button" data-tab="overview">Overview</button><button type="button" data-tab="activity">Activity</button><button type="button" data-tab="terminal">Live screen</button><button type="button" data-tab="notes">Notes</button></div>
-<button type="button" class="need">Needs your answer ›</button>
+<button type="button" class="need">Needs your answer ›</button><div class="tq"></div>
 <button type="button" class="wkhead"></button><div class="log"></div><div class="wklist"></div><div class="detail"></div><div class="artview"></div><button type="button" class="wkbar"></button><div class="err"></div>
 <form><textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea><button type="submit" class="go" title="Send"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></form>`;
   document.body.append(box);
@@ -240,7 +248,7 @@ body.embed #chat { display: none !important; }`;
   let wk = '', wkl = false, workers = [], doing = ''; // the helper whose log is showing ('' = the person), whether their list is up, and who they are
   const SEC = { overview: 'Overview', activity: 'Activity', terminal: 'Live screen', notes: 'Notes', artifacts: 'Artifacts' }, holder = $('.detail', box), artsB = $('.arts', box), artView = $('.artview', box);
   let arts = [], asking = '';
-  const menu = $('.menu', box), need = $('.need', box), panel = $('#panel'), root = document.documentElement;
+  const menu = $('.menu', box), need = $('.need', box), tq = $('.tq', box), panel = $('#panel'), root = document.documentElement;
   const qs = () => (target ? `&name=${encodeURIComponent(target)}` : '') + (wk ? `&worker=${encodeURIComponent(wk)}` : '');
   const near = () => log.scrollTop + log.clientHeight >= log.scrollHeight - 80;
   function add(m, live) {
@@ -284,6 +292,11 @@ body.embed #chat { display: none !important; }`;
         }
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
+        { const m = wk ? null : r.prompt || null, sig = m ? m.sig : ''; // the terminal is waiting on a menu: show it here
+          if (tq.dataset.sig !== sig) { tq.dataset.sig = sig; tq.classList.remove('busy'); tq.textContent = '';
+            if (m) { const el = (t, s) => { if (!s) return; const e = document.createElement(t); e.textContent = s; tq.append(e); }; el('b', m.title || 'Their terminal is asking'); el('code', m.detail); el('p', m.question);
+              for (const o of m.options) { const bt = document.createElement('button'); bt.type = 'button'; bt.dataset.n = o.n; const i = document.createElement('i'); i.textContent = `${o.n}.`; bt.append(i, document.createTextNode(o.text)); tq.append(bt); } } }
+          tq.classList.toggle('on', !!m); }
         { let last = null; const fin = new Set(); for (const el of log.children) { if (el.classList.contains('you') || el.classList.contains('peer')) { if (last) fin.add(last); last = null; } else if (el.classList.contains('them') && !el.classList.contains('scr')) last = el; } if (last && !r.working) fin.add(last); for (const el of log.querySelectorAll('.m.them')) el.classList.toggle('fin', fin.has(el)); } // the answer that closes each turn stands out; what they said on the way there is quieter
         status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : r.person.role; sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
         need.classList.toggle('on', !!target && !!$('#asks.show')); // they asked something: the question and its answers are in Overview
@@ -378,6 +391,8 @@ body.embed #chat { display: none !important; }`;
   $('.dots', box).onclick = () => menu.classList.toggle('on');
   menu.onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) section(b.dataset.tab); };
   need.onclick = () => section('overview');
+  tq.onclick = async (e) => { const bt = e.target.closest('button[data-n]'); if (!bt || tq.classList.contains('busy')) return; tq.classList.add('busy'); err.textContent = '';
+    try { await api('/api/chat/prompt', { name: target, n: Number(bt.dataset.n), sig: tq.dataset.sig }); } catch (x) { err.textContent = x.message || 'Could not answer.'; tq.classList.remove('busy'); } };
   artsB.onclick = () => section(sec === 'artifacts' ? '' : 'artifacts');
 
   // ---------------------------------------------------------------- artifacts: the pages people publish with `team-artifact`
