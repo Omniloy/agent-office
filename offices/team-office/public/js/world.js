@@ -1047,7 +1047,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   const MINI_SPOTS = [ // [on what, x, y, z, turn]
     ['head', 0.03, 0.33, 0.04, 0], ['upper', 0.41, 0.74, 0, 0.5], ['upper', -0.41, 0.74, 0, -0.5],
     ['desk', -0.95, 1.225, DESK_Z + 0.2, 0.3], ['desk', 0.75, 1.2, DESK_Z - 0.2, -0.4], ['desk', 0.22, 1.56, DESK_Z - 0.1, 0],
-    ['desk', -0.4, 1.045, DESK_Z + 0.55, 0.2], ['desk', 0.5, 1.045, DESK_Z + 0.5, -0.2], ['desk', 1.3, 1.045, DESK_Z + 0.2, -0.7], ['desk', 1.08, 1.3, DESK_Z - 0.5, -0.3],
+    ['desk', -0.4, 1.045, DESK_Z + 0.55, 0.2], ['tray', 0.42, 1.076, DESK_Z + 0.38, -0.2], ['desk', 1.3, 1.045, DESK_Z + 0.2, -0.7], ['desk', 1.08, 1.3, DESK_Z - 0.5, -0.3],
   ];
   function buildMini(st) {
     const a = st.agent, lk = a.lookSlug || a.slug, look = LOOKS[lk] || FALLBACK_LOOKS[(hashOf(lk) + (st.idx || 0)) % FALLBACK_LOOKS.length];
@@ -1069,6 +1069,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       if (m.gone && m.k < 0.03) { if (m.g.parent) m.g.parent.remove(m.g); st.minis.delete(id); continue; }
       const w = m.done ? 0 : 1, s = Math.sin(t * 5 + m.ph);
       m.g.scale.setScalar(Math.max(0.001, 0.27 * m.k));
+      if (m.tray) { const n = st.stack ? st.stack.filter((c) => c.visible).length : 0; m.y += ((n ? 1.125 + (n - 1) * 0.054 : 1.076) - m.y) * 0.2; } // on the in-tray: stands on top of the pile, however tall it is
       m.g.position.y = m.y + w * Math.abs(s) * 0.07;
       m.g.rotation.y = m.turn + w * Math.sin(t * 1.7 + m.ph) * 0.5;
       m.g.rotation.z = w * s * 0.08;
@@ -1632,7 +1633,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
             const used = new Set([...minis.values()].map((x) => x.spot)), free = MINI_SPOTS.map((_, i) => i).filter((i) => !used.has(i));
             if (!free.length) continue;
             const spot = free[Math.floor(Math.random() * free.length)], [on, x, y, z, turn] = MINI_SPOTS[spot];
-            try { m = { ...buildMini(st), spot, y, turn, k: 0, ph: Math.random() * 6 }; } catch (e) { console.warn('mini', e); continue; }
+            try { m = { ...buildMini(st), spot, y, turn, tray: on === 'tray', k: 0, ph: Math.random() * 6 }; } catch (e) { console.warn('mini', e); continue; }
             m.g.position.set(x, y, z); m.g.rotation.y = turn;
             (on === 'head' ? st.ch.head : on === 'upper' ? st.ch.upper : st.group).add(m.g);
             minis.set(w.id, m);
