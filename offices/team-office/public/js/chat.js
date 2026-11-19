@@ -91,7 +91,8 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .log .m.them a:not(.artlink), #chat .log .m.peer a:not(.artlink) { color: #9cc2ff; font-weight: 600; } #chat .log .m.them a:not(.artlink):hover { color: #c7dcff; }
 #chat .log .m a.artlink { text-decoration: none; }
 #chat .log .st { flex: none; align-self: flex-start; font-size: 12px; color: var(--muted, #8d97b0); padding: 0 4px; }
-#chat .log .typing { flex: none; align-self: flex-start; display: none; gap: 4px; padding: 10px 12px; }
+#chat .log .typing { flex: none; align-self: flex-start; display: none; align-items: flex-start; gap: 9px; padding: 6px 6px; max-width: 100%; box-sizing: border-box; }
+#chat .log .typing .dd { flex: none; display: flex; gap: 4px; padding-top: 6px; }
 #chat.working .log .typing { display: flex; }
 #chat .log .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted, #8d97b0); animation: chat-dot 1.1s ease-in-out infinite; }
 #chat .log .typing i:nth-child(2) { animation-delay: .15s; } #chat .log .typing i:nth-child(3) { animation-delay: .3s; }
@@ -130,8 +131,8 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 .artbadge { pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px 2px 5px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .22); background: #f5f1e6; color: #2a2620; font: 700 12px system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
 .artbadge svg { width: 13px; height: 13px; }
 .artn { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; font: 600 11px system-ui, sans-serif; font-style: normal; color: var(--muted, #98a0b5); vertical-align: middle; } .artn svg { width: 12px; height: 12px; }
-#chat .log .now { align-self: flex-start; flex: none; box-sizing: border-box; line-height: 1.4; display: none; font-size: 12.5px; color: #a7f3d0; padding: 4px 10px; border: 1px solid rgba(52, 211, 153, .45); border-radius: 10px; background: rgba(52, 211, 153, .08); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#chat.working .log .now:not(:empty) { display: block; }
+#chat .log .typing .dng { min-width: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted, #8d97b0); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+#chat .log .typing .dng:empty { display: none; }
 #chat .wkbar { display: none; flex: none; align-items: center; gap: 9px; margin: 0 10px 8px; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--line, rgba(255,255,255,.14)); background: rgba(255, 255, 255, .05); color: inherit; font: 600 13px var(--sans, system-ui, sans-serif); text-align: left; cursor: pointer; }
 #chat .wkbar.on { display: flex; } #chat.sec .wkbar, #chat.art .wkbar, #chat.wkv .wkbar, #chat.wkl .wkbar { display: none; }
 #chat.wkv header .stop { display: none; } /* Stop is for the person, not for one helper */
@@ -244,11 +245,11 @@ body.embed #chat { display: none !important; }`;
       if (r) {
         const stick = near(), fresh = !who || r.reset || r.file !== file;
         if (wk && r.gone) return setWorker('', workers.length > 1); // that helper left the list
-        if (fresh) { log.innerHTML = '<div class="now"></div><div class="typing"><i></i><i></i><i></i></div>'; lastStep = null; }
+        if (fresh) { log.innerHTML = '<div class="typing"><span class="dd"><i></i><i></i><i></i></span><span class="dng"></span></div>'; lastStep = null; }
         pending = pending.filter((x) => Date.now() - x.t < 300_000); // never found in the log: it stops following the bottom
         who = r.person.herdrName; file = r.file; pos = r.pos;
         nm.textContent = r.person.name; av.style.background = r.person.color; av.textContent = r.person.name.slice(0, 1);
-        const typing = $('.typing', log), nowEl = $('.now', log);
+        const typing = $('.typing', log), nowEl = $('.dng', log);
         for (const m of r.messages) { add(m, !fresh); }
         workers = r.workers || []; box.style.setProperty('--wc', r.person.color); paintWorkers();
         if (r.screen !== undefined) { // no session log to read: show the screen as it is
@@ -259,7 +260,7 @@ body.embed #chat { display: none !important; }`;
         if (nowEl) { // what they are doing right now: the tool in use, or the line the room shows over their head
           if (fresh) doing = ''; if ('now' in r) doing = r.now || '';
           const ag = wk ? null : (office().agents ? office().agents() : []).find((x) => x.herdrName === who), said = (ag && ag.nowDoing) || '', line = !r.working ? '' : said && doing.includes(said.replace(/…$/, '').slice(0, 30)) ? doing : [said, doing].filter(Boolean).join(' · ');
-          if (nowEl.textContent !== line) nowEl.textContent = line; log.append(nowEl);
+          if (nowEl.textContent !== line) nowEl.textContent = line;
         }
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
