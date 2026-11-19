@@ -2277,6 +2277,8 @@ export default {
     // forget animated parts of desks that left the room
     const inScene = (o) => { while (o) { if (o === k.scene) return true; o = o.parent; } return false; };
     if (my.spin) my.spin = my.spin.filter(([o]) => inScene(o));
+    if (my.lamps) my.lamps = my.lamps.filter(([l]) => inScene(l)); // the centre desk's lamp goes with its desk
+    if (my.tall) for (const s of Object.keys(my.tall)) if (!inScene(my.tall[s])) delete my.tall[s];
   },
   tick(k, dt, t) {
     const my = k.my;

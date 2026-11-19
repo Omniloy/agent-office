@@ -660,6 +660,7 @@ const CLOCK = { x: 12.05, z: -1.1 }; // the launch countdown clock standing on t
 const HOLO = { x: 4.7, z: 6.3 };
 const CX = -0.9, centreZ = (rows) => (rows === 1 ? 2.1 : 5.6); // the command dais (desk centre)
 const LIFT = 0.26;
+const EMPTY_FOOT = { x0: -2.35, x1: 2.35, z0: -2.95, z1: 3.1 }; // the command dais's footprint round its desk centre (with or without a captain)
 const DRONE_WP = [[-5.6, 3.4], [6.4, 3.2], [-5.2, 7.4], [2.6, 7.6], [6.6, 1.2], [-6.2, 1.6]]; // where the maintenance drone heads next
 // which station a role gets (the centre desk is always the captain's)
 function kindOf(role) {
@@ -703,7 +704,7 @@ export default {
   bloom: { strength: 0.9, radius: 0.55, threshold: 1 },
   // the captain (Product, else Lead) sits on the command dais in the middle of the bridge (themes/index.js: centre)
   // foot covers the dais and the helm bank in front of it (part of the same station: it moves with the captain)
-  centre: { roles: ['Product', 'Lead'], x: CX, z: centreZ, lift: LIFT, foot: { x0: -2.35, x1: 2.35, z0: -2.95, z1: 3.1 }, side: 2.75 },
+  centre: { roles: ['Product', 'Lead'], x: CX, z: centreZ, lift: LIFT, foot: EMPTY_FOOT, side: 2.75 },
   spots: { coffee: { x: CAN.x + Math.sin(CAN.yaw) * 0.45, z: CAN.z + Math.cos(CAN.yaw) * 0.45, yaw: CAN.yaw } },
   boardStyle: { bg: '#050b16', ink: '#7dd3fc' },
   traceStyle: { bg: '#081627', ink: '#cfefff' }, // a dark glass display like the board, not an office whiteboard
@@ -1629,7 +1630,7 @@ export default {
         P.box(2.86, 0.05, 0.012, M.hazard, 0, ty, fz);
         P.pl(0.5, 0.16, signMat(k, 'TEMPORAL', '#fbbf24'), 1.13, ty + 0.16, fz + 0.004);
       }
-    } finally { P.flush(g); }
+    } finally { pickBox(P, p, st.centre); P.flush(g); }
   },
 
   plate(ctx, p) {
@@ -1743,10 +1744,14 @@ export default {
   // ---------------------------------------------------------------- after the desks move
   layout(k) {
     const my = k.my, c = k.centre();
-    const rows = k.frontZ() > k.C.AISLE_Z + 1 ? 2 : 1, cx = c ? c.x : CX, cz = c ? c.z : centreZ(rows);
-    if (my.emptyDais) { // nobody at the centre: the empty command dais stands there instead
-      my.emptyDais.visible = !c;
-      if (!c) my.emptyDais.position.set(CX, LIFT, centreZ(rows) - DZ);
+    const nRows = Math.round((k.frontZ() - k.C.AISLE_Z) / k.C.ROW_D) + 1, rows = nRows > 1 ? 2 : 1;
+    if (my.emptyDais) { // nobody at the centre: the empty command dais stands there instead (not when a third row of
+      // desks, a big team without a Product or Lead, takes that floor), and people walk round it as round a captain's
+      const show = !c && nRows <= 2, ez = centreZ(rows), f = EMPTY_FOOT;
+      my.emptyDais.visible = show;
+      if (show) my.emptyDais.position.set(CX, LIFT, ez - DZ);
+      if (!my.emptyBlock) my.emptyBlock = k.block();
+      if (my.emptyBlock) { if (show) my.emptyBlock.set(CX + f.x0, ez + f.z0, CX + f.x1, ez + f.z1); else my.emptyBlock.set(); }
     }
     my.linesKey = ''; my.flAt = -9;
   },
@@ -1869,7 +1874,7 @@ export default {
     if (d) {
       d.position.x += Math.sin(my.droneDir) * dt * 0.8; d.position.z += Math.cos(my.droneDir) * dt * 0.8;
       const rz = Math.min(4.5, k.frontZ() + 1.5);
-      if (!(t - (my.dcAt || -9) < 2)) { my.dcAt = t; const c = k.centre(); my.dcx = c ? c.x : CX; my.dcz = c ? c.z - 0.7 : (my.emptyDais ? my.emptyDais.position.z + DZ - 0.7 : 99); }
+      if (!(t - (my.dcAt || -9) < 2)) { my.dcAt = t; const c = k.centre(); my.dcx = c ? c.x : CX; my.dcz = c ? c.z - 0.7 : (my.emptyDais && my.emptyDais.visible ? my.emptyDais.position.z + DZ - 0.7 : 99); }
       let bad = false;
       for (const [ox, oz, orr] of [[HOLO.x, HOLO.z, 2.1], [my.dcx, my.dcz, 3.4]]) { // keep off the holo table and the dais
         const hx = d.position.x - ox, hz = d.position.z - oz;
@@ -1952,6 +1957,28 @@ function consoleBase(k, P, own, kind, o = {}) {
   P.box(2.62, 0.016, 0.018, own.glow, 0, 0.14, DZ + 0.66);
   badge(k, P, kind, -1.13, 0.6, DZ + 0.652);
   pool(k, P, own);
+}
+// the office desk's top and front stay the station's click targets (hidden): the top becomes a box round the
+// console's body (its parts between knee and hand height, clipped to the desk's own patch of floor), the front
+// shrinks into it, so a click anywhere on the visible console selects its owner and nothing else does
+const _pb = new THREE.Box3(), _pp = new THREE.Box3();
+function pickBox(P, p, centre) {
+  const [top, front] = p.desk || [];
+  if (!top) return;
+  _pb.makeEmpty();
+  for (const list of P.b.values()) for (const geo of list) {
+    if (!geo.boundingBox) geo.computeBoundingBox();
+    const b = geo.boundingBox;
+    if (b.max.y < 0.35 || b.min.y > 1.2) continue; // floor pools and plates, and tall pieces overhead
+    _pp.copy(b); _pb.union(_pp);
+  }
+  if (_pb.isEmpty()) return;
+  const lim = centre ? [-2.3, 2.3, DZ - 1.9, DZ + 1.6] : [-2.2, 2.2, DZ - 1.7, DZ + 1.0];
+  const x0 = Math.max(lim[0], _pb.min.x), x1 = Math.min(lim[1], _pb.max.x), z0 = Math.max(lim[2], _pb.min.z), z1 = Math.min(lim[3], _pb.max.z);
+  const y0 = Math.max(0, _pb.min.y), y1 = Math.min(1.3, _pb.max.y);
+  if (!(x1 > x0 && z1 > z0 && y1 > y0)) return;
+  top.scale.set((x1 - x0) / 3.0, (y1 - y0) / 0.08, (z1 - z0) / 1.5); top.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  if (front) { front.scale.setScalar(0.01); front.position.copy(top.position); }
 }
 // a soft pool of the post's colour on the deck round the station (brighter on the night watch)
 function pool(k, P, own, r = 1.9, z = DZ - 0.25) {

@@ -104,7 +104,8 @@
 //   frontZ()            z of the front aisle: the open floor is between it and z 9
 //   block(x0, z0, x1, z1) an area of the floor (world x/z rectangle) people walk around, for solid decor in the open
 //                       floor (a rocket's base, a counter, a dais). Never on the desk rows, the aisles in front of
-//                       them, the spots below, or beside the walls (people go round its corners).
+//                       them, the spots below, or beside the walls (people go round its corners). Returns a handle:
+//                       h.set(x0, z0, x1, z1) moves the area (decor that follows the desks), h.set() removes it.
 //   spots               places people walk to; keep them free: board (in front of the left wall board), white
 //                       (in front of the whiteboard), coffee { x, z, yaw } (idle break spot)
 // Coffee break (keep it: the floor's life): every 70 to 190 s an idle person who is at their desk, not selected and

@@ -221,7 +221,15 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     desks: () => { try { return [...stations.values()].map((s) => (s.centre ? { slug: s.slug, agent: s.agent, ...xz(deskAt(s)), row: -1, centre: true, yaw: s.yaw, lift: s.lift } : { slug: s.slug, agent: s.agent, x: s.x, z: DESK_Z + s.z, row: s.row })); } catch { return []; } },
     frontZ: () => { try { return zA(lastAisle()); } catch { return AISLE_Z; } },
     centre: () => { try { const s = [...stations.values()].find((x) => x.centre); return s ? { slug: s.slug, agent: s.agent, ...xz(deskAt(s)), yaw: s.yaw, lift: s.lift } : null; } catch { return null; } },
-    block: (x0, z0, x1, z1) => { if ([x0, z0, x1, z1].every(Number.isFinite)) { blocks.push(rect(x0, z0, x1, z1)); rebuildObs(); } },
+    // k.block(x0, z0, x1, z1) returns a handle: h.set(x0, z0, x1, z1) moves the area, h.set() takes it away
+    block: (x0, z0, x1, z1) => {
+      const h = { r: null, set(a, b, c, d) {
+        const i = blocks.indexOf(h.r); if (i >= 0) blocks.splice(i, 1);
+        h.r = [a, b, c, d].every(Number.isFinite) ? rect(a, b, c, d) : null; if (h.r) blocks.push(h.r);
+        rebuildObs(); return h;
+      } };
+      return h.set(x0, z0, x1, z1);
+    },
     spots: { board: { x: LEFT_X + 1.5, z: -2.1 }, white: { x: 8.54, z: 6.58 }, coffee: { x: COFFEE.x, z: COFFEE.z, yaw: COFFEE.yaw } },
   };
   const xz = (v) => ({ x: v.x, z: v.z });
@@ -773,12 +781,15 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     }
     return way ? way.map((c) => V(c[0], c[1])) : [];
   }
-  // A place to stand, moved out of any blocked area it falls in.
+  // A place to stand, moved out of any blocked area it falls in: to its nearest edge that is still on the floor (a
+  // desk near the front wall is left by a side, never through the wall).
+  const onFloor = (x, z) => x > LEFT_X + 0.45 && x < 12.6 && z > BACK_Z + 0.45 && z < 8.6;
   function freeSpot(v) {
     for (const o of obs) {
       const e = o.ex;
       if (!inR(v.x, v.z, e)) continue;
-      const m = [[v.x - e.x0, e.x0 - 0.06, null], [e.x1 - v.x, e.x1 + 0.06, null], [v.z - e.z0, null, e.z0 - 0.06], [e.z1 - v.z, null, e.z1 + 0.06]].sort((p, q) => p[0] - q[0])[0];
+      const ms = [[v.x - e.x0, e.x0 - 0.06, null], [e.x1 - v.x, e.x1 + 0.06, null], [v.z - e.z0, null, e.z0 - 0.06], [e.z1 - v.z, null, e.z1 + 0.06]].sort((p, q) => p[0] - q[0]);
+      const m = ms.find((c) => onFloor(c[1] ?? v.x, c[2] ?? v.z)) || ms[0];
       if (m[1] != null) v.x = m[1]; else v.z = m[2];
     }
     return v;
@@ -793,6 +804,9 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       if (depth >= 4) return;
       const w = detour(st.ch.root.position, s.to);
       if (!w.length) return;
+      // the rest of the way, from the last corner on, is checked again when it starts: another area may lie on it
+      // (the walk round goes one level deeper each time, so it always ends)
+      s.ck = false; s.dd = depth + 1;
       st.steps.unshift(...w.map((p) => ({ type: 'walk', to: p, dd: depth + 1 })));
     }
   }
@@ -924,7 +938,13 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   const seatedAt = (to) => { const p = to.ch.root.position; if (to.centre) { const s = seatOf(to); return Math.abs(p.z - s.z) < 0.5 && Math.abs(p.x - s.x) < 0.5; } return Math.abs(p.z - (SEAT_Z + (to.z || 0))) < 0.5 && Math.abs(p.x - to.x) < 0.5; };
   function talkSpot(to, n) {
     if (seatedAt(to)) {
-      if (to.centre) return freeSpot(loc(to, DESK_ROW[n % 5], AISLE_Z - 0.35 + (n >= 5 ? 0.8 : 0)));
+      if (to.centre) { // in front of the centre desk, or (when its footprint reaches the front wall) along its sides,
+        // the outer ones further back so the group does not pile up on one spot
+        const v = loc(to, DESK_ROW[n % 5], AISLE_Z - 0.35 + (n >= 5 ? 0.8 : 0)), x0 = v.x;
+        freeSpot(v);
+        if (Math.abs(v.x - x0) > 0.01) { v.z -= Math.abs(DESK_ROW[n % 5]) * 0.75; freeSpot(v); }
+        return v;
+      }
       return new THREE.Vector3(to.x + DESK_ROW[n % 5], 0, AISLE_Z + (to.z || 0) - 0.35 + (n >= 5 ? 0.8 : 0));
     }
     const p = to.ch.root.position, o = RING[n % RING.length];
