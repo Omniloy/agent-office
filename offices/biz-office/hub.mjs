@@ -109,24 +109,76 @@ async function sessionLog(t) {
   }
   return '';
 }
-async function chatLog(name, pos, known) {
+// The helpers someone has running: the sub-agents and workflow agents of their Claude Code session. Each one keeps
+// its own log next to the session's (subagents/agent-<id>.jsonl, subagents/workflows/<run>/agent-<id>.jsonl).
+const logAt = new Map(); // herdrName -> { file, at }
+async function logOf(name) {
+  const hit = logAt.get(name);
+  if (hit && Date.now() - hit.at < 20_000) return hit.file;
+  let t = {}; try { t = JSON.parse(await hcOut(['get', name, '--json'])); } catch { /* not running */ }
+  const file = t.state === 'live' ? await sessionLog(t) : '';
+  logAt.set(name, { file, at: Date.now() });
+  return file;
+}
+const endedAt = new Map(); // log -> { key, done }
+async function endedLog(file, st) { // no "finished" mark: it is over when its last word is a closed answer
+  const key = `${st.size}:${st.mtimeMs}`, hit = endedAt.get(file);
+  if (hit && hit.key === key) return hit.done;
+  const lines = (await readFrom(file, Math.max(0, st.size - 200_000)).catch(() => Buffer.alloc(0))).toString('utf8').split('\n');
+  let done = false;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i]) continue;
+    let o; try { o = JSON.parse(lines[i]); } catch { continue; }
+    if (o.type !== 'assistant' && o.type !== 'user') continue;
+    done = o.type === 'assistant' && !!o.message && o.message.stop_reason === 'end_turn'; break;
+  }
+  endedAt.set(file, { key, done }); if (endedAt.size > 400) endedAt.delete(endedAt.keys().next().value);
+  return done;
+}
+async function workersOf(file) {
+  if (!file) return [];
+  const root = path.join(file.replace(/\.jsonl$/, ''), 'subagents'), dirs = [[root, '']];
+  for (const d of await fs.readdir(path.join(root, 'workflows')).catch(() => [])) dirs.push([path.join(root, 'workflows', d), d]);
+  const out = [], now = Date.now();
+  for (const [dir, flow] of dirs) for (const n of await fs.readdir(dir).catch(() => [])) {
+    const m = /^agent-([A-Za-z0-9]+)\.jsonl$/.exec(n); if (!m) continue;
+    const f = path.join(dir, n), st = await fs.stat(f).catch(() => null);
+    if (!st || now - st.mtimeMs > 6 * 3600e3) continue;
+    const meta = (await readJson(path.join(dir, `agent-${m[1]}.meta.json`), {})) || {}, idle = now - st.mtimeMs;
+    const done = meta.finished === true || idle > 45 * 60e3 || (idle > 6000 && await endedLog(f, st));
+    if (done && idle > 10 * 60e3) continue; // finished a while ago: no longer news
+    out.push({ id: m[1], kind: flow ? 'workflow' : 'agent', label: String(meta.description || meta.agentType || 'helper').slice(0, 90), type: String(meta.workflowPhase || meta.agentType || ''), done, started: st.birthtimeMs || st.ctimeMs, ended: done ? st.mtimeMs : 0, file: f });
+  }
+  return out.sort((a, b) => a.started - b.started).slice(-30);
+}
+const publicWorkers = (list) => list.map(({ file: _file, ...w }) => w);
+const doingOf = (x) => { // what a tool call is about, in a few words
+  const i = x.input || {}, hint = i.description || (i.file_path && path.basename(String(i.file_path))) || i.pattern || i.query || i.url || i.skill || '';
+  return `${String(x.name || '').replace(/^mcp__/, '').replace(/__/g, ' · ')}${hint ? `: ${String(hint).replace(/\s+/g, ' ').slice(0, 90)}` : ''}`;
+};
+async function chatLog(name, pos, known, worker) {
   let t = {}; try { t = JSON.parse(await hcOut(['get', name, '--json'])); } catch { /* not running */ }
   const live = t.state === 'live', working = !!(t.status && t.status.state === 'working'), blocked = !!(t.status && ['blocked', 'error'].includes(t.status.state));
-  const file = live ? await sessionLog(t) : '';
+  const main = live ? await sessionLog(t) : '', helpers = await workersOf(main), side = worker ? helpers.find((x) => x.id === worker) : null, workers = publicWorkers(helpers);
+  if (worker && !side) return { file: '', pos: 0, messages: [], live, working: false, blocked: false, workers, gone: true }; // that helper is no longer listed
+  const file = side ? side.file : main;
   if (!file) { // not Claude Code (or not running): the screen is all there is
     const screen = live ? (await hcOut(['read', name, '--lines', '80'])).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[ \t]+$/gm, '').trim() : '';
-    return { file: '', pos: 0, messages: [], live, working, blocked, screen };
+    return { file: '', pos: 0, messages: [], live, working, blocked, screen, workers };
   }
   const id = path.basename(file), first = id !== known || !pos;
   const size = (await fs.stat(file)).size, from = first ? Math.max(0, size - 700_000) : Math.min(pos, size);
   const buf = await readFrom(file, from).catch(() => Buffer.alloc(0)), end = buf.lastIndexOf(10) + 1; // whole lines only
   let a = first && from ? buf.indexOf(10) + 1 : 0;
   const who = await whoIsWho(), out = [];
+  let now; // the tool they are using at this moment, when this read saw one
   for (let b; a < end && (b = buf.indexOf(10, a)) >= 0; a = b + 1) {
     let o; try { o = JSON.parse(buf.toString('utf8', a, b)); } catch { continue; }
-    if (o.isSidechain || o.isMeta || o.isCompactSummary) continue;
-    const c = o.message && o.message.content, ts = Date.parse(o.timestamp) || 0;
-    if (o.type === 'user') {
+    if ((!side && o.isSidechain) || o.isMeta || o.isCompactSummary) continue;
+    let c = o.message && o.message.content; const ts = Date.parse(o.timestamp) || 0;
+    const queued = o.type === 'attachment' && o.attachment && o.attachment.type === 'queued_command' ? o.attachment.prompt : null; // a message written while they were busy joins the turn as an attachment, not as a message
+    if (queued != null) c = queued;
+    if (o.type === 'user' || queued != null) {
       let text = typeof c === 'string' ? c : Array.isArray(c) && !c.some((x) => x.type === 'tool_result') ? c.filter((x) => x.type === 'text').map((x) => x.text).join('\n') : '';
       text = text.trim(); if (!text) continue;
       let from = '';
@@ -134,12 +186,13 @@ async function chatLog(name, pos, known) {
       if (m) { from = m[1].split(' ').pop(); text = m[2].trim(); } else if (text.startsWith('<')) continue; // reminders, commands, notifications
       const mate = from && who[from] && from !== name ? who[from] : null;
       const spoken = text.startsWith('(spoken by __OWNER__, transcribed)'); if (spoken) text = text.slice(32).trim();
-      out.push(mate ? { role: 'peer', from: mate.name, color: mate.color, text: clipLong(text), ts } : { role: 'you', text: clipLong(text), ts, spoken });
+      if (side) out.push({ role: 'peer', from: 'Brief', color: '#9aa4bd', text: clipLong(text), ts }); // what a helper was asked to do
+      else out.push(mate ? { role: 'peer', from: mate.name, color: mate.color, text: clipLong(text), ts } : { role: 'you', text: clipLong(text), ts, spoken });
     } else if (o.type === 'assistant' && Array.isArray(c)) {
-      for (const x of c) { if (x.type === 'text' && x.text.trim()) out.push({ role: 'them', text: clipLong(x.text.trim()), ts }); else if (x.type === 'tool_use') out.push({ role: 'step', text: String(x.name || ''), ts }); }
+      for (const x of c) { if (x.type === 'text' && x.text.trim()) { out.push({ role: 'them', text: clipLong(x.text.trim()), ts }); now = ''; } else if (x.type === 'tool_use') { out.push({ role: 'step', text: String(x.name || ''), ts }); now = doingOf(x); } }
     }
   }
-  return { file: id, pos: from + end, reset: first, messages: first ? out.slice(-60) : out, live, working, blocked };
+  return { file: id, pos: from + end, reset: first, messages: first ? out.slice(-60) : out, live, working: side ? !side.done : working, blocked: side ? false : blocked, workers, ...(now !== undefined ? { now } : {}) };
 }
 const clipLong = (s) => (s.length > 12000 ? `${s.slice(0, 12000)}\n…` : s);
 
@@ -327,6 +380,11 @@ export function createHub({ port, stuck, agents }) {
       }
       return true;
     }
+    if (p === '/api/workers') { // the helpers each person on this floor has running: the room draws them as tiny copies of the person
+      const byName = {};
+      await Promise.all(((agents ? agents() : []) || []).filter((a) => a.herdrName && a.status !== 'offline').map(async (a) => { const list = publicWorkers(await workersOf(await logOf(a.herdrName))); if (list.length) byName[a.herdrName] = list; }));
+      json(res, 200, { byName }); return true;
+    }
     if (p === '/api/chat' || p.startsWith('/api/chat/')) { // a chat with one person: someone on this floor (?name=), or the superadmin above the building (no name), the same from every floor
       const q = new URL(req.url, 'http://x').searchParams;
       let body = {};
@@ -339,7 +397,7 @@ export function createHub({ port, stuck, agents }) {
       const person = { herdrName: me.herdrName, name: String(me.name || me.herdrName).split(' ')[0], role: me.role || '', color: me.color || '#fbbf24', admin };
       const hcDo = (args) => new Promise((resolve) => execFile(path.join(HOME, '.local', 'bin', 'hc'), args, { timeout: 60_000 }, (err) => resolve(!err)));
       if (p === '/api/chat') {
-        json(res, 200, { ...(await chatLog(me.herdrName, Number(q.get('pos')) || 0, q.get('file') || '')), person });
+        json(res, 200, { ...(await chatLog(me.herdrName, Number(q.get('pos')) || 0, q.get('file') || '', String(q.get('worker') || '').replace(/[^A-Za-z0-9]/g, ''))), person });
       } else if (p === '/api/chat/status') {
         let t = {}; try { t = JSON.parse(await hcOut(['get', me.herdrName, '--json'])); } catch { /* not running */ }
         json(res, 200, { person, live: t.state === 'live', working: !!(t.status && t.status.state === 'working') });

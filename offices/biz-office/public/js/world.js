@@ -1003,7 +1003,41 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format }) {
     ch.card.visible = st.carry;
   }
 
+  // ---- helpers: each sub-agent or workflow agent someone has running is a tiny copy of them, perched somewhere on
+  // the desk or on the person (chat.js says who has how many; setWorkers below puts them in a free spot at random)
+  const MINI_SPOTS = [ // [on what, x, y, z, turn]
+    ['head', 0.03, 0.33, 0.04, 0], ['upper', 0.41, 0.74, 0, 0.5], ['upper', -0.41, 0.74, 0, -0.5],
+    ['desk', -0.95, 1.225, DESK_Z + 0.2, 0.3], ['desk', 0.75, 1.2, DESK_Z - 0.2, -0.4], ['desk', 0.22, 1.56, DESK_Z - 0.1, 0],
+    ['desk', -0.4, 1.045, DESK_Z + 0.55, 0.2], ['desk', 0.5, 1.045, DESK_Z + 0.5, -0.2], ['desk', 1.3, 1.045, DESK_Z + 0.2, -0.7], ['desk', 1.08, 1.3, DESK_Z - 0.5, -0.3],
+  ];
+  function buildMini(st) {
+    const a = st.agent, lk = a.lookSlug || a.slug, look = LOOKS[lk] || FALLBACK_LOOKS[(hashOf(lk) + (st.idx || 0)) % FALLBACK_LOOKS.length];
+    const g = new THREE.Group(), shirt = mat(a.color, { roughness: 0.9 }), skin = mat(look.skin, { roughness: 0.6 }), hair = mat(look.hair, { roughness: 0.5 }), dark = mat(0x1a1c26, { roughness: 0.4 });
+    const put = (geo, m, x, y, z) => { const me = new THREE.Mesh(geo, m); me.position.set(x, y, z); g.add(me); return me; };
+    put(new THREE.CapsuleGeometry(0.25, 0.26, 4, 10), shirt, 0, 0.38, 0).scale.set(1.15, 1, 0.84);
+    put(new THREE.SphereGeometry(0.33, 14, 10), skin, 0, 1.0, 0);
+    put(new THREE.SphereGeometry(0.355, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.56), hair, 0, 1.0, 0).rotation.x = -0.3;
+    if (look.style === 'bun') put(new THREE.SphereGeometry(0.16, 8, 6), hair, 0, 1.33, -0.18);
+    for (const sx of [-1, 1]) put(new THREE.SphereGeometry(0.048, 6, 5), dark, sx * 0.12, 1.03, 0.3);
+    const arms = [-1, 1].map((sx) => { const p = new THREE.Group(), m = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.26, 3, 6), shirt); p.position.set(sx * 0.36, 0.62, 0); m.position.y = -0.2; p.add(m); g.add(p); return p; });
+    g.scale.setScalar(0.001);
+    return { g, arms };
+  }
+  function tickMinis(st, t) {
+    if (!st.minis || !st.minis.size) return;
+    for (const [id, m] of st.minis) {
+      m.k += ((m.gone ? 0 : 1) - m.k) * 0.12;
+      if (m.gone && m.k < 0.03) { if (m.g.parent) m.g.parent.remove(m.g); st.minis.delete(id); continue; }
+      const w = m.done ? 0 : 1, s = Math.sin(t * 5 + m.ph);
+      m.g.scale.setScalar(Math.max(0.001, 0.27 * m.k));
+      m.g.position.y = m.y + w * Math.abs(s) * 0.07;
+      m.g.rotation.y = m.turn + w * Math.sin(t * 1.7 + m.ph) * 0.5;
+      m.g.rotation.z = w * s * 0.08;
+      m.arms[0].rotation.z = w ? -2.2 + Math.sin(t * 9 + m.ph) * 0.45 : -0.2; m.arms[1].rotation.z = w ? 2.2 - Math.sin(t * 9 + m.ph + 1) * 0.45 : 0.2;
+    }
+  }
   function tickStation(st, t) {
+    tickMinis(st, t);
     const needs = st.online && (st.status === 'blocked' || st.askReq > 0), eff = needs ? 'blocked' : st.status;
     const pulse = 0.5 + 0.5 * Math.sin(t * (needs ? 2.6 : 3.2) + st.seed);
     const col = new THREE.Color(STATUS_COLOR[eff]);
@@ -1524,6 +1558,25 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
   }
   return {
     setInset,
+    setWorkers(map) { // slug -> [{ id, done }]: a tiny copy of the person for each helper they have running, up to ten
+      for (const [slug, st] of stations) {
+        const list = ((map && map[slug]) || []).slice(-10), minis = st.minis || (st.minis = new Map());
+        for (const [id, m] of minis) if (!list.some((w) => w.id === id)) m.gone = true;
+        for (const w of list) {
+          let m = minis.get(w.id);
+          if (!m) {
+            const used = new Set([...minis.values()].map((x) => x.spot)), free = MINI_SPOTS.map((_, i) => i).filter((i) => !used.has(i));
+            if (!free.length) continue;
+            const spot = free[Math.floor(Math.random() * free.length)], [on, x, y, z, turn] = MINI_SPOTS[spot];
+            try { m = { ...buildMini(st), spot, y, turn, k: 0, ph: Math.random() * 6 }; } catch (e) { console.warn('mini', e); continue; }
+            m.g.position.set(x, y, z); m.g.rotation.y = turn;
+            (on === 'head' ? st.ch.head : on === 'upper' ? st.ch.upper : st.group).add(m.g);
+            minis.set(w.id, m);
+          }
+          m.done = !!w.done; m.gone = false;
+        }
+      }
+    },
     setArtifacts(counts) { // a sheet of paper standing on each desk: how many pages that person has published (chat.js)
       for (const [slug, st] of stations) {
         const n = counts[slug] || 0;

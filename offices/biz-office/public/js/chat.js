@@ -128,6 +128,27 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 .artbadge { pointer-events: auto; cursor: pointer; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px 2px 5px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .22); background: #f5f1e6; color: #2a2620; font: 700 12px system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0, 0, 0, .35); }
 .artbadge svg { width: 13px; height: 13px; }
 .artn { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; font: 600 11px system-ui, sans-serif; font-style: normal; color: var(--muted, #98a0b5); vertical-align: middle; } .artn svg { width: 12px; height: 12px; }
+#chat .log .now { align-self: flex-start; display: none; font-size: 12.5px; color: #a7f3d0; padding: 4px 10px; border: 1px solid rgba(52, 211, 153, .45); border-radius: 10px; background: rgba(52, 211, 153, .08); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chat.working .log .now:not(:empty) { display: block; }
+#chat .wkbar { display: none; flex: none; align-items: center; gap: 9px; margin: 0 10px 8px; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--line, rgba(255,255,255,.14)); background: rgba(255, 255, 255, .05); color: inherit; font: 600 13px var(--sans, system-ui, sans-serif); text-align: left; cursor: pointer; }
+#chat .wkbar.on { display: flex; } #chat.sec .wkbar, #chat.art .wkbar, #chat.wkv .wkbar, #chat.wkl .wkbar { display: none; }
+#chat.wkv header .stop { display: none; } /* Stop is for the person, not for one helper */
+#chat .wkbar:hover { background: rgba(255, 255, 255, .09); }
+#chat .wkbar .ws { display: flex; gap: 3px; align-items: flex-end; height: 16px; }
+#chat .ws i, #chat .wklist i { display: block; width: 9px; height: 13px; border-radius: 5px 5px 3px 3px; background: var(--wc, #7c9cff); flex: none; }
+#chat .ws i.w, #chat .wklist i.w { animation: wk-hop .7s ease-in-out infinite; } #chat .ws i.w:nth-child(2n) { animation-delay: .2s; } #chat .ws i.w:nth-child(3n) { animation-delay: .4s; }
+#chat .ws i.d, #chat .wklist i.d { opacity: .38; }
+@keyframes wk-hop { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+#chat .wkbar small { margin-left: auto; font-weight: 500; color: var(--muted, #9aa4bd); white-space: nowrap; }
+#chat .wkhead { display: none; flex: none; align-items: center; gap: 8px; margin: 8px 10px 0; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--line, rgba(255,255,255,.14)); background: rgba(255, 255, 255, .05); color: inherit; font: 600 13px var(--sans, system-ui, sans-serif); text-align: left; cursor: pointer; }
+#chat.wkv .wkhead, #chat.wkl .wkhead { display: flex; } #chat.sec .wkhead, #chat.art .wkhead { display: none; }
+#chat .wkhead b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #chat .wkhead small { margin-left: auto; font-weight: 500; color: var(--muted, #9aa4bd); white-space: nowrap; }
+#chat .wklist { display: none; flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px 10px 10px; }
+#chat.wkl .wklist { display: block; } #chat.wkl .log, #chat.wkl form, #chat.wkv form, #chat.wkl .need, #chat.wkv .need { display: none; } #chat.sec .wklist, #chat.art .wklist { display: none; }
+#chat .wklist button { display: flex; align-items: center; gap: 11px; width: 100%; margin: 0 0 6px; padding: 10px 12px; border-radius: 11px; border: 1px solid var(--line, rgba(255,255,255,.12)); background: rgba(255, 255, 255, .04); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+#chat .wklist button:hover { background: rgba(255, 255, 255, .09); }
+#chat .wklist span { min-width: 0; flex: 1; } #chat .wklist b { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #chat .wklist small { display: block; font-size: 12px; color: var(--muted, #9aa4bd); }
+#chat .wklist .empty { padding: 26px 10px; text-align: center; font-size: 13px; color: var(--muted, #9aa4bd); }
 body.embed #chat { display: none !important; }`;
   document.head.append(css);
 
@@ -136,7 +157,7 @@ body.embed #chat { display: none !important; }`;
   box.innerHTML = `<header><button type="button" class="back" aria-label="Back">‹</button><div class="av"></div><div class="who"><b class="nm"></b><small></small></div><button type="button" class="stop" title="Stop what they are doing">Stop</button><button type="button" class="arts none" aria-label="Their artifacts" title="Pages they have published"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z"/><path d="M14 3.5V8h4M10 12.5h5M10 16h5"/></svg><i></i></button><button type="button" class="dots" aria-label="More about them">⋯</button><button type="button" class="x" aria-label="Close">✕</button></header>
 <div class="menu"><button type="button" class="chat" data-tab="">Chat</button><button type="button" data-tab="overview">Overview</button><button type="button" data-tab="activity">Activity</button><button type="button" data-tab="terminal">Live screen</button><button type="button" data-tab="notes">Notes</button></div>
 <button type="button" class="need">Needs your answer ›</button>
-<div class="log"></div><div class="detail"></div><div class="artview"></div><div class="err"></div>
+<button type="button" class="wkhead"></button><div class="log"></div><div class="wklist"></div><div class="detail"></div><div class="artview"></div><button type="button" class="wkbar"></button><div class="err"></div>
 <form><textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea><button type="submit" class="go" title="Send"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></form>`;
   document.body.append(box);
   const log = $('.log', box), nm = $('.nm', box), sub = $('.who small', box), av = $('.av', box), ta = $('textarea', box), err = $('.err', box);
@@ -194,12 +215,13 @@ body.embed #chat { display: none !important; }`;
 
   const shots = (h) => (window.compose ? window.compose.shots(h) : h); // attached pictures show as pictures
   let who = '', file = '', pos = 0, timer = 0, open = false, run = 0, pending = [], lastStep = null, target = '', sec = '', status = '';
+  let wk = '', wkl = false, workers = [], doing = ''; // the helper whose log is showing ('' = the person), whether their list is up, and who they are
   const SEC = { overview: 'Overview', activity: 'Activity', terminal: 'Live screen', notes: 'Notes', artifacts: 'Artifacts' }, holder = $('.detail', box), artsB = $('.arts', box), artView = $('.artview', box);
   let arts = [], asking = '';
   const menu = $('.menu', box), need = $('.need', box), panel = $('#panel'), root = document.documentElement;
-  const qs = () => (target ? `&name=${encodeURIComponent(target)}` : '');
+  const qs = () => (target ? `&name=${encodeURIComponent(target)}` : '') + (wk ? `&worker=${encodeURIComponent(wk)}` : '');
   const near = () => log.scrollTop + log.clientHeight >= log.scrollHeight - 80;
-  function add(m) {
+  function add(m, live) {
     if (m.role === 'step') { // consecutive steps fold into one quiet line
       if (lastStep && lastStep.el.isConnected && log.lastElementChild === lastStep.el) { lastStep.n++; lastStep.el.textContent = `· ${lastStep.n} steps (${m.text})`; return; }
       const el = document.createElement('div'); el.className = 'st'; el.textContent = `· 1 step (${m.text})`; lastStep = { el, n: 1 }; log.append(el); return;
@@ -208,7 +230,8 @@ body.embed #chat { display: none !important; }`;
     const el = document.createElement('div'); el.className = `m ${m.role}`;
     el.innerHTML = m.role === 'peer' ? `<b style="color:${esc(m.color)}">${esc(m.from)}</b>${esc(m.text.length > 600 ? `${m.text.slice(0, 600)}…` : m.text)}` : m.role === 'them' ? rich(m.text) : `${m.spoken ? '🎙 ' : ''}${shots(esc(m.text))}`;
     log.append(el);
-    for (const x of pending) log.append(x.el); // what has not arrived yet stays last
+    if (live && m.role === 'them' && m.text.length > 40) reveal(el, m.text);
+    if (!wk) for (const x of pending) log.append(x.el); // what has not arrived yet stays last
   }
   async function poll(me) {
     if (me !== run || !open) return;
@@ -217,17 +240,25 @@ body.embed #chat { display: none !important; }`;
       try { r = await api(`/api/chat?pos=${pos}&file=${encodeURIComponent(file)}${qs()}`); } catch { /* the office is restarting */ }
       if (me !== run) return;
       if (r) {
-        const stick = near();
-        if (!who || r.reset || r.file !== file) { log.innerHTML = '<div class="typing"><i></i><i></i><i></i></div>'; lastStep = null; }
+        const stick = near(), fresh = !who || r.reset || r.file !== file;
+        if (wk && r.gone) return setWorker('', workers.length > 1); // that helper left the list
+        if (fresh) { log.innerHTML = '<div class="now"></div><div class="typing"><i></i><i></i><i></i></div>'; lastStep = null; }
+        pending = pending.filter((x) => Date.now() - x.t < 300_000); // never found in the log: it stops following the bottom
         who = r.person.herdrName; file = r.file; pos = r.pos;
         nm.textContent = r.person.name; av.style.background = r.person.color; av.textContent = r.person.name.slice(0, 1);
-        const typing = $('.typing', log);
-        for (const m of r.messages) { add(m); }
+        const typing = $('.typing', log), nowEl = $('.now', log);
+        for (const m of r.messages) { add(m, !fresh); }
+        workers = r.workers || []; box.style.setProperty('--wc', r.person.color); paintWorkers();
         if (r.screen !== undefined) { // no session log to read: show the screen as it is
           let s = $('.scr', log); if (!s) { s = document.createElement('div'); s.className = 'm them scr'; log.append(s); }
           s.textContent = r.screen || ''; if (!r.live) s.remove();
         }
         if (!r.live && !$('.note', log)) { const n = document.createElement('div'); n.className = 'note'; n.textContent = `${r.person.name} is not running in Herdr right now.${r.person.admin ? ' Start him on the computer with: omniloy-admin start' : ''}`; log.append(n); }
+        if (nowEl) { // what they are doing right now: the tool in use, or the line the room shows over their head
+          if (fresh) doing = ''; if ('now' in r) doing = r.now || '';
+          const ag = wk ? null : (office().agents ? office().agents() : []).find((x) => x.herdrName === who), said = (ag && ag.nowDoing) || '', line = !r.working ? '' : said && doing.includes(said.replace(/…$/, '').slice(0, 30)) ? doing : [said, doing].filter(Boolean).join(' · ');
+          if (nowEl.textContent !== line) nowEl.textContent = line; log.append(nowEl);
+        }
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
         status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : r.person.role; sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
@@ -235,14 +266,14 @@ body.embed #chat { display: none !important; }`;
         if (stick || r.reset) log.scrollTop = log.scrollHeight;
       }
     }
-    timer = setTimeout(() => poll(me), box.classList.contains('working') || pending.length ? 1300 : 2500);
+    timer = setTimeout(() => poll(me), box.classList.contains('working') || pending.length ? 1000 : 2500);
   }
   function show(name) {
     name = typeof name === 'string' ? name : '';
     if (name !== target || !open) menu.classList.remove('on');
     section('');
     box.dataset.who = name;
-    if (name !== target) { status = ''; target = name; who = ''; file = ''; pos = 0; pending = []; lastStep = null; log.innerHTML = ''; nm.textContent = ''; sub.textContent = ''; av.textContent = ''; av.style.background = 'transparent'; err.textContent = ''; need.classList.remove('on'); box.classList.remove('working'); }
+    if (name !== target) { wk = ''; wkl = false; workers = []; box.classList.remove('wkv', 'wkl'); paintWorkers(); status = ''; target = name; who = ''; file = ''; pos = 0; pending = []; lastStep = null; log.innerHTML = ''; nm.textContent = ''; sub.textContent = ''; av.textContent = ''; av.style.background = 'transparent'; err.textContent = ''; need.classList.remove('on'); box.classList.remove('working'); }
     box.classList.toggle('person', !!target); box.classList.toggle('admin', !target); paintArts();
     open = true; box.classList.add('on'); root.classList.add('chat-on'); root.classList.toggle('chat-person', !!target); dispatchEvent(new Event('office-chat'));
     clearTimeout(timer); poll(++run);
@@ -261,12 +292,58 @@ body.embed #chat { display: none !important; }`;
     sec = tab; box.dataset.sec = sec; asking = ''; box.classList.toggle('sec', !!sec && sec !== 'artifacts'); box.classList.toggle('art', sec === 'artifacts'); if (sec === 'artifacts') { paintArts(); loadArts(); } sub.textContent = sec ? SEC[sec] : status; if (sec) sub.classList.remove('work');
     if (!sec && open) log.scrollTop = log.scrollHeight;
   }
+  // ---------------------------------------------------------------- workers: the sub-agents and workflow agents they have running
+  // A strip above the box says how many there are (only while some are working); a tap lists them, a tap on one shows
+  // what it was asked and what it is writing, and the bar on top goes back.
+  const wkBar = $('.wkbar', box), wkHead = $('.wkhead', box), wkList = $('.wklist', box);
+  const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 90 ? `${s}s` : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)} h`; };
+  function paintWorkers() {
+    const live = workers.filter((x) => !x.done), n = workers.length, done = n - live.length;
+    wkBar.classList.toggle('on', live.length > 0);
+    const icons = workers.slice(-10).map((x) => `<i class="${x.done ? 'd' : 'w'}"></i>`).join('');
+    const bar = `<span class="ws">${icons}</span><b>${n} worker${n === 1 ? '' : 's'}</b><small>${live.length} working${done ? ` · ${done} done` : ''} ›</small>`;
+    if (wkBar.dataset.html !== bar) { wkBar.dataset.html = bar; wkBar.innerHTML = bar; }
+    const cur = wk ? workers.find((x) => x.id === wk) : null;
+    const head = wk ? `‹ <b>${esc(cur ? cur.label : 'Worker')}</b><small>${cur ? (cur.done ? 'done' : 'working…') : ''}</small>` : `‹ <b>Back to the chat</b><small>${n} worker${n === 1 ? '' : 's'}</small>`;
+    if (wkHead.dataset.html !== head) { wkHead.dataset.html = head; wkHead.innerHTML = head; }
+    if (!wkl) return;
+    const rows = n ? workers.slice().reverse().map((x) => `<button type="button" data-w="${esc(x.id)}"><i class="${x.done ? 'd' : 'w'}"></i><span><b>${esc(x.label)}</b><small>${esc([x.kind === 'workflow' ? 'workflow' : 'sub-agent', x.type, x.done ? `done ${ago(x.ended)} ago` : `working for ${ago(x.started)}`].filter(Boolean).join(' · '))}</small></span>›</button>`).join('') : '<div class="empty">No workers right now.</div>';
+    if (wkList.dataset.html !== rows) { wkList.dataset.html = rows; wkList.innerHTML = rows; }
+  }
+  function setWorker(id, list) { // '' is the person's own chat
+    wk = id || ''; wkl = !wk && !!list; file = ''; pos = 0; lastStep = null; log.innerHTML = '';
+    box.classList.toggle('wkv', !!wk); box.classList.toggle('wkl', wkl);
+    paintWorkers(); clearTimeout(timer); poll(++run);
+  }
+  wkBar.onclick = () => (workers.length === 1 ? setWorker(workers[0].id) : setWorker('', true));
+  wkHead.onclick = () => (wk && workers.length > 1 ? setWorker('', true) : setWorker(''));
+  wkList.onclick = (e) => { const b = e.target.closest('[data-w]'); if (b) setWorker(b.dataset.w); };
+  // new text is written out instead of dropping in whole (the session log only holds finished paragraphs, so this is
+  // the closest to seeing them write)
+  function reveal(el, text) {
+    const t0 = performance.now(), dur = Math.min(1500, 200 + text.length * 3); let last = 0;
+    const step = (t) => {
+      if (!el.isConnected) return;
+      const k = (t - t0) / dur;
+      if (k >= 1) { el.innerHTML = rich(text); if (near()) log.scrollTop = log.scrollHeight; return; }
+      if (t - last > 45) { last = t; const stick = near(); let n = text.lastIndexOf(' ', Math.floor(text.length * k)); if (n < 0) n = 0; el.innerHTML = rich(text.slice(0, n)); if (stick) log.scrollTop = log.scrollHeight; }
+      requestAnimationFrame(step);
+    };
+    el.textContent = ''; requestAnimationFrame(step);
+  }
+  async function loadWorkers() { // everyone on the floor: the room shows each helper as a tiny copy of the person
+    const o = office(); if (!o.world || !o.world.setWorkers || !o.agents || document.hidden) return;
+    let r; try { r = await api('/api/workers'); } catch { return; }
+    const map = {};
+    for (const a of o.agents()) { const l = (r.byName || {})[a.herdrName]; if (l) map[a.slug] = l.filter((x) => !x.done || Date.now() - x.ended < 90_000).slice(-10).map((x) => ({ id: x.id, done: x.done })); }
+    o.world.setWorkers(map);
+  }
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, innerHeight * 0.4)}px`; };
   async function send() {
     const text = ta.value.trim(); if (!text || !who) return;
     ta.value = ''; grow(); err.textContent = '';
     const el = document.createElement('div'); el.className = 'm you wait'; el.innerHTML = shots(esc(text)); log.append(el); log.scrollTop = log.scrollHeight;
-    const p = { k: text.slice(0, 60), el }; pending.push(p);
+    const p = { k: text.slice(0, 60), el, t: Date.now() }; pending.push(p);
     try { await api('/api/chat/send', { text, name: target }); el.classList.remove('wait'); }
     catch (e) { el.remove(); pending = pending.filter((x) => x !== p); ta.value = text; grow(); err.textContent = `Not sent: ${e.message || 'try again'}`; }
   }
@@ -341,6 +418,7 @@ body.embed #chat { display: none !important; }`;
     if (!office().api) { if (n < 40) setTimeout(() => boot(n + 1), 300); return; }
     window.office.chat = { open: show, close, isOpen: () => open };
     loadArts(); setInterval(() => { if (!document.hidden) loadArts(); }, 8000);
+    loadWorkers(); setInterval(loadWorkers, 4000);
     let r; try { r = await api('/api/chat/status'); } catch { return; } // no superadmin on this computer: no way in
     const name = r.person.name;
     if (PHONE) {
