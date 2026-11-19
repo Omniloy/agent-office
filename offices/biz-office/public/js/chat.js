@@ -133,6 +133,20 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 .artn { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; font: 600 11px system-ui, sans-serif; font-style: normal; color: var(--muted, #98a0b5); vertical-align: middle; } .artn svg { width: 12px; height: 12px; }
 #chat .log .typing .dng { min-width: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted, #8d97b0); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 #chat .log .typing .dng:empty { display: none; }
+/* the thread: their answers hang from a line in their colour and use the whole width, each step is a small mark on that line, your own messages stay as bubbles on the right */
+#chat .log, html.phone #chat .log { gap: 0; }
+#chat .log > * + * { margin-top: 10px; }
+#chat .log .m.you { max-width: 82%; margin-top: 16px; } #chat .log .m.you + .m.you { margin-top: 6px; } #chat .log .m.you + :not(.you) { margin-top: 16px; }
+#chat .log .m.them, #chat .log .st, #chat .log .typing { position: relative; align-self: stretch; max-width: none; box-sizing: border-box; }
+#chat .log .m.them { background: none; border-radius: 0; padding: 0 2px 0 22px; line-height: 1.55; }
+#chat .log .st { padding: 0 2px 0 22px; font: 11.5px/1.5 ui-monospace, Menlo, monospace; letter-spacing: .01em; }
+#chat .log .typing { padding: 0 2px 0 22px; align-items: flex-start; }
+#chat .log .m.them::before, #chat .log .st::before, #chat .log .typing::before { content: ''; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; border-radius: 2px; background: color-mix(in srgb, var(--wc, #8e9bff) 42%, transparent); }
+#chat .log .m.them + .m.them::before, #chat .log .st + .m.them::before, #chat .log .m.them + .st::before, #chat .log .st + .st::before, #chat .log .m.them + .typing::before, #chat .log .st + .typing::before { top: -10px; }
+#chat .log .typing::before { background: linear-gradient(color-mix(in srgb, var(--wc, #8e9bff) 42%, transparent), transparent); }
+#chat .log .m.them::after { content: ''; position: absolute; left: 1px; top: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--wc, #8e9bff); }
+#chat .log .st::after { content: ''; position: absolute; left: 3px; top: 6px; width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--wc, #8e9bff) 75%, #000); }
+#chat .log .typing .dd { padding-top: 7px; }
 #chat .wkbar { display: none; flex: none; align-items: center; gap: 9px; margin: 0 10px 8px; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--line, rgba(255,255,255,.14)); background: rgba(255, 255, 255, .05); color: inherit; font: 600 13px var(--sans, system-ui, sans-serif); text-align: left; cursor: pointer; }
 #chat .wkbar.on { display: flex; } #chat.sec .wkbar, #chat.art .wkbar, #chat.wkv .wkbar, #chat.wkl .wkbar { display: none; }
 #chat.wkv header .stop { display: none; } /* Stop is for the person, not for one helper */
@@ -338,7 +352,7 @@ body.embed #chat { display: none !important; }`;
     const o = office(); if (!o.world || !o.world.setWorkers || !o.agents || document.hidden) return;
     let r; try { r = await api('/api/workers'); } catch { return; }
     const map = {};
-    for (const a of o.agents()) { const l = (r.byName || {})[a.herdrName]; if (l) map[a.slug] = l.filter((x) => !x.done || Date.now() - x.ended < 90_000).slice(-10).map((x) => ({ id: x.id, done: x.done })); }
+    for (const a of o.agents()) { const l = (r.byName || {})[a.herdrName]; if (l) map[a.slug] = l.filter((x) => !x.done || Date.now() - x.ended < 8_000).slice(-10).map((x) => ({ id: x.id, done: x.done })); }
     o.world.setWorkers(map);
   }
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, innerHeight * 0.4)}px`; };
