@@ -661,7 +661,9 @@ body.embed #floors { display: none !important; }`;
     if (!on && armed && z >= 0.985 && !busy()) show(true);
     else if (on && pick < 0 && busy()) { armed = false; show(false); }
   }, 180);
-  window.office && (window.office.floors = { show: () => show(true), hide: back, refresh: pollCity, view: (m, id) => { if (m && city) { const b = city.list.findIndex((t) => t.b.id === id); setMode(m === 'peer' && b < 0 ? 'city' : m, b); } return mode; } }); // for tests, and for the Connections sheet
+  // Asked for by hand (the Floors or Buildings button): whatever is open over the room closes first, or the rule above would shut this again at once.
+  const clear = () => { const o = office(), root = document.documentElement; if (document.querySelector('#panel.open') && o.select) o.select(null); const x = document.querySelector('#inbox.show [data-close]'); if (x) x.click(); if (document.querySelector('#cards.show') && o.closeCard) o.closeCard(); root.classList.remove('reqs-open'); document.querySelectorAll('.psheet.on').forEach((s) => s.classList.remove('on')); };
+  window.office && (window.office.floors = { show: () => { if (!on) clear(); show(true); }, hide: back, refresh: pollCity, view: (m, id) => { if (m && city) { const b = city.list.findIndex((t) => t.b.id === id); setMode(m === 'peer' && b < 0 ? 'city' : m, b); } return mode; } }); // for tests, and for the Connections sheet
 }
 
 // ---------------------------------------------------------------- the top bar on a computer

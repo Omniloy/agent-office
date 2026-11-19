@@ -18,6 +18,7 @@ function start() {
   css.textContent = `
 #chat { position: fixed; z-index: 30; display: none; flex-direction: column; background: var(--panel, #10131d); color: var(--text, #e8eaf2); font-family: var(--sans, system-ui, sans-serif); top: 0; right: 0; bottom: 0; width: min(460px, 100vw); border-left: 1px solid var(--line, rgba(255,255,255,.12)); box-shadow: -18px 0 50px rgba(0, 0, 0, .45); }
 /* on a phone it is one more sheet: the top bar and a strip of the room stay above it, the bottom bar below */
+html:not(.phone) #chat:not(.person) { top: var(--bar, 44px); } /* the superadmin's column starts under the bar: its buttons (Terminal, For you, Floors) stay in reach */
 html.phone #chat { left: 0; right: 0; top: auto; bottom: var(--tab); height: min(var(--fullh), var(--chat-h, calc(var(--fullh) - 13dvh))); width: auto; border: 0; border-radius: 18px 18px 0 0; overflow: hidden; z-index: 15; box-shadow: 0 -10px 34px rgba(0, 0, 0, .45); box-sizing: border-box; will-change: transform; }
 html.phone #chat.on { animation: sheet-up .24s cubic-bezier(.2, .8, .2, 1); }
 html.phone #chat.dragging { animation: none; transition: none; }
