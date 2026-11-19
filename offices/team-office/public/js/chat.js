@@ -147,6 +147,11 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .log .m.them::after { content: ''; position: absolute; left: 1px; top: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--wc, #8e9bff); }
 #chat .log .st::after { content: ''; position: absolute; left: 3px; top: 6px; width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--wc, #8e9bff) 75%, #000); }
 #chat .log .typing .dd { padding-top: 7px; }
+#chat .log .m.them:not(.fin):not(.scr) { font-size: 13.5px; line-height: 1.5; color: var(--muted, #aab3c9); }
+#chat .log .m.them:not(.fin)::after { left: 3px; top: 7px; width: 6px; height: 6px; background: color-mix(in srgb, var(--wc, #8e9bff) 75%, #000); }
+#chat .log .m.them.fin { padding: 10px 14px 11px 22px; border-radius: 0 12px 12px 0; background: linear-gradient(90deg, color-mix(in srgb, var(--wc, #8e9bff) 13%, transparent), color-mix(in srgb, var(--wc, #8e9bff) 4%, transparent)); }
+#chat .log .m.them.fin::before { background: var(--wc, #8e9bff); width: 3px; left: 4px; }
+#chat .log .m.them.fin::after { top: 16px; box-shadow: 0 0 0 4px color-mix(in srgb, var(--wc, #8e9bff) 28%, transparent); }
 #chat .wkbar { display: none; flex: none; align-items: center; gap: 9px; margin: 0 10px 8px; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--line, rgba(255,255,255,.14)); background: rgba(255, 255, 255, .05); color: inherit; font: 600 13px var(--sans, system-ui, sans-serif); text-align: left; cursor: pointer; }
 #chat .wkbar.on { display: flex; } #chat.sec .wkbar, #chat.art .wkbar, #chat.wkv .wkbar, #chat.wkl .wkbar { display: none; }
 #chat.wkv header .stop { display: none; } /* Stop is for the person, not for one helper */
@@ -279,6 +284,7 @@ body.embed #chat { display: none !important; }`;
         }
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
+        { let last = null; const fin = new Set(); for (const el of log.children) { if (el.classList.contains('you') || el.classList.contains('peer')) { if (last) fin.add(last); last = null; } else if (el.classList.contains('them') && !el.classList.contains('scr')) last = el; } if (last && !r.working) fin.add(last); for (const el of log.querySelectorAll('.m.them')) el.classList.toggle('fin', fin.has(el)); } // the answer that closes each turn stands out; what they said on the way there is quieter
         status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : r.person.role; sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
         need.classList.toggle('on', !!target && !!$('#asks.show')); // they asked something: the question and its answers are in Overview
         if (stick || r.reset) log.scrollTop = log.scrollHeight;
