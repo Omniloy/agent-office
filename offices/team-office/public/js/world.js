@@ -769,11 +769,13 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     if (!best) return [];
     const e = best.ex, E = 0.06, cs = [[e.x0 - E, e.z0 - E], [e.x1 + E, e.z0 - E], [e.x1 + E, e.z1 + E], [e.x0 - E, e.z1 + E]];
     const inRoom = (c) => c[0] > LEFT_X + 0.45 && c[0] < 12.6 && c[1] > BACK_Z + 0.45 && c[1] < 8.9;
-    const clear = (p, q, band) => segHit(p[0], p[1], q[0], q[1], band ? best : e) < 0;
+    // a way round must not cut through another area either (two areas close together: the centre desk and a counter)
+    const others = obs.filter((o) => o !== best && !inR(a.x, a.z, o) && !inR(b.x, b.z, o));
+    const clear = (p, q, band) => segHit(p[0], p[1], q[0], q[1], band ? best : e) < 0 && others.every((o) => segHit(p[0], p[1], q[0], q[1], o) < 0);
     const A = [a.x, a.z], Bp = [b.x, b.z], d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
     let way = null, wl = Infinity;
     for (let i = 0; i < 4; i++) for (const path of [[cs[i]], [cs[i], cs[(i + 1) % 4]], [cs[i], cs[(i + 3) % 4]]]) {
-      if (!path.every(inRoom)) continue;
+      if (!path.every(inRoom) || path.some((c) => others.some((o) => inR(c[0], c[1], o.ex)))) continue;
       const pts = [A, ...path, Bp];
       let ok = true, len = 0;
       for (let j = 0; j < pts.length - 1 && ok; j++) { ok = clear(pts[j], pts[j + 1], (j === 0 && bandA) || (j === pts.length - 2 && bandB)); len += d(pts[j], pts[j + 1]); }
@@ -902,7 +904,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       const u = l.t / l.dur;
       l.m.material.opacity = Math.max(0, Math.min(1, u * 8, (1 - u) * 5)) * 0.7;
       l.bead.position.copy(l.curve.getPoint((l.t * 0.45) % 1));
-      if (u >= 1) { scene.remove(l.m, l.bead); l.m.geometry.dispose(); links.splice(i, 1); }
+      if (u >= 1) { scene.remove(l.m, l.bead); for (const o of [l.m, l.bead]) { o.geometry.dispose(); o.material.dispose(); } links.splice(i, 1); }
     }
   }
 
@@ -1168,7 +1170,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       const u = Math.min(1, p.t), a = p.from.clone().lerp(mid, u), b = mid.clone().lerp(to, u), pos = a.lerp(b, u);
       p.m.lookAt(pos); p.m.rotateX(Math.PI / 2); p.m.position.copy(pos);
       if (p.t >= 1) {
-        scene.remove(p.m); planes.splice(i, 1);
+        scene.remove(p.m); p.m.geometry.dispose(); p.m.material.dispose(); planes.splice(i, 1);
         if (p.st.online) { showBubble(p.st, p.text, 7000, 'from you', 'you'); p.st.listenUntil = performance.now() / 1000 + 3; }
       }
     }

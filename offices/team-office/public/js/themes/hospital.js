@@ -2053,7 +2053,7 @@ export default {
   bloom: { strength: 0.55, radius: 0.5, threshold: 1 },
   // the director médico (Product, else Lead) runs the floor from the central station (themes/index.js: centre)
   // the dais is 2.66 round (CTR); with two rows of desks it moves forward and left, clear of the second row and the café
-  centre: { roles: ['Product', 'Lead'], x: (rows) => (rows === 1 ? 0.6 : 0.0), z: (rows) => (rows === 1 ? 0.9 : 4.9), lift: 0.25, foot: { x0: -2.7, x1: 2.7, z0: CTR.OFF - 2.7, z1: CTR.OFF + 2.7 }, side: 2.95 },
+  centre: { roles: ['Product', 'Lead'], x: (rows) => (rows === 1 ? 0.6 : -0.3), z: (rows) => (rows === 1 ? 0.9 : 4.9), lift: 0.25, foot: { x0: -2.7, x1: 2.7, z0: CTR.OFF - 2.7, z1: CTR.OFF + 2.7 }, side: 2.95 },
   spots: { coffee: { x: CAFE.x, z: CAFE.z, yaw: CAFE.yaw } },
   boardStyle: { bg: '#0d1c22', ink: '#5eead4' },
   traceStyle: { bg: '#fbfdfc', ink: '#0f2f2b' },
@@ -2279,6 +2279,8 @@ export default {
     if (my.spin) my.spin = my.spin.filter(([o]) => inScene(o));
     if (my.lamps) my.lamps = my.lamps.filter(([l]) => inScene(l)); // the centre desk's lamp goes with its desk
     if (my.tall) for (const s of Object.keys(my.tall)) if (!inScene(my.tall[s])) delete my.tall[s];
+    if (my.mugSteam) my.mugSteam = my.mugSteam.filter((p) => inScene(p)); // a temp who left takes their mug with them
+    if (my.bscLight) my.bscLight = my.bscLight.filter((l) => inScene(l));
   },
   tick(k, dt, t) {
     const my = k.my;
