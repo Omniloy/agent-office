@@ -140,14 +140,18 @@ async function workersOf(file) {
   const root = path.join(file.replace(/\.jsonl$/, ''), 'subagents'), dirs = [[root, '']];
   for (const d of await fs.readdir(path.join(root, 'workflows')).catch(() => [])) dirs.push([path.join(root, 'workflows', d), d]);
   const out = [], now = Date.now();
-  for (const [dir, flow] of dirs) for (const n of await fs.readdir(dir).catch(() => [])) {
+  for (const [dir, flow] of dirs) {
+   const over = new Set(); // a workflow writes each helper's result in its journal: that is when that helper is done
+   if (flow) for (const l of (await fs.readFile(path.join(dir, 'journal.jsonl'), 'utf8').catch(() => '')).split('\n')) { if (!l || l.includes('"type":"started"')) continue; try { const o = JSON.parse(l); if (o.agentId && o.type !== 'started') over.add(o.agentId); } catch { /* half-written line */ } }
+   for (const n of await fs.readdir(dir).catch(() => [])) {
     const m = /^agent-([A-Za-z0-9]+)\.jsonl$/.exec(n); if (!m) continue;
     const f = path.join(dir, n), st = await fs.stat(f).catch(() => null);
     if (!st || now - st.mtimeMs > 6 * 3600e3) continue;
     const meta = (await readJson(path.join(dir, `agent-${m[1]}.meta.json`), {})) || {}, idle = now - st.mtimeMs;
-    const done = meta.finished === true || idle > 45 * 60e3 || (idle > 6000 && await endedLog(f, st));
+    const done = meta.finished === true || over.has(m[1]) || idle > 45 * 60e3 || (idle > 6000 && await endedLog(f, st));
     if (done && idle > 10 * 60e3) continue; // finished a while ago: no longer news
     out.push({ id: m[1], kind: flow ? 'workflow' : 'agent', label: String(meta.description || meta.agentType || 'helper').slice(0, 90), type: String(meta.workflowPhase || meta.agentType || ''), done, started: st.birthtimeMs || st.ctimeMs, ended: done ? st.mtimeMs : 0, file: f });
+   }
   }
   return out.sort((a, b) => a.started - b.started).slice(-30);
 }
