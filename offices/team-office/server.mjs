@@ -406,7 +406,7 @@ const clients = new Set();
 const lastStatus = new Map();
 const statusEvents = [];
 const youEvents = [];
-let jiraAt = 0;
+let jiraAt = 0, cardsMtime = 0;
 
 function mapStatus(t) {
   if (!t || t.state !== 'live') return 'offline';
@@ -602,7 +602,10 @@ async function refresh() {
     const team = await loadTeam();
     const names = new Set(team.personas.map((p) => p.herdrName));
     refreshPrs(team).then(scheduleRefresh).catch(() => {});
-    if (Date.now() - jiraAt > 90_000) { jiraAt = Date.now(); refreshJira(team).then(scheduleRefresh).catch(() => {}); }
+    // a card taken, passed or created (cards.json changed) is looked up at once, not on the next 90 s round: until then it
+    // shows only its short local title and no status
+    const cm = (await fs.stat(path.join(HOME, '.omniloy-team', 'cards.json')).catch(() => null))?.mtimeMs || 0;
+    if (Date.now() - jiraAt > 90_000 || (cm !== cardsMtime && Date.now() - jiraAt > 3000)) { jiraAt = Date.now(); cardsMtime = cm; refreshJira(team).then(scheduleRefresh).catch(() => {}); }
     const probe = await run(HC, ['ls', '--json']);
     const agents = await Promise.all(team.personas.map((p) => buildAgent(p, team, names)));
     const now = Date.now();
