@@ -265,7 +265,7 @@ body.embed #chat { display: none !important; }`;
         nm.textContent = r.person.name; av.style.background = r.person.color; av.textContent = r.person.name.slice(0, 1);
         const typing = $('.typing', log), nowEl = $('.dng', log);
         for (const m of r.messages) { add(m, !fresh); }
-        workers = r.workers || []; box.style.setProperty('--wc', r.person.color); paintWorkers();
+        { const all = r.workers || [], t0 = Math.min(...all.filter((x) => !x.done).map((x) => x.started)); workers = all.filter((x) => !x.done || x.ended >= t0 || x.id === wk); } /* only this round: the ones working now and the ones that finished while they ran, not helpers from earlier tasks */ box.style.setProperty('--wc', r.person.color); paintWorkers();
         if (r.screen !== undefined) { // no session log to read: show the screen as it is
           let s = $('.scr', log); if (!s) { s = document.createElement('div'); s.className = 'm them scr'; log.append(s); }
           s.textContent = r.screen || ''; if (!r.live) s.remove();
