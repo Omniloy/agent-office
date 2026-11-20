@@ -2,7 +2,8 @@
 //
 // One theme = one file here, themes/<id>.js, whose default export is a plain object (examples: oficina.js, the
 // full room as it always was; hospital.js and nave.js). To add one: write the file, import it below and add it to
-// THEMES. The server finds themes by file name for "Tema del día", so the file name is the id.
+// THEMES. The server reads this file's imports and THEMES for the picker check and "Tema del día", so the file name
+// is the id, and only what THEMES lists is a theme (a helper module in this folder is not).
 // The setting is one for the whole building: GET/POST /api/theme { mode: 'fixed'|'daily', theme } (server.mjs);
 // every page gets the effective theme in its state and reloads when it changes.
 //
@@ -47,7 +48,9 @@
 //                       arcs, visitors, temps, travel, clicks and camera. Their wall screen stays on the back wall in
 //                       the middle of the (top) line of screens.
 //   spots               { coffee: { x, z, yaw } } to move the coffee spot (default x 9.3, z 0.7, yaw Math.PI / 2 =
-//                       facing +x). Keep it in the open floor or at a side, clear of the desk rows and aisles.
+//                       facing +x), or coffee: (rows) => ({ x, z, yaw }) when it follows the number of rows of desks
+//                       (1, 2, 3...: a third row reaches z 4.55, its aisle is at z 5.5). Keep it in the open floor or at
+//                       a side, clear of the desk rows and aisles; people reach it by the aisle nearest to it.
 //
 // Hooks, called with the kit `k` (below). Build hooks run once when the page opens, in this order:
 //   shell(k)            walls, floor, ceiling, windows, wall decor. Add to k.room.
@@ -81,7 +84,8 @@
 //                       piece of clothing (shadow, click target). Head top is at about y 0.32 in ch.head.
 //   daylight(k, f, g)   every 5 s and when the light mode changes. f: 0 night .. 1 day, g: 0..1 near sunrise and
 //                       sunset (0 outside auto mode). Set k.scene.background / fog / environmentIntensity, k.hemi,
-//                       k.sun and your own lamps. Oficina's version also drives its windows and floor lamps.
+//                       k.sun and your own lamps. Oficina's version also drives its windows and floor lamps. Never dim
+//                       the working information (wall board, whiteboard, screens): it stays at full brightness.
 //   layout(k)           after the desks move (first layout, a temp arrives or leaves, the team changes): follow
 //                       them with decor (k.desks(), k.centre(), k.frontZ()). Not called when nothing moved.
 //   tick(k, dt, t)      every drawn frame (30 to 60 a second): animate decor. dt in seconds, t = seconds clock.
@@ -104,10 +108,12 @@
 //   frontZ()            z of the front aisle: the open floor is between it and z 9
 //   block(x0, z0, x1, z1) an area of the floor (world x/z rectangle) people walk around, for solid decor in the open
 //                       floor (a rocket's base, a counter, a dais). Never on the desk rows, the aisles in front of
-//                       them, the spots below, or beside the walls (people go round its corners). Returns a handle:
-//                       h.set(x0, z0, x1, z1) moves the area (decor that follows the desks), h.set() removes it.
+//                       them or the spots below, in any layout: decor that a third row of desks would reach is hidden
+//                       or moved in layout(), with its area. Returns a handle: h.set(x0, z0, x1, z1) moves the area
+//                       (decor that follows the desks), h.set() removes it. Walks take the shortest way round all the
+//                       areas (paths.js); two areas closer than a body's width are gone round as one.
 //   spots               places people walk to; keep them free: board (in front of the left wall board), white
-//                       (in front of the whiteboard), coffee { x, z, yaw } (idle break spot)
+//                       (in front of the whiteboard), coffee { x, z, yaw } (idle break spot, for the current rows)
 // Coffee break (keep it: the floor's life): every 70 to 190 s an idle person who is at their desk, not selected and
 // not needed walks to spots.coffee, stands there 7 s with a mug (sipping, looking around), and walks back; a second
 // one stands up to 0.5 m beside the spot, across the way it faces. It works the same from the centre desk. Make the
