@@ -543,7 +543,10 @@ function deliveryOf(r) {
 function sayDelivered(r, from, text) {
   const a = agentBy(from), name = a ? first(a) : from, how = deliveryOf(r), q = esc(String(text).length > 60 ? `${String(text).slice(0, 59)}…` : text);
   if (how === 'delivered') return toast(`<i class="dot" style="background:#4ade80"></i><span>Entregado a <b>${esc(name)}</b>: «${q}»</span>`, 'ok', 5000);
-  if (how === 'queued') return toast(`<i class="dot blocked"></i><span>Guardado. <b>${esc(name)}</b> está ocupado y lo recibirá en cuanto quede libre.</span>`, '', 9000);
+  if (how === 'queued') { // kept in the outbox: it is typed in as soon as they can take it
+    const blocked = a && a.status === 'blocked';
+    return toast(`<i class="dot blocked"></i><span>Guardado. <b>${esc(name)}</b> ${blocked ? 'está esperando una respuesta en el terminal: lo recibirá en cuanto la conteste' : 'está ocupado y lo recibirá en cuanto quede libre'}.</span>${blocked ? `<button type="button" class="go" data-live="${esc(from)}">Live screen</button>` : ''}`, '', 12000);
+  }
   if (how === 'missed') {
     const why = a && a.status === 'blocked' ? 'está esperando una respuesta en el terminal' : a && a.status === 'offline' ? 'no está en marcha' : 'no lo ha recibido todavía';
     return toast(`<i class="dot offline"></i><span>Guardado, pero no le llegó: <b>${esc(name)}</b> ${why}. Lo verá en sus peticiones.</span>${a && a.status === 'blocked' ? `<button type="button" class="go" data-live="${esc(from)}">Live screen</button>` : ''}`, 'err', 12000);
@@ -551,14 +554,14 @@ function sayDelivered(r, from, text) {
   return toast(`<i class="dot" style="background:#4ade80"></i><span>Contestado${how === 'other' ? `: ${esc(String(r.result).slice(0, 120))}` : ''}</span>`, 'ok', 5000);
 }
 // The person's Live screen, from a card or a toast. Someone of another floor: their floor opens on them.
-function openLive(from, leave) {
+async function openLive(from, leave) {
   const c = window.office.chat;
   if (agentBy(from)) { if (leave) leave(); if (c && c.live && c.live(from)) return; select(agentBy(from).slug); return; }
-  const x = (asks.items || []).find((q) => q.from === from && q.floor), port = x && (FLOOR_PORT[x.floor] || 0);
-  if (port) { location.href = `${location.protocol}//${location.hostname}:${port}/#p=${encodeURIComponent(from)}`; return; }
+  const x = (asks.items || []).find((q) => q.from === from && q.floor); // the floors and their ports: the hub's list (floors.json)
+  const d = x ? await api('/api/attention').catch(() => null) : null, o = d && (d.offices || []).find((f) => f.name === x.floor);
+  if (o) { location.href = `${location.protocol}//${location.hostname}:${o.port}/#p=${encodeURIComponent(from)}`; return; }
   toast(`${esc(from)} no está en esta planta.`, 'err', 6000);
 }
-const FLOOR_PORT = { Dev: 4317, CRM: 4319, Web: 4320, Lab: 4321 };
 // A click in a card. `list` is where the card's item is; `leave` closes the panel the card is in (For you) before a
 // chat or a Live screen opens over it. Returns true when something was sent (the caller refreshes its list).
 async function answerClick(e, card, list, leave) {
