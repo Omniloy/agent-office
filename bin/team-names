@@ -168,8 +168,13 @@ elif cmd == "real":
     words = a[1].strip()
     if not why.strip(): sys.exit('--why is required: who this real person is, e.g. --why "contact at the client"')
     if len(words) < 6 or " " not in words: sys.exit('register the words as they appear in the text, with something that tells the person apart: "Pablo García", "Hola Pablo", "Dr. Elena Ruiz". A bare first name would let the team be named again.')
-    r = [x for x in reals() if x.get("words") != words] + [{"words": words, "why": why.strip(), "by": agent_slug() or "owner", "at": datetime.datetime.now().isoformat(timespec="minutes")}]
-    os.makedirs(os.path.dirname(REAL), exist_ok=True); json.dump(r, open(REAL, "w", encoding="utf-8"), indent=1, ensure_ascii=False); print(f'ok: "{words}" is a real person and passes the check')
+    import fcntl
+    os.makedirs(os.path.dirname(REAL), exist_ok=True); lock = open(REAL + ".lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)   # one writer at a time
+    try: cur = json.load(open(REAL, encoding="utf-8"))
+    except FileNotFoundError: cur = []
+    except Exception: sys.exit(f"{REAL} cannot be read; nothing was changed")
+    r = [x for x in cur if x.get("words") != words] + [{"words": words, "why": why.strip(), "by": agent_slug() or "owner", "at": datetime.datetime.now().isoformat(timespec="minutes")}]
+    tmp = f"{REAL}.{os.getpid()}.tmp"; json.dump(r, open(tmp, "w", encoding="utf-8"), indent=1, ensure_ascii=False); os.replace(tmp, REAL); print(f'ok: "{words}" is a real person and passes the check')
 elif cmd in ("install", "status"):
     for d in accounts():
         f, s = settings(d)
