@@ -834,7 +834,7 @@ async function answerMenu(body) {
     const next = after.menu || null;
     const message = String(body.message || '').trim(), sent = !!message && freeMenu(label) && !next;
     if (sent) {
-      const r = await run(HC, ['send', '--json', name, '--', message], { timeout: 120000 });
+      const r = await run(HC, ['send', '--json', '--force', name, '--', message], { timeout: 120000 }); // --force: after the free option they sit in its text box, which hc counts as blocked
       if (!r.ok) return { code: 502, body: { error: clip(oneLine(r.stderr || r.stdout), 240) || 'The follow-up text was not sent.', pressed: true } };
     }
     // the picture changes now, not at the next refresh: a poll right after this must not bring the old card back
