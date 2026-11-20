@@ -185,8 +185,8 @@ def check(dry=False):
         snap = t.get("quietTurns") or {}
         if snap and not any((ag.get(n, {}).get("turn") != snap.get(n) or ag.get(n, {}).get("lastWork", 0) > t.get("quietPing", 0)) if n != lead
                             else (ag.get(n, {}).get("turn") or 0) - (snap.get(n) or 0) >= 2 for n in live): continue
+        quiet.append(tn)   # shown in the state at any hour; the lead is told only within watch hours
         if not speak and not dry: continue
-        quiet.append(tn)
         if not dry: t.update(quietAt=stop_at, quietPing=now, quietTurns={n: ag.get(n, {}).get("turn") for n in live})
         q = L.pending(); q = {n: q[n] for n in members if q.get(n)}
         undelivered = (" Messages still waiting to be typed in: " + ", ".join(f"{P[n]['name']} {k}" for n, k in q.items()) + ".") if q else ""
@@ -201,7 +201,7 @@ def check(dry=False):
     for tn in list(teams):
         if tn not in {tj.get("name", "") for _, tj in FL}: teams.pop(tn)
     save()
-    return stalls + [f"{t} (all waiting, lead told)" for t in parked] + [f"{t} (quiet floor, lead told)" for t in quiet]
+    return stalls + [f"{t} (all waiting, lead told)" for t in parked] + [f"{t} (quiet floor)" for t in quiet]
 
 def holder():
     """pid of the running `team-watch run`, or 0."""
@@ -297,8 +297,11 @@ elif a[0] == "status":
     print("last check:", datetime.datetime.fromtimestamp(st["checkedAt"] / 1000).strftime("%d %b %H:%M:%S"), "|", f"running (pid {pid})" if pid else "NOT RUNNING",
           "|", st.get("error") or "", "| config:", st["config"])
     if st.get("memoryAt"): print("memory check:", datetime.datetime.fromtimestamp(st["memoryAt"] / 1000).strftime("%H:%M:%S"), "ok" if st.get("memoryOk") else "FAILED")
-    for n in st.get("stalled", []): s = st["agents"][n]["stall"]; print(f'  {n:9} {", ".join(s["cards"] + s["requests"])}  pings {s["pings"]}')
-    for t in st.get("parked", []): x = st["teams"][t]["parked"]; print(f'  {t}: everyone stopped, all cards waiting ({x["sig"]}), lead pinged {x["pings"]}')
-    for t in st.get("quiet", []): print(f'  {t}: everyone stopped with nothing pending, lead told')
+    for n in st.get("stalled", []):
+        s = (st.get("agents", {}).get(n) or {}).get("stall") or {"cards": [], "requests": [], "pings": 0}; print(f'  {n:9} {", ".join(s["cards"] + s["requests"])}  pings {s["pings"]}')
+    for t in st.get("parked", []):
+        x = (st.get("teams", {}).get(t) or {}); x = x.get("parked") or x   # an older watchdog kept it one level up
+        print(f'  {t}: everyone stopped, all cards waiting ({x.get("sig", "?")}), lead pinged {x.get("pings", 0)}')
+    for t in st.get("quiet", []): print(f'  {t}: everyone stopped with nothing pending (the lead is told once per stop, within watch hours)')
     if not st.get("stalled") and not st.get("parked") and not st.get("quiet"): print("  nobody stalled")
 else: print(__doc__)
