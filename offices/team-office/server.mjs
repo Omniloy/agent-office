@@ -9,6 +9,7 @@ import { existsSync, createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createHub, OFFICES } from './hub.mjs';
 import { menuInstance, parseMenu, terminalId, maskSecrets } from './menu.mjs';
@@ -70,18 +71,23 @@ async function loadTeam() {
   }
   return teamCache.team;
 }
-const descCache = new Map();
+const descCache = new Map(); // slug -> { key, d }: an edited description shows without a restart
 async function personaDescription(slug) {
-  if (descCache.has(slug)) return descCache.get(slug);
+  const f = path.join(HOME, '.claude', 'agents', `${slug}.md`);
+  const st = await fs.stat(f).catch(() => null), key = st ? `${st.size}:${st.mtimeMs}` : '';
+  const hit = descCache.get(slug);
+  if (hit && hit.key === key) return hit.d;
   let d = '';
   try {
-    const md = await fs.readFile(path.join(HOME, '.claude', 'agents', `${slug}.md`), 'utf8');
+    const md = await fs.readFile(f, 'utf8');
     const m = md.match(/^description:\s*(.+)$/m);
     if (m) d = m[1].trim();
   } catch {}
-  descCache.set(slug, d);
+  descCache.set(slug, { key, d });
   return d;
 }
+// A cache that only grows (one entry per file ever seen) keeps its newest entries only.
+const capMap = (m, n) => { while (m.size > n) m.delete(m.keys().next().value); };
 
 // ---------------------------------------------------------------- transcripts
 async function tail(file, maxBytes = 3_000_000) {
@@ -205,15 +211,25 @@ function parseCodex(lines, names) {
   return items;
 }
 
-const transcriptCache = new Map(); // file -> {key, items}
+const transcriptCache = new Map(); // file -> {key, pos, items, nk}
+// A session log only grows: after the first read, only the new whole lines are parsed (not the 3 MB tail again).
 async function parsedTranscript(file, kind, names) {
   const st = await fs.stat(file);
-  const key = `${st.size}:${st.mtimeMs}`;
+  const key = `${st.size}:${st.mtimeMs}`, nk = [...names].join(',');
   const hit = transcriptCache.get(file);
-  if (hit && hit.key === key) return hit.items;
-  const lines = await tail(file);
-  const items = kind === 'codex' ? parseCodex(lines, names) : parseClaude(lines, names);
-  transcriptCache.set(file, { key, items });
+  if (hit && hit.key === key && hit.nk === nk) return hit.items;
+  const again = hit && hit.nk === nk && st.size >= hit.pos && st.size - hit.pos < 3_000_000;
+  const start = again ? hit.pos : Math.max(0, st.size - 3_000_000);
+  const fh = await fs.open(file, 'r');
+  let buf;
+  try { buf = Buffer.alloc(st.size - start); await fh.read(buf, 0, buf.length, start); } finally { await fh.close(); }
+  const end = buf.lastIndexOf(10) + 1; // whole lines only: a half-written line is read next time
+  let text = buf.toString('utf8', 0, end);
+  if (!again && start > 0) text = text.slice(text.indexOf('\n') + 1); // the first line of a tail is cut
+  const fresh = text ? (kind === 'codex' ? parseCodex : parseClaude)(text.split('\n'), names) : [];
+  const items = again ? (fresh.length ? hit.items.concat(fresh).slice(-4000) : hit.items) : fresh;
+  transcriptCache.delete(file); transcriptCache.set(file, { key, pos: start + end, items, nk });
+  capMap(transcriptCache, 200);
   return items;
 }
 
@@ -251,7 +267,7 @@ async function codexTranscript(account, term) {
           const m = /"cwd"\s*:\s*"([^"]*)"/.exec(buf.toString('utf8', 0, bytesRead));
           if (m) cwd = m[1];
         } catch {}
-        codexMeta.set(f, cwd);
+        codexMeta.set(f, cwd); capMap(codexMeta, 500);
       }
       if (codexMeta.get(f) === term.cwd && (!best || st.mtimeMs > best.m)) best = { f, m: st.mtimeMs };
     }
@@ -347,8 +363,8 @@ function ciState(roll) {
   if (c.some((x) => ['PENDING', 'IN_PROGRESS', 'QUEUED', 'EXPECTED', 'WAITING'].includes(x))) return 'running';
   return c.length ? 'passing' : '';
 }
-async function refreshPrs(team, force) {
-  if (prs.busy || (!force && Date.now() - prs.at < 180_000)) return;
+async function refreshPrs(team, force) { // true when it read GitHub (only then is there something new to show)
+  if (prs.busy || (!force && Date.now() - prs.at < 180_000)) return false;
   prs.busy = true;
   try {
     const repos = [...new Set(team.projects.flatMap((p) => p.repos || []))], errors = [];
@@ -381,9 +397,11 @@ async function refreshPrs(team, force) {
     prs.merged = (await mergedP).flat().sort((a, b) => String(b.mergedAt).localeCompare(String(a.mergedAt)));
     prs.error = errors.length ? errors.slice(0, 2).join(' · ') : null;
   } finally { prs.busy = false; prs.at = Date.now(); }
+  return true;
 }
-// approved | changes | failing | draft | review
-const prState = (x) => (x.review === 'CHANGES_REQUESTED' ? 'changes' : x.ci === 'failing' ? 'failing' : x.review === 'APPROVED' ? 'approved' : x.draft ? 'draft' : 'review');
+// changes | draft | failing | approved | review. A draft is not ready even when someone already approved it, so the
+// draft state wins over CI and reviews (both stay readable in `ci` and `review`).
+const prState = (x) => (x.review === 'CHANGES_REQUESTED' ? 'changes' : x.draft ? 'draft' : x.ci === 'failing' ? 'failing' : x.review === 'APPROVED' ? 'approved' : 'review');
 let cardOwners = {}; // who holds each Jira card, kept by `team-card`
 async function assignPrs(agents) {
   try { cardOwners = await readJson(path.join(HOME, '.omniloy-team', 'cards.json')); } catch { /* keep the last list */ }
@@ -394,7 +412,7 @@ async function assignPrs(agents) {
       || agents.find((g) => key && (g.tickets || []).some((t) => t.key === key))
       || agents.find((g) => g.label && x.labels.includes(g.label))
       || agents.find((g) => !g.temp && g.name && x.title.includes(g.name.split(' ')[0]));
-    return { repo: x.repo, projects: x.projects || [], number: x.number, title: x.title, url: x.url, state: prState(x), ci: x.ci, ticket: key, updated: x.updated, owner: a ? a.herdrName : '', mine: !!x.mine };
+    return { repo: x.repo, projects: x.projects || [], number: x.number, title: x.title, url: x.url, state: prState(x), ci: x.ci, draft: x.draft, review: x.review, ticket: key, updated: x.updated, owner: a ? a.herdrName : '', mine: !!x.mine };
   });
   for (const g of agents) g.prs = all.filter((x) => x.owner === g.herdrName);
   return all;
@@ -422,7 +440,7 @@ function screenLines(text) {
   return lines.filter((l, i, a) => l || a[i - 1]).slice(-18).map((l) => l.slice(0, 110));
 }
 
-async function buildAgent(p, team, names) {
+async function buildAgent(p, team, names, shared) {
   const hn = p.herdrName;
   const g = await run(HC, ['get', hn, '--json']);
   let term = null;
@@ -440,7 +458,7 @@ async function buildAgent(p, team, names) {
     address: term ? term.address : '', where: (term && term.labels && term.labels.where) || '',
     turn: term ? term.turn : 0, startedMs: term ? term.created_ms : 0,
     screen: [], activity: [], nowDoing: '', lastSaid: '', nudges: [], menu: null,
-    memory: await withPlate(await loadMemory(p.slug), hn),
+    memory: await withPlate(await loadMemory(p.slug), hn, shared),
     tickets: p.temp ? [Object.values(jira.byLabel).flat().find((t) => t.key === p.ticket) || { key: p.ticket, status: p.state === 'done' ? 'finished' : 'temp', type: '', summary: p.task, url: `${team.jira.site}/browse/${p.ticket}` }] : (jira.byLabel[p.herdrName] || []),
   };
   if (!agent.online) return agent;
@@ -521,8 +539,8 @@ async function saveTheme(body) {
 }
 // "On their plate" and "Waiting on" come from who holds which card (team-card) and from open requests,
 // not from the memory file: its sections are free text and rarely match.
-async function withPlate(memory, hn) {
-  const [cards, reqs] = await Promise.all([readJsonOr(path.join(SHARED, 'cards.json'), {}), readJsonOr(path.join(SHARED, 'requests.json'), {})]);
+async function withPlate(memory, hn, shared) {
+  const { cards, reqs } = shared || await plateFiles();
   const mine = Object.entries(cards).filter(([, c]) => c.owner === hn);
   const short = (t) => { t = String(t || '').replace(/\s*\[was shared by[^\]]*\]/, ''); return t.length > 90 ? `${t.slice(0, 88)}…` : t; };
   const plate = mine.filter(([, c]) => !c.waiting).map(([k, c]) => `**${k}** ${short(c.title)}`);
@@ -531,6 +549,7 @@ async function withPlate(memory, hn) {
   for (const x of reqs.items || []) if (x.status === 'open' && x.kind === 'request' && x.from === hn && !held.has(x.ticket)) waiting.push(`**#${x.id}** ${x.to === '__OWNER_ID__' || !x.to ? 'you' : x.to}: ${short(x.title)}`);
   return { ...(memory || { raw: '', updatedMs: 0 }), plate, waiting };
 }
+const plateFiles = async () => { const [cards, reqs] = await Promise.all([readJsonOr(path.join(SHARED, 'cards.json'), {}), readJsonOr(path.join(SHARED, 'requests.json'), {})]); return { cards, reqs }; };
 let doneCache = { at: 0, today: [], week: [] };
 async function doneCards(team) {
   if (Date.now() - doneCache.at < 300_000) return doneCache;
@@ -567,7 +586,7 @@ const detailCache = new Map(); // key -> {at, jira}
 async function cardDetail(key, team) {
   const [cards, reqs, watch] = await Promise.all([readJsonOr(path.join(SHARED, 'cards.json'), {}), readJsonOr(path.join(SHARED, 'requests.json'), {}), readJsonOr(path.join(SHARED, 'watch.json'), {})]);
   let log = [];
-  try { log = (await fs.readFile(path.join(SHARED, 'cards-log.jsonl'), 'utf8')).split('\n').filter((l) => l.includes(`"${key}"`)).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.key === key); } catch {}
+  try { log = (await tail(path.join(SHARED, 'cards-log.jsonl'), 2_000_000)).filter((l) => l.includes(`"${key}"`)).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.key === key); } catch {}
   let j = detailCache.get(key);
   if (!j || Date.now() - j.at > 60_000) {
     const r = await run(TEAM_JIRA, ['get', key], { timeout: 25000 });
@@ -621,7 +640,7 @@ async function tokenTurns(file) {
     }
   }
   if (cur.io || cur.cr) turns.push({ keys: [...cur.keys], io: cur.io, cr: cur.cr });
-  tokCache.set(file, { key: ck, turns });
+  tokCache.set(file, { key: ck, turns }); capMap(tokCache, 300);
   return turns;
 }
 async function cardTokens(key) {
@@ -635,6 +654,32 @@ async function cardTokens(key) {
   return { key, tokens: Math.round(io), cacheRead: Math.round(cr), turns, files: files.length };
 }
 
+// The superadmin (Zeus, ~/.omniloy-admin) sits on no floor. The Dev floor watches him too (one `hc get` per round), so
+// a question he waits on in his terminal reaches For you and the phone, and can be answered from there.
+const ADMIN_DIR = path.join(HOME, '.omniloy-admin');
+async function adminPersona() {
+  const t = await readJsonOr(path.join(ADMIN_DIR, 'team.json'), null), list = (t && t.personas) || [];
+  return list.find((x) => x.herdrName === t.lead) || list[0] || null;
+}
+let admin = null; // { herdrName, name, status, menu, address, ... } or null
+async function refreshAdmin() {
+  if (process.env.TEAM_DIR) return;
+  const p = await adminPersona();
+  if (!p || !p.herdrName) { admin = null; return; }
+  const g = await run(HC, ['get', p.herdrName, '--json']);
+  let t = null; if (g.ok) { try { t = JSON.parse(g.stdout); } catch {} }
+  const status = mapStatus(t);
+  const a = { slug: p.slug || p.herdrName, herdrName: p.herdrName, name: p.name || p.herdrName, role: p.role || 'Superadmin', color: p.color || '#fbbf24', admin: true,
+    status, statusSince: t ? t.status_ms : 0, statusMsg: (t && t.status && t.status.msg) || '', address: t ? t.address : '', turn: t ? t.turn : 0, menu: null, lastSaid: '' };
+  if (status === 'blocked') {
+    const r = await run(HC, ['read', p.herdrName, '--lines', '40']);
+    const parsed = r.ok ? parseMenu(r.stdout) : null;
+    a.menu = parsed ? menuInstance(t, parsed) : null;
+    if (a.menu && !a.menu.said) a.menu.said = saidOf(a);
+  }
+  admin = a;
+}
+
 let refreshing = false, dirty = false;
 async function refresh() {
   if (refreshing) { dirty = true; return; }
@@ -642,13 +687,18 @@ async function refresh() {
   try {
     const team = await loadTeam();
     const names = new Set(team.personas.map((p) => p.herdrName));
-    refreshPrs(team).then(scheduleRefresh).catch(() => {});
+    // only a real GitHub read schedules another round: scheduling one after every refresh made the floor refresh
+    // ~4 times a second forever (hc ls + hc get/read per person each time)
+    refreshPrs(team).then((read) => { if (read) scheduleRefresh(); }).catch(() => {});
     // a card taken, passed or created (cards.json changed) is looked up at once, not on the next 90 s round: until then it
     // shows only its short local title and no status
     const cm = (await fs.stat(path.join(HOME, '.omniloy-team', 'cards.json')).catch(() => null))?.mtimeMs || 0;
     if (Date.now() - jiraAt > 90_000 || (cm !== cardsMtime && Date.now() - jiraAt > 3000)) { jiraAt = Date.now(); cardsMtime = cm; refreshJira(team).then(scheduleRefresh).catch(() => {}); }
     const probe = await run(HC, ['ls', '--json']);
-    const agents = await Promise.all(team.personas.map((p) => buildAgent(p, team, names)));
+    const plates = await plateFiles();
+    const agents = await Promise.all(team.personas.map((p) => buildAgent(p, team, names, plates)));
+    await refreshAdmin().catch(() => {});
+    floorAddrs = new Set([...agents, ...(admin ? [admin] : [])].map((a) => a.address).filter(Boolean));
     const now = Date.now();
     for (const a of agents) {
       const prev = lastStatus.get(a.slug);
@@ -689,11 +739,23 @@ function scheduleRefresh() {
   timer = setTimeout(() => { timer = null; refresh(); }, 150);
 }
 
-// Herdr pushes a line whenever a terminal changes; use it to refresh right away.
-let eventsProc = null;
+// Herdr pushes a line whenever a terminal changes; use it to refresh right away, but only for this floor's own
+// terminals (every floor hears every terminal) and not for a title change (a spinner in the tab title, many a second).
+// Anything else (a terminal not seen yet) waits for the 2.5 s round.
+let eventsProc = null, floorAddrs = new Set();
+function concerns(line) {
+  let d; try { d = JSON.parse(line); } catch { return false; }
+  const ev = d && d.params;
+  return !!(ev && ev.terminal && ev.type !== 'title' && floorAddrs.has(ev.terminal));
+}
 function followEvents() {
   eventsProc = spawn(HC, ['events', '--json'], { stdio: ['ignore', 'pipe', 'ignore'] });
-  eventsProc.stdout.on('data', scheduleRefresh);
+  let pend = '';
+  eventsProc.stdout.on('data', (c) => {
+    const lines = (pend + c).split('\n'); pend = lines.pop();
+    if (pend.length > 1_000_000) pend = ''; // a line that never ends is not an event
+    if (lines.some(concerns)) scheduleRefresh();
+  });
   eventsProc.on('error', () => {});
   eventsProc.on('exit', () => { eventsProc = null; setTimeout(followEvents, 3000).unref(); });
 }
@@ -704,9 +766,12 @@ for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
+// Backups and leftovers next to the real files (x.js.bak-20261119, x.orig, x~, .DS_Store) are never served.
+const HIDDEN = /(^|\/)\.|\.bak|\.orig$|\.rej$|\.tmp$|~$/i;
 async function serveFile(res, rootDir, rel, cache) {
   const file = path.normalize(path.join(rootDir, rel));
   if (!file.startsWith(rootDir + path.sep)) return json(res, 403, { error: 'forbidden' });
+  if (HIDDEN.test(path.relative(rootDir, file))) return json(res, 404, { error: 'not found' });
   try {
     const st = await fs.stat(file);
     if (!st.isFile()) throw new Error('not a file');
@@ -723,7 +788,21 @@ function readBody(req) {
   });
 }
 // Pending requests for __OWNER__ (written by `team-ask`); the office shows them and can answer.
+let roster = { at: 0, by: {} };
+async function everyone() { // the people of every floor (and the superadmin), read again every 30 s at most
+  if (Date.now() - roster.at < 30_000) return roster.by;
+  const by = {};
+  for (const o of OFFICES) for (const f of ['team.json', 'temps.json']) {
+    try { const d = JSON.parse(await fs.readFile(path.join(HOME, o.dir, f), 'utf8')); for (const q of (Array.isArray(d) ? d : d.personas) || []) if (q && q.herdrName && !by[q.herdrName]) by[q.herdrName] = q; } catch { /* no such file on that floor */ }
+  }
+  const z = await adminPersona(); if (z && z.herdrName && !by[z.herdrName]) by[z.herdrName] = z;
+  roster = { at: Date.now(), by };
+  return by;
+}
 const TEAM_ASK = bin('team-ask');
+// Free text passed to a tool as an argument: the tools read anything that starts with "--" as an option, so an answer
+// like "--no, wait" would be refused. A zero-width space in front keeps it text and is invisible.
+const argText = (t) => (/^-/.test(t) ? `\u200b${t}` : t);
 const shortName = (n) => { const m = /^(\S+) (\d+) \(temp\)/.exec(String(n)); return m ? `${m[1]} ${m[2]}` : String(n).split(' ')[0]; }; // a temp keeps its number: "Nora 3"
 async function loadRequests() {
   let items = [];
@@ -732,11 +811,9 @@ async function loadRequests() {
   const team = await loadTeam();
   if (process.env.TEAM_DIR) { const mine = new Set(team.personas.map((p) => p.herdrName)); items = items.filter((x) => mine.has(x.from)); }
   const open = items.filter((x) => x.status === 'open');
-  const elsewhere = {}; // people of the other floors (this floor lists everyone's requests)
-  if (!process.env.TEAM_DIR) for (const o of OFFICES) for (const f of ['team.json', 'temps.json']) {
-    try { const d = JSON.parse(await fs.readFile(path.join(HOME, o.dir, f), 'utf8')); for (const q of (Array.isArray(d) ? d : d.personas) || []) if (q && q.herdrName && !elsewhere[q.herdrName]) elsewhere[q.herdrName] = q; } catch { /* no such file on that floor */ }
-  }
+  const elsewhere = process.env.TEAM_DIR ? {} : await everyone(); // people of the other floors (this floor lists everyone's requests)
   const menus = state.agents.filter((a) => a.status === 'blocked' && a.menu).map((a) => menuItem(a, a.menu, { said: saidOf(a), created: a.statusSince }));
+  if (admin && admin.status === 'blocked' && admin.menu) menus.unshift(menuItem(admin, admin.menu, { said: saidOf(admin), created: admin.statusSince }));
   // The Dev floor lists every floor's requests, so it lists every floor's terminal menus too (each floor writes its
   // own to push/local-<port>.json, see hub.mjs); answering them works from here (hc reaches every terminal).
   if (!process.env.TEAM_DIR) for (const o of OFFICES) {
@@ -778,10 +855,6 @@ function menuItem(p, m, { said = '', created = 0, floor = '' } = {}) {
     title: m.title || m.question, question: m.question, context: m.context || [], said, body: '', options: m.options, menuId: m.id, terminalId: m.terminalId,
     notifyId: `menu:${p.herdrName}:${m.id}`, created: new Date(created || Date.now()).toISOString(), menu: true, floor };
 }
-let requestsSig = '';
-setInterval(async () => { // a new or answered request changes the picture in the Herdr tab too
-  try { const sig = JSON.stringify(await loadRequests()); if (sig !== requestsSig) { requestsSig = sig; } } catch { /* ignore */ }
-}, 3000).unref();
 const personaByName = async (name) => (await loadTeam()).personas.find((p) => p.herdrName === name);
 
 const freeMenu = (label) => /type something|tell (Claude|Codex)|chat about this/i.test(label);
@@ -790,7 +863,8 @@ async function anyPersona(name) { // someone on this floor, or on another one (t
   for (const o of OFFICES) for (const f of ['team.json', 'temps.json']) {
     try { const d = JSON.parse(await fs.readFile(path.join(HOME, o.dir, f), 'utf8')); const q = ((Array.isArray(d) ? d : d.personas) || []).find((x) => x && x.herdrName === name); if (q) return q; } catch { /* no such file on that floor */ }
   }
-  return null;
+  const z = await adminPersona(); // the superadmin's own menus are answered from the office too
+  return z && z.herdrName === name ? z : null;
 }
 async function liveMenu(name) {
   if (!(await anyPersona(name))) return { ok: false, menu: null };
@@ -853,11 +927,19 @@ async function answerMenu(body) {
   }
 }
 
+// Why a message did not reach someone, in words the owner can act on: "not running" only when that is the case.
+function notSent(name, stderr) {
+  const a = state.agents.find((x) => x.herdrName === name) || (admin && admin.herdrName === name ? admin : null);
+  const who = a ? shortName(a.name || name) : name;
+  if (a && a.status === 'offline') return `${who} is not running in Herdr`;
+  if (a && a.status === 'blocked') return `${who} is waiting on a question in the terminal${a.menu ? ` ("${clip(oneLine(a.menu.title || a.menu.question), 80)}")` : ''}: answer it first (For you or Live screen), then send again`;
+  return clip(oneLine(stderr) || `could not send to ${who}`, 240);
+}
 async function deliver(name, text) {
   const started = Date.now();
   const p = run(HC, ['send', '--json', name, '--', text], { timeout: 120_000 });
   const first = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), 12_000))]);
-  if (first && !first.ok) return { name, ok: false, error: clip(oneLine(first.stderr) || 'hc send failed', 240) };
+  if (first && !first.ok) return { name, ok: false, error: notSent(name, first.stderr) };
   youEvents.push({ id: `you:${name}:${started}`, ts: started, type: 'you', from: '__OWNER_ID__', to: name, text: clip(text, 500) });
   if (youEvents.length > 80) youEvents.shift();
   scheduleRefresh();
@@ -877,7 +959,7 @@ function remoteOk(req, host) {
 }
 
 // What waits for __OWNER__ in every office, and the phone notifications (hub.mjs).
-const hub = createHub({ port: PORT, stuck: () => state.agents.filter((x) => x.status === 'blocked'), agents: () => state.agents, theme: themeSetting });
+const hub = createHub({ port: PORT, stuck: () => [...state.agents.filter((x) => x.status === 'blocked'), ...(admin && admin.status === 'blocked' && admin.menu ? [admin] : [])], agents: () => state.agents, theme: themeSetting });
 
 const term = createTerm({ teamDir: TEAM_DIR, owner: '__OWNER__' }); // the room's terminal (term.mjs): the owner's page only
 
@@ -914,11 +996,15 @@ const server = http.createServer(async (req, res) => {
       scheduleRefresh();
       return json(res, 200, r);
     }
-    if (p === '/api/stream') {
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-      res.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`);
-      clients.add(res);
-      req.on('close', () => clients.delete(res));
+    if (p === '/api/stream') { // the whole state on each change (~100 KB): compressed when the browser takes gzip (~10x less on a phone)
+      const gz = /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', ...(gz ? { 'content-encoding': 'gzip', vary: 'accept-encoding' } : {}) });
+      const z = gz ? zlib.createGzip({ flush: zlib.constants.Z_SYNC_FLUSH }) : null; // every event leaves at once
+      if (z) { z.pipe(res); z.on('error', () => {}); }
+      const c = { write: (s) => (z ? z.write(s) : res.write(s)) };
+      c.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`);
+      clients.add(c);
+      req.on('close', () => { clients.delete(c); if (z) z.end(); });
       return;
     }
     if (p === '/api/screen') {
@@ -945,7 +1031,8 @@ const server = http.createServer(async (req, res) => {
       const paused = new Set(c.paused || []);
       if (body.on) paused.delete(team.name); else paused.add(team.name);
       c.paused = [...paused];
-      await fs.writeFile(f, JSON.stringify(c, null, 1));
+      const tmp = `${f}.${process.pid}.tmp`; // written whole, then renamed: team-watch never reads half a file (that read as "nobody paused")
+      await fs.writeFile(tmp, JSON.stringify(c, null, 1)); await fs.rename(tmp, f);
       scheduleRefresh();
       return json(res, 200, { ok: true, on: !!body.on });
     }
@@ -984,11 +1071,21 @@ const server = http.createServer(async (req, res) => {
         const answer = await answerMenu(body);
         return json(res, answer.code, answer.body);
       }
-      const id = String(Number(body.id) || ''), text = String(body.text || '').trim();
+      const id = String(Number(body.id) || ''), text = String(body.text || '').trim(), answering = p.endsWith('/answer');
       if (!id) return json(res, 400, { error: 'id is required' });
-      if (p.endsWith('/answer') && (!text || text.length > 4000)) return json(res, 400, { error: 'answer is empty or too long' });
-      const r = await run(TEAM_ASK, p.endsWith('/answer') ? ['answer', id, text] : ['read', id], { timeout: 30000 });
+      if (answering && (!text || text.length > 4000)) return json(res, 400, { error: 'answer is empty or too long' });
+      const stored = async () => ((await readJsonOr(path.join(SHARED, 'requests.json'), {})).items || []).find((x) => String(x.id) === id);
+      if (answering) { // answered twice (phone and desktop, or a retry) would tell the agent twice and overwrite the first answer
+        const x = await stored();
+        if (!x) return json(res, 404, { error: `There is no request #${id} (it may have been archived).` });
+        if (x.status !== 'open') return json(res, 409, { error: `#${id} is already ${x.status}${x.answeredBy ? ` by ${x.answeredBy}` : ''}${x.answeredAt ? ` (${String(x.answeredAt).slice(11, 16)})` : ''}.`, closed: true, status: x.status });
+      }
+      const r = await run(TEAM_ASK, answering ? ['answer', id, argText(text)] : ['read', id], { timeout: 30000 });
       scheduleRefresh();
+      if (!r.ok && answering) { // team-ask saves first and then delivers: a slow or refused delivery still left the answer saved
+        const x = await stored();
+        if (x && x.status === 'answered') return json(res, 200, { ok: true, result: `answered and saved; telling ${x.from} took too long (busy, or waiting on a question), so they may not have it yet: they see it with team-ask`, delivered: false });
+      }
       return json(res, r.ok ? 200 : 502, r.ok ? { ok: true, result: oneLine(r.stdout) } : { error: clip(oneLine(r.stderr || r.stdout), 240) });
     }
     return json(res, 404, { error: 'not found' });
@@ -1000,13 +1097,13 @@ const server = http.createServer(async (req, res) => {
 await refresh();
 setInterval(refresh, 2500).unref();
 setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 20000).unref();
-// A second copy must not touch anything (above all the token file the Herdr tab reads).
+// A second copy must not touch anything (above all its floor's token file).
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') { console.log(`Port ${PORT} is already serving the office; this copy is exiting.`); process.exit(0); }
   throw e;
 });
 server.listen(PORT, HOST, async () => {
-  await fs.writeFile(path.join(ROOT, '.token'), TOKEN, { mode: 0o600 });
+  await fs.writeFile(path.join(ROOT, `.token-${PORT}`), TOKEN, { mode: 0o600 }); // one per floor: they all run from this folder
   followEvents();
   console.log(`Team Office → http://${HOST}:${PORT}`);
 });
