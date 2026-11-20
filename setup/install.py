@@ -255,7 +255,7 @@ class Run:
                 ("com.omniloy.peer-link", [nd, f"{APPS}/team-office/peer-link.mjs"], f"{APPS}/team-office", f"{TEAMS['dev']}/logs/peer-link.log", True),
                 # the watchdog (team-watch run): nudges, the outbox of messages held for busy people, the memory check.
                 # Kept alive; a second copy (an old "watchdog" terminal) just waits for this one's lock.
-                ("com.omniloy.team-watch", ["/usr/bin/python3", f"{BIN}/team-watch", "run"], TEAMS["dev"], f"{TEAMS['dev']}/logs/team-watch.log", True)]
+                ("com.omniloy.watchdog", ["/usr/bin/python3", f"{BIN}/team-watch", "run"], TEAMS["dev"], f"{TEAMS['dev']}/logs/watchdog.log", True)]
         if self.cfg.get("mailRound") and os.path.isdir(BIZ): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{BIZ}/mail-round.log", False))
         if not self.dry and os.path.exists(f"{LA}/com.omniloy.offices.plist"):  # replaced by com.omniloy.office-up
             subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.omniloy.offices"], capture_output=True); os.remove(f"{LA}/com.omniloy.offices.plist")
@@ -316,7 +316,7 @@ def check():
         (line if i == 0 else opt)(up(f["port"]), f"{f['name']} floor answers on {f['port']}", "" if up(f["port"]) else ("office-restart all" if has else f"no team folder {f['path']}"))
     try: w = json.load(open(f"{TEAMS['dev']}/watch.json")); ago = __import__("time").time() - w.get("checkedAt", 0) / 1000
     except Exception: ago = 1e9
-    line(ago < 300, "watchdog runs (team-watch: nudges, held messages, memory check)", "" if ago < 300 else f"launchctl kickstart gui/{os.getuid()}/com.omniloy.team-watch (log: ~/.omniloy-team/logs/team-watch.log)")
+    line(ago < 300, "watchdog runs (team-watch: nudges, held messages, memory check)", "" if ago < 300 else f"launchctl kickstart gui/{os.getuid()}/com.omniloy.watchdog (log: ~/.omniloy-team/logs/watchdog.log)")
     line(up(4340, "/"), "artifacts server answers on 4340")
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())

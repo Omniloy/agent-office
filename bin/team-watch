@@ -4,7 +4,7 @@
 unless it catches someone; then it sends ONE message to the Product lead (or to the lead herself).
 
   team-watch run            loop forever (interval from watch-config.json). Only one runs: a second one waits
-                            until the first stops. Started at login by the LaunchAgent com.omniloy.team-watch
+                            until the first stops. Started at login by the LaunchAgent com.omniloy.watchdog
                             (kept alive) that setup/install.py writes.
   team-watch once [--dry]   one check; --dry prints what it would do and sends nothing
   team-watch status         last check, current stalls, and messages waiting in the outbox
@@ -37,7 +37,10 @@ def check(dry=False):
     c = cfg(); now = time.time(); P = people()
     st = rj(STATE, {}); ag = st.get("agents", {}); events = st.get("events", [])
     try: terms = {t["name"]: t for t in json.loads(subprocess.run([HC, "ls", "--json"], capture_output=True, text=True, timeout=20).stdout)["terminals"] if t.get("name") and t.get("state") == "live"}
-    except Exception as e: print("hc ls failed:", e); return []
+    except Exception as e:   # it runs but cannot see the terminals: the office shows this instead of "on"
+        print("hc ls failed:", e)
+        if not dry: L.save(STATE, {**st, "checkedAt": int(now * 1000), "error": f"cannot see the terminals (hc ls: {str(e)[:80]})", **RUN})
+        return []
     cards = rj(f"{T}/cards.json", {}); reqs = rj(f"{T}/requests.json", {}).get("items", [])
     stalls = []
     for n, p in P.items():
@@ -71,7 +74,7 @@ def check(dry=False):
             to = lead
         print(f'{datetime.datetime.now():%H:%M:%S} CAUGHT {n}: {what} (idle {mins(idle)}), ping {s["pings"]} -> {to}')
         if dry: continue
-        events.append(ev)
+        ev["text"] = f"stopped {mins(idle)} {what}"[:160]; events.append(ev)
         L.deliver(to, msg, "team-watch")
         if s["pings"] >= 2 and lead in P:   # a reminder did not work: __OWNER__ sees it in "Messages for you"
             subprocess.run([f"{HOME}/.local/bin/team-ask", "note", "--from", lead, f"Watchdog: {p['name']} still stopped after a reminder, {what}"[:140],
@@ -103,7 +106,7 @@ def check(dry=False):
                f'team-ask request --from {lead} --to __OWNER_ID__ "one clear question" --ticket KEY; if your side is finished and the only thing left is __OWNER__ approving or merging pull requests, its holder marks it: team-card approval KEY --as HOLDER "PR links" (he sees it in the office and you are not chased for it); only if it truly waits on something outside with nothing to ask, leave it. Do not just reply to this message.')
         print(f'{datetime.datetime.now():%H:%M:%S} CAUGHT team {tn}: all cards waiting ({sig}), nobody asked __OWNER__ (idle {mins(idle)}), ping {t["pings"]} -> {lead}')
         if dry: continue
-        events.append({"id": f"zap:{lead}:{int(now)}", "ts": int(now * 1000), "agent": lead, "name": P[lead]["name"], "team": tn, "cards": waiting, "requests": [], "idleMin": int(idle // 60), "ping": t["pings"], "to": lead, "kind": "team"})
+        events.append({"id": f"zap:{lead}:{int(now)}", "ts": int(now * 1000), "agent": lead, "name": P[lead]["name"], "team": tn, "cards": waiting, "requests": [], "idleMin": int(idle // 60), "ping": t["pings"], "to": lead, "kind": "team", "text": f"the whole team stopped {mins(idle)}, every card waiting"})
         L.deliver(lead, msg, "team-watch")
         if t["pings"] >= 2:
             subprocess.run([f"{HOME}/.local/bin/team-ask", "note", "--from", lead, f"Watchdog: {tn} is stopped with every card waiting ({sig})"[:140],
