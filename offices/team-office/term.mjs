@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE = path.join(HERE, 'pty-bridge.py');
 const HOME = os.homedir();
-const HC = path.join(HOME, '.local', 'bin', 'hc');
+const HC = path.join(HOME, '.local', 'bin', 'hc'), DELIVER = path.join(HOME, '.local', 'bin', 'team-deliver');
 const LOG = path.join(HOME, '.omniloy-team', 'terminal.log');
 const KEEP = 300_000; // bytes of screen kept for a page that opens later
 const NAME = /^[a-z0-9][a-z0-9._-]{0,62}$/i;
@@ -99,7 +99,8 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
   // (pty-bridge.py); over ssh we go by a quiet screen that ends in a prompt. Its author is then sent what it printed.
   function watch(s, cmd, person, where) {
     const mine = ++s.run, typed = Date.now(); let warned = false; s.done = false;
-    const tell = (text) => { if (person) execFile(HC, ['send', person.herdrName, text], { timeout: 20000 }, () => {}); };
+    // typed in now, or queued by team-deliver while the agent is on a question in its terminal (never answers it)
+    const tell = (text) => { if (person) execFile(DELIVER, [person.herdrName, text, '--source', 'term'], { timeout: 180000 }, () => {}); };
     const short = cmd.length > 300 ? `${cmd.slice(0, 300)}…` : cmd;
     const tick = () => {
       if (s.run !== mine) return; // another command was pressed after this one
