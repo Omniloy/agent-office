@@ -121,7 +121,7 @@ const server = http.createServer(async (req, res) => {
     if (parts.length < 2 || !SAFE.test(parts[0]) || !SAFE.test(parts[1]) || parts.some((x) => x === '..' || x.startsWith('.'))) return send(404, 'text/plain', 'not found');
     const dir = path.join(ROOT, parts[0], parts[1]);
     if (!(await inside(dir, ROOT))) return send(404, 'text/plain', 'not found');
-    const meta = await readJson(path.join(dir, 'meta.json'), null);
+    const meta = (await inside(path.join(dir, 'meta.json'), dir)) ? await readJson(path.join(dir, 'meta.json'), null) : null;
     if (!meta) return send(404, TYPES.html, SHELL('Not found', '<h1>Not found</h1><p>This artifact does not exist (it may have been deleted). <a href="/">See all</a></p>'));
     if (parts.length === 2) {
       if (!p.endsWith('/')) return send(302, 'text/plain', '', { location: `${p}/` }); // so relative links inside the page work

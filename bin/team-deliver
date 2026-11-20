@@ -22,6 +22,7 @@ elif a[0] == "ls":
     p = L.pending()
     if "--json" in a: print(json.dumps(p))
     else: print("\n".join(f"{n}: {k} waiting" for n, k in sorted(p.items())) or "nothing waiting")
+    for n, k in sorted(L.unreadable().items()): print(f"{n}: {k} UNREADABLE line(s) kept in {L.short(L.OUTBOX)}/{n}.jsonl (fix or delete by hand)")
 else:
     src = a[a.index("--source") + 1] if "--source" in a and a.index("--source") + 1 < len(a) else ""
     rest = [x for i, x in enumerate(a) if x != "--source" and (i == 0 or a[i - 1] != "--source")]

@@ -294,6 +294,8 @@ elif a[0] == "status":
     st = rj(STATE, {})
     q = L.pending()
     if q: print("outbox:", ", ".join(f"{n} {k}" for n, k in sorted(q.items())), "message(s) waiting")
+    bad = L.unreadable()
+    if bad: print("outbox: UNREADABLE lines kept in", ", ".join(f"{L.short(L.OUTBOX)}/{n}.jsonl ({k})" for n, k in sorted(bad.items())), "- read and fix or delete them by hand")
     if not st: print("never ran"); sys.exit()
     pid = holder()
     print("last check:", datetime.datetime.fromtimestamp(st["checkedAt"] / 1000).strftime("%d %b %H:%M:%S"), "|", f"running (pid {pid})" if pid else "NOT RUNNING",

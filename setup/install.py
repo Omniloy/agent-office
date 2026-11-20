@@ -73,6 +73,17 @@ def tailscale(): return which("tailscale", ["/Applications/Tailscale.app/Content
 def herdr_app(): return which("herdr-app", ["~/Applications/Herdr.app/Contents/MacOS/Herdr", "/Applications/Herdr.app/Contents/MacOS/Herdr"])
 def herdr_core(): return which("hc", ["~/.local/share/herdr-core/current/Contents/MacOS/herdr-core"]) or which("herdr-core")
 
+def fresh(dst, data, mode):
+    """A new temporary file next to dst, created exclusively (never an existing file or link), holding data."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(dst)}.", suffix=".installing", dir=os.path.dirname(dst))
+    try:
+        with os.fdopen(fd, "wb") as f: f.write(data)
+        os.chmod(tmp, mode); return tmp
+    except BaseException:
+        try: os.remove(tmp)
+        except OSError: pass
+        raise
 class Run:
     def __init__(self, cfg, dry, force=False, sections=False, keep=(), quiet=False, resume=False):
         self.cfg, self.dry, self.done, self.warn = cfg, dry, [], []
@@ -137,7 +148,8 @@ class Run:
         if os.path.exists(dst):
             if open(dst, "rb").read() == data: return True
             self.backup(dst)
-        tmp = f"{dst}.installing"; open(tmp, "wb").write(data); os.replace(tmp, dst)
+        mode = os.stat(dst).st_mode & 0o777 if os.path.exists(dst) else 0o644
+        os.replace(fresh(dst, data, mode), dst)
         return True
     def backup(self, dst):
         """A copy of a file about to be replaced, under ~/.omniloy-office/backups/<date>/ (never next to it: a .bak in an
@@ -186,10 +198,7 @@ class Run:
             self.backup(dst)
         if not self.dry:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            tmp = f"{dst}.installing"; open(tmp, "wb").write(data)
-            if mode: os.chmod(tmp, mode)
-            elif os.path.exists(dst): os.chmod(tmp, os.stat(dst).st_mode & 0o777)
-            os.replace(tmp, dst)
+            os.replace(fresh(dst, data, mode or (os.stat(dst).st_mode & 0o777 if os.path.exists(dst) else 0o644)), dst)
         self.wrote[dst] = sha(data); self.changed.add(dst)
         return True
     def report_drift(self):
@@ -318,6 +327,9 @@ class Run:
         # the retired Business floor's email rounds: no new job (an existing one is left as it is)
         if not self.resume:   # office-up restarts paid sessions at login: only with --login-resume (the owner's own yes)
             jobs = [j for j in jobs if j[0] != "com.omniloy.office-up"]
+            if os.path.exists(f"{LA}/com.omniloy.office-up.plist"):
+                self.warn.append(f"{LA}/com.omniloy.office-up.plist is installed from before: at login it restarts the people who were running "
+                                 f"(paid sessions). Left as it is; to stop it: launchctl bootout gui/{os.getuid()}/com.omniloy.office-up and delete the file")
             self.say("com.omniloy.office-up not set up (it resumes people at login: --login-resume, with the owner's yes); "
                      + ("com.omniloy.offices still starts the floors at login" if os.path.exists(f"{LA}/com.omniloy.offices.plist") else "nothing starts the floors at login"))
         old = f"{LA}/com.omniloy.offices.plist"   # replaced by com.omniloy.office-up: backed up, then unloaded

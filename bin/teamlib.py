@@ -201,6 +201,16 @@ def pending():
             n = len(_good(_read_q(f"{OUTBOX}/{f}")))
             if n: out[f[:-6]] = n
     return out
+def unreadable():
+    """{name: number of queue lines that could not be read}: kept on disk for a person to look at, never sent."""
+    out = {}
+    try: files = os.listdir(OUTBOX)
+    except FileNotFoundError: return out
+    for f in files:
+        if f.endswith(".jsonl") and f != "dropped.jsonl":
+            n = sum(1 for x in _read_q(f"{OUTBOX}/{f}") if "_raw" in x)
+            if n: out[f[:-6]] = n
+    return out
 def overdue():
     """{name: (count, oldest 'at')} of queued messages older than KEEP_DAYS not reported yet; marks them reported.
     They stay queued: an answer is delivered late rather than lost."""
