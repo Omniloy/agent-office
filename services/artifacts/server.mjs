@@ -7,6 +7,9 @@
 // Pages are written by agents and often hold health data, so:
 //   - every answer carries a Content-Security-Policy: a page runs its own inline code but cannot load anything from
 //     the internet nor send anything there (connect-src 'self', no external scripts, images or forms);
+//   - and it is sandboxed (CSP `sandbox` without allow-same-origin): each page runs in an origin of its own, so its
+//     scripts cannot read the index, the list or any other page here (they are all on this one origin), nor storage
+//     or cookies. A page still loads its own files with <script src>, <img>, <link> (no fetch of them: no CORS here);
 //   - .md is rendered as plain Markdown (nothing runs); .mdx, which is a program, is rendered in a separate Node
 //     process that may read only this app and the document's folder, with no environment and a 10 s limit (render-mdx.mjs).
 import http from 'node:http';
@@ -30,7 +33,8 @@ const APP = path.dirname(fileURLToPath(import.meta.url));
 // the renderer reads this app and its libraries (node_modules may be a link to another folder)
 const READ = [...new Set([APP, (() => { try { return realpathSync(path.join(APP, 'node_modules')); } catch { return APP; } })()])].map((d) => `--allow-fs-read=${d}${path.sep}`);
 const CSP = ["default-src 'self' data: blob:", "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
-  "font-src 'self' data:", "media-src 'self' data: blob:", "connect-src 'self'", "form-action 'none'", "frame-src 'self'", "base-uri 'self'", "object-src 'none'"].join('; ');
+  "font-src 'self' data:", "media-src 'self' data: blob:", "connect-src 'self'", "form-action 'none'", "frame-src 'self'", "base-uri 'self'", "object-src 'none'",
+  'sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads'].join('; ');
 
 async function remoteOk(req, host) {
   let r; try { r = JSON.parse(await fs.readFile(path.join(HOME, '.omniloy-team', 'remote.json'), 'utf8')); } catch { return false; }

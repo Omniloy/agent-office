@@ -114,7 +114,7 @@ const hasPrs = () => { const s = office().state && office().state(); return !!(s
 
 // Someone on this floor stopped on a question the page cannot read (a long list, a plan to approve, an app it does not
 // know): no buttons for it, but it is waiting for you all the same, so it is listed with the way to their screen.
-const stuck = () => (office().agents ? office().agents() : []).filter((a) => a.status === 'blocked' && a.statusSince && Date.now() - a.statusSince > 15000
+const stuck = () => (window.__GUEST__ ? [] : office().agents ? office().agents() : []).filter((a) => a.status === 'blocked' // a visitor has no Live screen: no such cards && a.statusSince && Date.now() - a.statusSince > 15000
   && !items.some((x) => x.menu && x.from === a.herdrName));
 const stuckSig = () => stuck().map((a) => a.herdrName).join(',');
 const show = (on, which) => { if (which) tab = which; pop.classList.toggle('show', on); btn.classList.toggle('on', on); render(true); if (on && tab === 'prs') refreshPrs(); };

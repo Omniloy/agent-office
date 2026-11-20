@@ -69,6 +69,9 @@ def restart(port):
             try: m = re.search(r"__TOKEN__ = '([0-9a-f]+)'", get(port, '/')); tok = m.group(1) if m else ''
             except Exception: pass
         else: print(f'{name} ({port}): not answering; stopping it')
+        if not tok:   # a hung server cannot serve its page: the token file it wrote at start keeps open pages working
+            try: tok = re.fullmatch(r'[0-9a-f]{16,128}', open(os.path.join(cwd, f'.token-{port}')).read().strip()).group(0)
+            except Exception: tok = ''
         if not stop(pid, name, port): print(f'{name} ({port}): could not be stopped (pid {pid}); nothing started'); return False
     os.makedirs(LOGS, exist_ok=True)
     log = open(os.path.join(LOGS, f'office-{port}.log'), 'ab')  # why a floor died: its last errors are here

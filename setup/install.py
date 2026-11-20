@@ -6,6 +6,9 @@
   python3 setup/install.py --check                                only check what is installed and working
   ... --force              also replace live files that were edited by hand since the last install (see below)
   ... --protocol-sections  apply the protocol sections that follow the repo without asking (you approved them)
+  ... --keep PATH          leave this live file as it is even with --force (repeatable; e.g. a role file with a live-only rule)
+  ... --no-services        do not touch the background services (LaunchAgents)
+  ... --only-services      install or update only the background services (a separate step, with the owner's yes)
 
 It copies the apps, tools, Herdr panels, skills and role instructions to their places, filling in the owner's
 name. It never overwrites a team folder that already exists (people, protocols, memory, requests): those are yours.
@@ -13,12 +16,20 @@ It does not install Herdr, Node, Claude Code, Codex or Tailscale, and it never s
 tells the installing agent how to do those with the user's go-ahead.
 
 Safe updates:
+- It looks before it writes: every destination is checked first, and when a live file was edited by hand (below)
+  the run stops before changing anything at all, so an update never leaves half a new install behind.
 - Every file it replaces is copied first to ~/.omniloy-office/backups/<date>/ (same path under the home folder).
+  That includes the generated ones: remote.json and the LaunchAgents.
+- It never writes through a symbolic link: a destination inside a linked folder (a skill linked to another repo) or
+  that is itself a link is left alone and listed.
 - It remembers what it wrote (~/.omniloy-office/installed.json). A live file that differs both from the repo and
   from what the last install wrote was edited by hand: it is NOT replaced, the run ends with a list and a diff for
   each, and only --force replaces them (after the backup). On the first update with this check every file that
   differs counts as edited: read the diffs, bring wanted edits into the repo, then use --force.
 - npm dependencies are installed again when an app's package.json or package-lock.json changed.
+- A LaunchAgent is reloaded only when its file changed. office-up (RunAtLoad: it can restart agents, which are paid
+  sessions) is written but never started by the installer: it runs at the next login.
+- The retired Business floor (biz-office, ~/.omniloy-biz) is not installed or touched.
 - The protocol sections that follow the repo are shown as a diff and applied only with a yes (or --protocol-sections).
 """
 import sys, os, json, re, shutil, subprocess, argparse, datetime, filecmp, glob, hashlib, difflib
@@ -60,15 +71,18 @@ def herdr_app(): return which("herdr-app", ["~/Applications/Herdr.app/Contents/M
 def herdr_core(): return which("hc", ["~/.local/share/herdr-core/current/Contents/MacOS/herdr-core"]) or which("herdr-core")
 
 class Run:
-    def __init__(self, cfg, dry, force=False, sections=False):
+    def __init__(self, cfg, dry, force=False, sections=False, keep=(), quiet=False):
         self.cfg, self.dry, self.done, self.warn = cfg, dry, [], []
-        self.force, self.sections = force, sections
-        self.drift, self.wrote, self.changed, self.backed = [], {}, set(), 0
+        self.force, self.sections, self.quiet = force, sections, quiet
+        self.keep = {os.path.abspath(os.path.expanduser(k)) for k in keep}
+        self.drift, self.wrote, self.changed, self.backed, self.linked, self.kept = [], {}, set(), 0, [], []
         try: self.manifest = json.load(open(MANIFEST)).get("files", {})
         except Exception: self.manifest = {}
         o = cfg["owner"]
         self.tokens = {"__OWNER_ID__": o["id"], "__OWNER__": o["name"], "__LANGUAGE__": cfg.get("language") or "English"}
-    def say(self, s): self.done.append(s); print(("would: " if self.dry else "ok: ") + s)
+    def say(self, s):
+        self.done.append(s)
+        if not self.quiet: print(("would: " if self.dry else "ok: ") + s)
     def render(self, text):
         for k, v in self.tokens.items(): text = text.replace(k, v)
         return text
@@ -111,12 +125,29 @@ class Run:
         rel = os.path.relpath(dst, HOME) if dst.startswith(HOME + "/") else dst.lstrip("/")
         os.makedirs(os.path.dirname(f"{BACKUPS}/{rel}"), exist_ok=True); shutil.copy2(dst, f"{BACKUPS}/{rel}"); self.backed += 1
     def put(self, src, dst, mode=None, keep_existing=False, **_):
-        """Copy one file, filling in the placeholders when it is text. Returns True when dst changed.
-        A live file that was edited since the last install (it matches neither the repo nor what was installed) is
-        left alone and reported, unless --force."""
+        """Copy one file, filling in the placeholders when it is text. Returns True when dst changed."""
         raw = open(src, "rb").read()
         try: data = self.render(raw.decode("utf-8")).encode("utf-8")
         except UnicodeDecodeError: data = raw
+        return self.put_data(data, dst, mode, keep_existing)
+    def link_in(self, dst):
+        """The first symbolic link on the way from the home folder to dst (dst included), or ''."""
+        p = os.path.abspath(dst)
+        rel = os.path.relpath(p, HOME) if p.startswith(HOME + "/") else None
+        if rel is None: return p if os.path.islink(p) else ""
+        cur = HOME
+        for part in rel.split(os.sep):
+            cur = os.path.join(cur, part)
+            if os.path.islink(cur): return cur
+        return ""
+    def put_data(self, data, dst, mode=None, keep_existing=False):
+        """Write bytes to dst. A live file that was edited since the last install (it matches neither the repo nor what
+        was installed) is left alone and reported, unless --force; one named with --keep, or reached through a
+        symbolic link, is never written. Returns True when dst changed."""
+        ln = self.link_in(dst)
+        if ln:   # e.g. ~/.claude/skills/<name> linked to another repo: writing would change that repo's file
+            if (dst, ln) not in self.linked: self.linked.append((dst, ln))
+            return False
         if os.path.exists(dst):
             cur = open(dst, "rb").read()
             if cur == data:
@@ -127,6 +158,8 @@ class Run:
                 if not self.dry: open(dst + ".new", "wb").write(data)
                 self.warn.append(f"{dst} already exists and differs from the repo; yours was kept and the repo's version is next to it as {os.path.basename(dst)}.new")
                 return False
+            if os.path.abspath(dst) in self.keep:
+                self.kept.append(dst); return False
             if sha(cur) != self.manifest.get(dst) and not self.force:
                 self.drift.append((dst, cur, data)); return False
             self.backup(dst)
@@ -155,6 +188,10 @@ class Run:
         print(("Diffs (live -> repo) are in " + out if not self.dry else "Run without --dry-run to get a diff of each") +
               ". Bring the live edits you want to keep into the repo, then run again; or rerun with --force to replace them (each is backed up first).")
         return 1
+    def report_links(self):
+        for dst, ln in self.linked:
+            print(f"NOTE: {dst} was not written: {ln} is a link to {os.path.realpath(ln)} (the installer never writes through a link; update it there yourself if you want the repo's version)")
+        for dst in self.kept: print(f"NOTE: {dst} was kept as it is (--keep)")
     def tree(self, src, dst, **kw):
         n = 0
         for root, dirs, files in os.walk(src):
@@ -166,13 +203,13 @@ class Run:
 
     # ---- steps
     def apps(self):
-        for name, src in (("team-office", "offices/team-office"), ("biz-office", "offices/biz-office"), ("artifacts", "services/artifacts")):
+        for name, src in (("team-office", "offices/team-office"), ("artifacts", "services/artifacts")):   # biz-office: Business is retired
             n = self.tree(f"{REPO}/{src}", f"{APPS}/{name}")
             self.say(f"{name}: {n} file(s) written to {APPS}/{name}")
             deps = {f"{APPS}/{name}/package.json", f"{APPS}/{name}/package-lock.json"} & self.changed   # B38: new or changed dependencies
             if not os.path.isdir(f"{APPS}/{name}/node_modules") or deps:
                 if not npm(): self.warn.append(f"npm was not found: run `npm install --omit=dev` in {APPS}/{name} after installing Node"); continue
-                if not self.dry:
+                if not self.dry and not self.quiet:
                     r = subprocess.run([npm(), "install", "--omit=dev", "--no-audit", "--no-fund"], cwd=f"{APPS}/{name}", capture_output=True, text=True, env={**os.environ, "PATH": os.path.dirname(npm()) + ":" + os.environ.get("PATH", "")})
                     if r.returncode: self.warn.append(f"npm install failed in {APPS}/{name}: {r.stderr.strip()[-300:]}"); continue
                 self.say(f"{name}: dependencies installed")
@@ -221,8 +258,8 @@ class Run:
             self.say(f"{sig} created (edit name, title and links)")
         ts = c.get("tailscale") or {}
         if ts.get("host") and ts.get("logins"):
-            if not self.dry: json.dump({"host": ts["host"], "logins": ts["logins"]}, open(f"{shared}/remote.json", "w"), indent=2)
-            self.say(f"{shared}/remote.json written: the phone door is open for {len(ts['logins'])} Tailscale login(s)")
+            body = (json.dumps({"host": ts["host"], "logins": ts["logins"]}, indent=2)).encode()
+            if self.put_data(body, f"{shared}/remote.json", 0o600): self.say(f"{shared}/remote.json written: the phone door is open for {len(ts['logins'])} Tailscale login(s)")
     def people(self):
         n = 0
         for kind in TEAMS:
@@ -256,20 +293,29 @@ class Run:
                 # the watchdog (team-watch run): nudges, the outbox of messages held for busy people, the memory check.
                 # Kept alive; a second copy (an old "watchdog" terminal) just waits for this one's lock.
                 ("com.omniloy.watchdog", ["/usr/bin/python3", f"{BIN}/team-watch", "run"], TEAMS["dev"], f"{TEAMS['dev']}/logs/watchdog.log", True)]
-        if self.cfg.get("mailRound") and os.path.isdir(BIZ): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{BIZ}/mail-round.log", False))
-        if not self.dry and os.path.exists(f"{LA}/com.omniloy.offices.plist"):  # replaced by com.omniloy.office-up
-            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.omniloy.offices"], capture_output=True); os.remove(f"{LA}/com.omniloy.offices.plist")
-        for label, args, cwd, log, keep in jobs:
-            f = f"{LA}/{label}.plist"; body = plist(label, args, cwd, log, keep)
-            if label == "com.omniloy.mail-round": body = body.replace("<key>RunAtLoad</key><true/>", "<key>RunAtLoad</key><true/><key>StartInterval</key><integer>600</integer>")
+        # the retired Business floor's email rounds: no new job (an existing one is left as it is)
+        old = f"{LA}/com.omniloy.offices.plist"   # replaced by com.omniloy.office-up: backed up, then unloaded
+        if os.path.exists(old):
             if not self.dry:
-                os.makedirs(LA, exist_ok=True); os.makedirs(os.path.dirname(log), exist_ok=True)
-                open(f, "w").write(body)
-                uid = os.getuid()
+                self.backup(old)
+                subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.omniloy.offices"], capture_output=True); os.remove(old)
+            self.say(f"com.omniloy.offices removed (replaced by com.omniloy.office-up; the file is in {BACKUPS})")
+        uid = os.getuid()
+        def loaded(label): return subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"], capture_output=True).returncode == 0
+        for label, args, cwd, log, keep in jobs:
+            f = f"{LA}/{label}.plist"
+            if not self.dry: os.makedirs(LA, exist_ok=True); os.makedirs(os.path.dirname(log), exist_ok=True)
+            changed = self.put_data(plist(label, args, cwd, log, keep).encode(), f, 0o644)
+            if f in [d for d, _, _ in self.drift] or (not changed and not os.path.exists(f)): continue   # left as it is (reported)
+            if label == "com.omniloy.office-up":   # RunAtLoad and it may restart agents: never started from here
+                self.say(f"{label} {'written' if changed else 'unchanged'}: it runs at the next login (start it now only with the owner's yes: launchctl bootstrap gui/{uid} {f})")
+                continue
+            if not changed and loaded(label): self.say(f"{label} unchanged and running"); continue
+            if not self.dry:
                 subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], capture_output=True)
                 r = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", f], capture_output=True, text=True)
                 if r.returncode: self.warn.append(f"{label} could not be loaded: {r.stderr.strip()[:200]}")
-            self.say(f"{label} installed (starts at login{', kept alive' if keep else ''})")
+            self.say(f"{label} {'installed' if changed else 'loaded'} (starts at login{', kept alive' if keep else ''})")
     def names(self):
         """Nothing that leaves the office names the team: the check runs before every outgoing write in Claude Code."""
         if "claude" not in (self.cfg.get("runtimes") or ["claude"]): self.warn.append("Codex has no check before each write: there the rule on team names rests on the protocol and on team-jira and team-draft"); return
@@ -336,23 +382,37 @@ def check():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config"); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--check", action="store_true")
-    ap.add_argument("--no-services", action="store_true", help="do not install the background services (for tests)")
+    ap.add_argument("--no-services", action="store_true", help="do not touch the background services (LaunchAgents)")
+    ap.add_argument("--only-services", action="store_true", help="install or update only the background services")
     ap.add_argument("--force", action="store_true", help="also replace live files edited since the last install (backed up first)")
+    ap.add_argument("--keep", action="append", default=[], metavar="PATH", help="never replace this live file, even with --force (repeatable)")
     ap.add_argument("--protocol-sections", action="store_true", help="apply the protocol sections that follow the repo without asking")
     a = ap.parse_args()
     if a.check: sys.exit(check())
     if not a.config: ap.error("--config is required (see setup/office.config.example.json)")
+    if a.no_services and a.only_services: ap.error("--no-services and --only-services exclude each other")
     cfg = json.load(open(a.config))
     o = cfg.get("owner") or {}
     if not o.get("name") or not re.fullmatch(r"[a-z][a-z0-9]{1,15}", o.get("id") or ""): sys.exit('config: owner must be {"name": "Ana", "id": "ana"} (id: lowercase letters and digits, 2 to 16)')
     if o["id"] in RESERVED: sys.exit(f'config: owner id "{o["id"]}" is the name of someone on the team; pick another (for example add a surname initial)')
     bad = [r for r in cfg.get("runtimes") or [] if r not in ("claude", "codex")]
     if bad or not cfg.get("runtimes"): sys.exit('config: runtimes must list what is installed: ["claude"], ["codex"] or ["claude", "codex"]')
-    r = Run(cfg, a.dry_run, force=a.force, sections=a.protocol_sections)
-    r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
-    if not a.no_services: r.services()
+    def steps(r):
+        if not a.only_services: r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
+        if not a.no_services: r.services()
+    # 1. look: every destination is compared first, nothing is written
+    look = Run(cfg, True, force=a.force, sections=a.protocol_sections, keep=a.keep, quiet=True)
+    steps(look)
+    if look.drift and not a.force:
+        look.dry = a.dry_run; look.report_drift(); look.report_links()
+        print("\nNothing was changed: the install stops before writing anything while live files differ like this.")
+        sys.exit(1)
+    # 2. do it (or say it, with --dry-run)
+    r = Run(cfg, a.dry_run, force=a.force, sections=a.protocol_sections, keep=a.keep)
+    steps(r)
     r.record()
     for w in r.warn: print("NOTE: " + w)
+    r.report_links()
     drift = r.report_drift()
     print("\nNext: python3 setup/install.py --check   (then continue with setup/SETUP.md)")
     sys.exit(drift)

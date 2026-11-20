@@ -36,7 +36,8 @@ with open(f + ".lock", "w") as l:
     tmp = f + ".tmp-" + str(os.getpid())
     with open(tmp, "w") as o: json.dump(items, o, indent=1)
     os.replace(tmp, f)`;
-const readBody = (req, max = 60_000) => new Promise((resolve) => { let s = ''; req.on('data', (c) => { s += c; if (s.length > max) { resolve({}); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch { resolve({}); } }); req.on('error', () => resolve({})); });
+// A body over the limit reads as empty (so the answer is a 400, not a closed connection); past 1 MB the connection is cut
+const readBody = (req, max = 60_000) => new Promise((resolve) => { let s = '', n = 0, big = false; req.on('data', (c) => { n += c.length; if (big) { if (n > 1e6) { resolve({}); req.destroy(); } return; } s += c; if (s.length > max) { big = true; s = ''; } }); req.on('end', () => { try { resolve(big ? {} : JSON.parse(s || '{}')); } catch { resolve({}); } }); req.on('error', () => resolve({})); });
 const tool = (name, args, input) => new Promise((resolve) => {
   const c = execFile(path.join(BIN, name), args, { timeout: 30_000, maxBuffer: 4e6, env: { ...process.env, PATH: `${BIN}:${process.env.PATH || ''}` } }, (err, stdout, stderr) => {
     let d = null; try { d = JSON.parse(String(stdout).trim().split('\n').pop()); } catch { /* plain text */ }
@@ -175,7 +176,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
   async function answerFits(peer, b) {
     const ref = (b && b.ref) || {}, d = await peersFile();
     if (ref.local) {
-      if (d.home !== peer.id) return 'that request was not sent to your building';
+      if (d.home !== peer.id || (d.sent || {})[String(Number(ref.local))] !== peer.id) return 'that request was not sent to your building'; // team-peer forward records where each one went
       const x = ((await readJson(path.join(SHARED, 'requests.json'), { items: [] })).items || []).find((y) => String(y.id) === String(Number(ref.local)));
       if (!x || x.ext || x.status !== 'open' || (x.to || '__OWNER_ID__') !== '__OWNER_ID__') return 'there is no open request with that number for your building';
       return '';
@@ -211,7 +212,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
         if (!b.from || !/^[0-9a-f]{6,16}$/.test(String(b.from.id || '')) || !b.key) return json(res, 400, { error: 'bad hello' });
         // a hello may introduce a building, never take over one already met: its key changes only while nothing was agreed
         const known = ((await peersFile()).peers || {})[String(b.from.id)];
-        if (known && known.key && known.key !== String(b.key) && (known.status || 'none') !== 'none') return json(res, 409, { error: 'this building is already known with another key' });
+        if (known && known.key && known.key !== String(b.key) && ((known.status || 'none') !== 'none' || known.met)) return json(res, 409, { error: 'this building is already known with another key' }); // met: it was connected once (team-peer forget clears it)
         const r = await tool('team-peer', ['incoming', 'hello'], b);
         return json(res, r.ok ? 200 : 409, r.ok ? { ...(r.json || {}), card: await card() } : (r.json || { error: r.err || r.out }));
       }
@@ -233,7 +234,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
         const info = { building: me.name || '', owner: me.owner || '', floor: mine.name, lead: c ? c.lead : {}, viewer: peer ? { id: peer.id, name: peer.name, user: String(req.headers['x-peer-user'] || peer.owner || '') } : null,
           share: !!(peer && ((peer.my || {})[port] || {}).share), chats: !!(peer && peer.chats && peer.status === 'on'), back: String(req.headers['x-peer-back'] || '') };
         const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest').replace('%%OFFICE_THEME%%', ((await themeNow()) || {}).effective || '')
-          .replace('</head>', `<script>window.__GUEST__ = ${JSON.stringify(info).replace(/</g, '\\u003c')};</script><script type="module" src="/js/guest.js"></script></head>`);
+          .replace('</head>', `<script>window.__GUEST__ = ${JSON.stringify(info).replace(/</g, '\\u003c')}; window.__FLOORS__ = [];</script><script type="module" src="/js/guest.js"></script></head>`);
         res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' }); return res.end(html);
       }
       if (p === '/health') return json(res, 200, { ok: true, guest: true });

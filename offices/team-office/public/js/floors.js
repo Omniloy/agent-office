@@ -15,13 +15,15 @@ function start() {
   const office = () => window.office || {};
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const here = location.port;
-  // ground floor first; the colours echo each room
-  const FLOORS = [
-    { name: 'Dev', port: '4317', floor: 0xead7b4, wall: 0xf3efe6, line: 0x5b6ee1, desks: 4 },
-    { name: 'CRM', port: '4319', floor: 0x2f6f6a, wall: 0xe6f4f2, line: 0x14b8a6, desks: 3 },
-    { name: 'Web', port: '4320', floor: 0xc9a27a, wall: 0xf7eee6, line: 0xf97316, desks: 3 },
-    { name: 'Lab', port: '4321', floor: 0x1e1b4b, wall: 0xeef0fb, line: 0x6366f1, desks: 4 },
-  ];
+  // ground floor first: the server's list (window.__FLOORS__, from floors.json); the colours echo each room
+  const LOOK = {
+    4317: { floor: 0xead7b4, wall: 0xf3efe6, line: 0x5b6ee1 }, 4319: { floor: 0x2f6f6a, wall: 0xe6f4f2, line: 0x14b8a6 },
+    4320: { floor: 0xc9a27a, wall: 0xf7eee6, line: 0xf97316 }, 4321: { floor: 0x1e1b4b, wall: 0xeef0fb, line: 0x6366f1 },
+  };
+  const SPARE = [{ floor: 0x8fa7c9, wall: 0xeef2f8, line: 0x3b82f6 }, { floor: 0x7c9a6d, wall: 0xf0f5ec, line: 0x22c55e }, { floor: 0xb08fc9, wall: 0xf5eef8, line: 0xa855f7 }, { floor: 0xc98f8f, wall: 0xf8eeee, line: 0xef4444 }];
+  const LIST = Array.isArray(window.__FLOORS__) && window.__FLOORS__.length ? window.__FLOORS__
+    : [{ name: 'Dev', port: 4317, people: 4 }, { name: 'CRM', port: 4319, people: 3 }, { name: 'Web', port: 4320, people: 3 }, { name: 'Lab', port: 4321, people: 4 }];
+  const FLOORS = LIST.map((f, i) => ({ name: String(f.name), port: String(f.port), ...(LOOK[f.port] || SPARE[i % SPARE.length]), desks: Math.max(1, Math.min(8, Number(f.people) || 3)) }));
   const PEOPLE = [0xf87171, 0x60a5fa, 0x34d399, 0xfbbf24, 0xa78bfa, 0xf472b6];
   const GAP = 4.0, FW = 10, FD = 7, MID = ((FLOORS.length - 1) * GAP) / 2 + 0.5;
   const GOD = -2, GODH = 4.4; // the superadmin: a small figure in the top right corner of the screen (GODH: his height in scene units, clouds to halo)

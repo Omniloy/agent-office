@@ -100,6 +100,7 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .log .m { max-width: 88%; padding: 9px 12px; border-radius: 15px; font-size: 15px; line-height: 1.48; white-space: pre-wrap; overflow-wrap: anywhere; }
 #chat .log .m.you { align-self: flex-end; background: var(--accent, #6c7cff); color: var(--on-accent, #fff); border-bottom-right-radius: 5px; }
 #chat .log .m.you.wait { opacity: .6; }
+#chat .log .m.you.queued { opacity: .75; border-style: dashed; }
 #chat .log .m.them { align-self: flex-start; background: rgba(255, 255, 255, .07); border-bottom-left-radius: 5px; }
 #chat .log .m.peer { align-self: flex-start; background: transparent; border: 1px dashed var(--line, rgba(255,255,255,.2)); font-size: 13px; color: var(--muted, #aab3c9); }
 #chat .log .m.peer b { display: block; font-size: 12px; margin-bottom: 2px; }
@@ -425,6 +426,8 @@ body.embed #chat { display: none !important; }`;
   // cannot paint it again; the next question, if the agent asks one right away, comes as a new card.
   const hidden = new Map(), menuHidden = (id) => (hidden.get(id) || 0) > Date.now() || !!(office().menus && office().menus.hidden && office().menus.hidden(id));
   let menuBusy = false, nextNote = { id: '', text: '', until: 0 };
+  const armAt = new Map(); // the follow-up card takes no tap for its first 1.5 s (a second tap meant for the answered one)
+  const arming = (id) => (armAt.has(id) ? Math.max(0, 1500 - (Date.now() - armAt.get(id))) : 0);
   function paintMenu(m) {
     if (box.classList.contains('ro') || (m && menuHidden(m.id))) m = null;
     currentMenu = m; composeHint();
@@ -437,9 +440,11 @@ body.embed #chat { display: none !important; }`;
     const card = document.createElement('div'); card.className = `menu-card${multi ? ' multi' : ''}`; card.dataset.menuCard = ''; card.dataset.sig = sig;
     const ctx = m.context || [];
     const note = nextNote.id === m.id && nextNote.until > Date.now() ? nextNote.text : '';
+    if (note && !armAt.has(m.id)) { armAt.set(m.id, Date.now()); if (armAt.size > 100) armAt.delete(armAt.keys().next().value); }
+    const arm = arming(m.id);
     card.innerHTML = `${note ? `<span class="new">${esc(note)}</span>` : ''}<div class="q">${esc(m.title || m.question)}</div>${m.title && m.title !== m.question ? `<div class="mq">${esc(m.question)}</div>` : ''}`
       + (ctx.length ? `<pre>${esc(ctx.slice(0, 6).join('\n'))}${ctx.length > 6 ? `\n… ${ctx.length - 6} líneas más en Live screen` : ''}</pre>` : '') // as written, never as a Run button
-      + `<div class="acts" role="group" aria-label="${esc(m.title || m.question)}">${m.options.map((o) => `<button type="button" data-menu-answer="${esc(o)}"${multi && BOX.test(o) ? ` class="${ticked(o) ? 'on' : ''}" aria-pressed="${ticked(o)}"` : ''}>${esc(multi ? o.replace(BOX, (_, n, b) => `${n}${ticked(`${n}${b}`) ? '☑' : '☐'} `) : o)}</button>`).join('')}</div>`
+      + `<div class="acts${arm ? ' arming' : ''}" role="group" aria-label="${esc(m.title || m.question)}"${arm ? ` style="animation-duration:${arm}ms"` : ''}>${m.options.map((o) => `<button type="button" data-menu-answer="${esc(o)}"${multi && BOX.test(o) ? ` class="${ticked(o) ? 'on' : ''}" aria-pressed="${ticked(o)}"` : ''}>${esc(multi ? o.replace(BOX, (_, n, b) => `${n}${ticked(`${n}${b}`) ? '☑' : '☐'} `) : o)}</button>`).join('')}</div>`
       + (multi ? '<div class="hint">Varias respuestas: cada toque marca o desmarca una casilla. Para confirmar, pulsa Enter en Live screen.</div>' : free ? `<div class="hint">O escribe abajo: tu texto se envía con «${esc(free)}».</div>` : '')
       + (target ? '<button type="button" class="mlive" data-live>Live screen ›</button>' : '');
     log.append(card);
@@ -473,12 +478,15 @@ body.embed #chat { display: none !important; }`;
       const choice = menuChoice(currentMenu, text), free = currentMenu.options.find(freeMenu);
       if (choice) { ta.value = ''; grow(); return answerMenu(choice); } // the free option's number asks for the text next
       if (free) return answerMenu(free);
-      return fail(`${firstName() || 'Esta persona'} espera en el terminal y no puede leer mensajes: elige una opción arriba, o mira Live screen.`);
+      // no option takes words: the message is kept (server: outbox) and typed in once the question is answered
     }
     ta.value = ''; drafts.delete(target); grow(); err.textContent = '';
     const el = document.createElement('div'); el.className = 'm you wait'; el.innerHTML = shots(esc(text)); log.append(el); log.scrollTop = log.scrollHeight;
     const p = { k: text.slice(0, 60), el, t: Date.now() }; pending.push(p);
-    try { await api('/api/chat/send', { text, name: target }); el.classList.remove('wait'); }
+    try {
+      const r = await api('/api/chat/send', { text, name: target }); el.classList.remove('wait');
+      if (r && r.queued) { el.classList.add('queued'); el.title = 'Guardado: le llegará en cuanto contestes la pregunta del terminal'; if (office().toast) office().toast(`<i class="dot blocked"></i><span>Guardado. <b>${esc(firstName() || target)}</b> espera una respuesta en el terminal: lo recibirá en cuanto la contestes.</span>`, '', 9000); }
+    }
     catch (e) { el.remove(); pending = pending.filter((x) => x !== p); ta.value = text; grow(); fail(`Not sent: ${e.message || 'try again'}`); }
   }
   $('form', box).addEventListener('submit', (e) => { e.preventDefault(); send(); });
@@ -540,7 +548,7 @@ body.embed #chat { display: none !important; }`;
     setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.classList.remove('sure'); b.innerHTML = was; } }, 5000);
     return false;
   };
-  log.addEventListener('click', (e) => { const b = e.target.closest('[data-menu-answer]'); if (b) { if (sure(b, b.dataset.menuAnswer)) answerMenu(b.dataset.menuAnswer); } else if (e.target.closest('[data-live]')) openLive(who || target); });
+  log.addEventListener('click', (e) => { const b = e.target.closest('[data-menu-answer]'); if (b) { if (!(currentMenu && arming(currentMenu.id)) && sure(b, b.dataset.menuAnswer)) answerMenu(b.dataset.menuAnswer); } else if (e.target.closest('[data-live]')) openLive(who || target); });
   err.addEventListener('click', (e) => { if (e.target.closest('[data-live]')) openLive(who || target); });
   if (PHONE) { try { const f = Number(localStorage.getItem('office.chat.h')); if (f > 0.1 && f < 1) root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`); } catch { /* no storage: the usual height */ } } // the height you left it at (drag its top edge)
   if (panel && (!window.__GUEST__ || window.__GUEST__.chats)) { // a visitor reads chats only where that building allows it

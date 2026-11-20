@@ -74,8 +74,13 @@ def dead(x):
     if x.get("reason") == "killed" or x.get("exit_code") == 0: return False
     return time.time() * 1000 - (x.get("finished_ms") or 0) < 12 * 3600 * 1000
 
-# 2. watchdog
-if os.path.exists(f"{BIN}/team-watch") and not re.search(r"^\S*python\S*\s+\S*team-watch run", sh("ps", "-axo", "command").stdout, re.M):
+# 2. watchdog: running when a `team-watch run` process exists (macOS shows /usr/bin/python3 as ".../Python") or it
+# checked in the last 3 minutes (watch.json, what the office and office-restart status read)
+def watching():
+    if re.search(r"^\S*python[\d.]*\s+\S*team-watch run\b", sh("ps", "-axo", "command").stdout, re.M | re.I): return True
+    st = L.read_quiet(f"{L.SHARED}/watch.json", {}) or {}
+    return time.time() - (st.get("checkedAt") or 0) / 1000 < 180
+if os.path.exists(f"{BIN}/team-watch") and not watching():
     if os.path.exists(WATCH_AGENT):   # launchd keeps it alive; it only needs a nudge
         log("watchdog is not running: asking launchd to start it")
         if not DRY: sh("launchctl", "kickstart", f"gui/{os.getuid()}/com.omniloy.watchdog")

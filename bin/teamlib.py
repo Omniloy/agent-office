@@ -8,6 +8,7 @@
   Locked(path)        one writer at a time (flock on <path>.lock)
   deliver(name, text) type a message into someone's terminal now, or keep it in the outbox until they can take it
   flush()             try the outbox again (the watchdog does this every few seconds)
+  overdue()           queued messages that have waited KEEP_DAYS, each reported once (the watchdog tells the owner)
 """
 import os, sys, json, fcntl, time, subprocess, datetime, re
 sys.dont_write_bytecode = True
@@ -17,7 +18,7 @@ SHARED = f"{HOME}/.omniloy-team"; ADMIN = f"{HOME}/.omniloy-admin"; OUTBOX = f"{
 # Business (4318, ~/.omniloy-biz) is retired: it is not a floor, so its people are nobody here.
 DEFAULT_FLOORS = [{"name": "Dev", "port": 4317, "dir": ".omniloy-team"}, {"name": "CRM", "port": 4319, "dir": ".omniloy-crm"},
                   {"name": "Web", "port": 4320, "dir": ".omniloy-web"}, {"name": "Lab", "port": 4321, "dir": ".omniloy-lab"}]
-KEEP_DAYS = 2   # a message nobody could take for this long is dropped (logged in outbox/dropped.jsonl, without its text)
+KEEP_DAYS = 2   # a message nobody could take for this long is reported to the owner once (it is never dropped)
 
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 def short(p): return str(p).replace(HOME, "~")
@@ -156,12 +157,7 @@ def send_now(name, text, timeout=150):
 def _drain(name, items):
     """Send queued items in order until they cannot go. Several waiting ones go as one paste (each `hc send` waits a few
     seconds of quiet, and one message reads better than six). Returns (left, why)."""
-    cut = time.time() - KEEP_DAYS * 86400; keep = []
-    for x in items:
-        if x.get("ts", 0) >= cut: keep.append(x); continue
-        os.makedirs(OUTBOX, exist_ok=True)
-        with open(f"{OUTBOX}/dropped.jsonl", "a") as f: f.write(json.dumps({"at": now(), "to": name, "queued": x.get("at"), "source": x.get("source", ""), "chars": len(x.get("text", ""))}) + "\n")
-    why = ""
+    keep = list(items); why = ""
     while keep:
         n, size = 0, 0
         while n < len(keep) and n < 6 and (n == 0 or size + len(keep[n]["text"]) < 8000): size += len(keep[n]["text"]); n += 1
@@ -193,6 +189,20 @@ def pending():
         if f.endswith(".jsonl") and f != "dropped.jsonl":
             n = len(_read_q(f"{OUTBOX}/{f}"))
             if n: out[f[:-6]] = n
+    return out
+def overdue():
+    """{name: (count, oldest 'at')} of queued messages older than KEEP_DAYS not reported yet; marks them reported.
+    They stay queued: an answer is delivered late rather than lost."""
+    out = {}; cut = time.time() - KEEP_DAYS * 86400
+    for name in pending():
+        q = _q(name)
+        try:
+            with Locked(q, wait=False):
+                items = _read_q(q); old = [x for x in items if x.get("ts", 0) < cut and not x.get("reported")]
+                if not old: continue
+                for x in old: x["reported"] = now()
+                _write_q(q, items); out[name] = (len(old), old[0].get("at", ""))
+        except BlockingIOError: continue
     return out
 def flush(terms=None):
     """Try every queued message. Skips people who are blocked or not running (one `hc ls` for all), and any

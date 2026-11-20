@@ -695,7 +695,12 @@ async function refresh() {
   if (refreshing) { dirty = true; return; }
   refreshing = true;
   try {
-    const team = await loadTeam();
+    let team;
+    try { team = await loadTeam(); if (!Array.isArray(team.personas)) throw new Error('it has no "personas" list'); } catch (e) { // the room would be empty with no word why: say it on the page
+      const teamError = `This floor's team.json (${TEAM_DIR.replace(HOME, '~')}/team.json) cannot be read: ${clip(oneLine(e.message), 160)}. Fix it and the room fills in by itself.`;
+      if (state.teamError !== teamError) { state = { ...state, ts: Date.now(), teamError }; stateJson = ''; const msg = `event: state\ndata: ${JSON.stringify(state)}\n\n`; for (const res of clients) res.write(msg); }
+      throw e;
+    }
     const names = new Set(team.personas.map((p) => p.herdrName));
     // only a real GitHub read schedules another round: scheduling one after every refresh made the floor refresh
     // ~4 times a second forever (hc ls + hc get/read per person each time)
@@ -789,11 +794,20 @@ async function serveFile(res, rootDir, rel, cache) {
     createReadStream(file).pipe(res);
   } catch { json(res, 404, { error: 'not found' }); }
 }
+// A body over 64 KB (or not JSON) is a 400 once it has arrived, not a closed connection; past 1 MB the connection is cut.
+// The floors of this building for the page (building view, phone "Switch office", #go= links): the hub's list
+// (floors.json, else the defaults), with each floor's head count. The page has no ports of its own.
+async function floorList() {
+  return Promise.all(OFFICES.map(async (o) => { const t = await readJsonOr(path.join(HOME, o.dir, 'team.json'), null); return { name: o.name, port: o.port, people: t && Array.isArray(t.personas) ? t.personas.length : 0 }; }));
+}
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let s = '';
-    req.on('data', (c) => { s += c; if (s.length > 64_000) { reject(new Error('too large')); req.destroy(); } });
-    req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch (e) { reject(e); } });
+    let s = '', n = 0, big = false;
+    req.on('data', (c) => { n += c.length; if (big) { if (n > 1e6) req.destroy(); return; } s += c; if (s.length > 64_000) { big = true; s = ''; } });
+    req.on('end', () => {
+      if (big) return reject(Object.assign(new Error('the body is too large'), { status: 400 }));
+      try { resolve(JSON.parse(s || '{}')); } catch { reject(Object.assign(new Error('the body is not JSON'), { status: 400 })); }
+    });
     req.on('error', reject);
   });
 }
@@ -949,7 +963,14 @@ async function deliver(name, text) {
   const started = Date.now();
   const p = run(HC, ['send', '--json', name, '--', text], { timeout: 120_000 });
   const first = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), 12_000))]);
-  if (first && !first.ok) return { name, ok: false, error: notSent(name, first.stderr) };
+  if (first && !first.ok) {
+    const a = state.agents.find((x) => x.herdrName === name);
+    if (a && a.status === 'blocked') { // on a menu: kept in the outbox and typed in once it is answered (team-deliver), like a request answer
+      const q = await run(bin('team-deliver'), [name, text, '--source', 'office'], { timeout: 30_000 });
+      if (q.ok && /^(queued|delivered)/.test(q.stdout.trim())) return { name, ok: true, queued: q.stdout.trim().startsWith('queued'), held: true };
+    }
+    return { name, ok: false, error: notSent(name, first.stderr) };
+  }
   youEvents.push({ id: `you:${name}:${started}`, ts: started, type: 'you', from: '__OWNER_ID__', to: name, text: clip(text, 500) });
   if (youEvents.length > 80) youEvents.shift();
   scheduleRefresh();
@@ -980,7 +1001,8 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     if (p === '/' || p === '/index.html') {
-      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN).replace('%%OFFICE_THEME%%', (await themeSetting()).effective);
+      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN).replace('%%OFFICE_THEME%%', (await themeSetting()).effective)
+        .replace('</head>', `<script>window.__FLOORS__ = ${JSON.stringify(await floorList()).replace(/</g, '\\u003c')};</script></head>`);
       res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
       return res.end(html);
     }
@@ -1102,7 +1124,7 @@ const server = http.createServer(async (req, res) => {
     }
     return json(res, 404, { error: 'not found' });
   } catch (e) {
-    return json(res, 500, { error: e.message });
+    return json(res, e.status || 500, { error: e.message });
   }
 });
 

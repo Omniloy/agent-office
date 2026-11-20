@@ -31,13 +31,13 @@ Run these and keep the answers:
 
     uname -sm; sw_vers -productVersion; sysctl -n hw.memsize
     which node npm brew claude codex tailscale hc herdr-app; node --version
-    ls -d ~/.omniloy-team ~/.omniloy-biz ~/.omniloy-admin ~/.omniloy-office ~/.config/herdr-app 2>/dev/null
+    ls -d ~/.omniloy-team ~/.omniloy-admin ~/.omniloy-office ~/.config/herdr-app 2>/dev/null
     python3 setup/install.py --check
 
 - If `~/.omniloy-office/install.json` exists, this is an **update**: go to "Updating an existing install".
 - If team folders exist but `install.json` does not, stop and ask: someone set this up by hand, and the installer
   will keep their team folders but replace apps, tools and panels.
-- Check ports 4317, 4318 and 4340 are free or already ours: `lsof -nP -iTCP:4317 -sTCP:LISTEN` (same for the
+- Check ports 4317, 5317 (its guest listener) and 4340 are free or already ours: `lsof -nP -iTCP:4317 -sTCP:LISTEN` (same for the
   others). If another program holds one, stop and ask.
 
 ## Step 2. Ask the decisions
@@ -48,9 +48,8 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 |---|---|---|
 | 1 | Their first name as the agents should call them, and the language to answer them in | The id is the first name in lowercase letters (`ana`). It cannot be one of: lucia, daniel, marta, kenji, irene, pablo, elena, zeus. If it clashes, add an initial (`danielr`). |
 | 2 | Which agent CLI the team runs on: Claude Code, Codex, or both | Offer only what makes sense from step 1. See "Claude Code, Codex or both" below. |
-| 3 | Which floors they want people on from day one: Dev, Business, or both | Both floors are always installed; this only decides who you start in step 8. |
+| 3 | Do they want the Dev floor's people started today? | The Dev floor is always installed; this only decides whether you start its people in step 8. (The Business floor of earlier versions is retired: it is not installed or started.) |
 | 4 | Do they use Jira for the dev work? | If yes: site URL, their Atlassian email, and for each project a name, the Jira project key and the GitHub repos (`org/repo`). If no: cards live locally and Jira steps are skipped. |
-| 5 | Business floor: which Gmail account should it triage, and how often? | Only if they want the Business floor now. It needs the Gmail connector in their agent CLI. Default rounds: every 2 hours, 08:00 to 20:00, Monday to Friday. Goes in `gmailAccount` and `mailRound` in the config. No rounds wanted: leave `mailRound` out. |
 | 6 | Do they want the office on their phone? | Needs Tailscale (free for personal use; a company network needs an invite from its admin). |
 | 7 | Do they want to talk to the office by voice? | Local transcription. On Apple Silicon with 16 GB it downloads about 2 GB. |
 | 8 | Is there another computer (a server, a second Mac) whose terminals they want inside Herdr? | Needs ssh access to it already working. If that computer has its own agent office, the two can also show up to each other as buildings (step 11). |
@@ -59,8 +58,8 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 
 - **Only Claude Code installed or wanted**: everyone runs on `claude`.
 - **Only Codex**: everyone runs on `codex`. Tell the user one difference: the office chat shows a Codex agent's
-  screen text instead of its message log. Email rounds work the same on both (step 8).
-- **Both**: recommend Claude Code for Lucía, Daniel, Marta, Irene, Pablo, Elena and Zeus, and Codex for Kenji, then
+  screen text instead of its message log.
+- **Both**: recommend Claude Code for Lucía, Daniel, Marta and Zeus, and Codex for Kenji, then
   ask if they want a different split. Put the exceptions in `assign` in the config.
 - **Neither installed**: ask which they have a subscription for, and install it in step 3.
 - If the user has the Claude in Chrome extension, after the install add `"--chrome"` right after `"claude"` in
@@ -101,10 +100,16 @@ no `tailscale` key (you add it in step 9). `runtimes` lists only the CLIs that a
 Read the `NOTE:` lines the installer prints and act on them. The check will still say NO for the floors answering
 until step 6; everything above that should be ok.
 
-What the installer did (so you can tell the user): apps in `~/.omniloy-office`, tools in `~/.local/bin`, the three
-team folders, role instructions in `~/.claude/agents`, skills, Herdr panels and layout, and two background
-services (`com.omniloy.artifacts`, and `com.omniloy.office-up` which runs `office-up` at login: it starts the floors and the watchdog, and brings back the
-people who were running when the Mac went down, each in their own previous conversation, so they pick up where they were).
+The installer looks at every destination before it writes anything. If it says live files were edited since the
+last install, nothing was changed: read the diffs it points to with the user, and only with their yes run it again
+with `--force` (each replaced file is backed up first) or `--keep <file>` for a file to leave as it is.
+
+What the installer did (so you can tell the user): apps in `~/.omniloy-office`, tools in `~/.local/bin`, the Dev and
+admin team folders, role instructions in `~/.claude/agents`, skills, Herdr panels and layout, and the background
+services: `com.omniloy.artifacts`, `com.omniloy.peer-link`, `com.omniloy.watchdog` (started now), and
+`com.omniloy.office-up`, which is only written: it runs `office-up` at the next login, where it starts the floors
+and the watchdog and brings back the people who were running when the Mac went down, each in their own previous
+conversation (paid sessions), so they pick up where they were.
 
 ## Step 5. Herdr layout
 
@@ -112,7 +117,7 @@ people who were running when the Mac went down, each in their own previous conve
 
 The window gets a tab bar with Requests, Drafts, PRs, Board, Trace and Limits on the right. If the command is
 refused, tell the user to pick the "omniloy" layout from Herdr's layout menu. The team spaces ("Dev Team",
-"Business Team", "Olimpo") are created by the launchers in step 8; do not create them by hand.
+"Olimpo") are created by the launchers in step 8; do not create them by hand.
 
 ## Step 6. Start the floors
 
@@ -120,8 +125,9 @@ refused, tell the user to pick the "omniloy" layout from Herdr's layout menu. Th
     office-restart status
     python3 setup/install.py --check
 
-Open http://127.0.0.1:4317 (Dev) and http://127.0.0.1:4318 (Business) for the user (`open <url>`). Everyone shows
-as offline until step 8: that is expected.
+Open http://127.0.0.1:4317 (Dev) for the user (`open <url>`). Everyone shows as offline until step 8: that is
+expected. Other floors (CRM 4319, Web 4320, Lab 4321, or the ones in `~/.omniloy-team/floors.json`) answer only once
+their team folder exists; Zeus creates new floors.
 
 ## Step 7. Jira (only if ASK 4 was yes)
 
@@ -142,30 +148,10 @@ Tell the user what will start and that each is an agent session, then, for what 
 
     omniloy-admin start        # Zeus, the superadmin: recommended always
     omniloy-team start         # Dev floor: lucia daniel marta kenji   (or name some: omniloy-team start lucia daniel)
-    omniloy-biz start          # Business floor: irene pablo elena
 
 Verify: `omniloy-team ls` shows them running, Herdr shows the new spaces, and the office shows them at their desks
 within a few seconds. Each agent reads its protocol and reports a short status; nobody changes code or tickets
 until the user gives a task.
-
-**Business floor needs connectors.** Before starting it, check that the agent CLI has Gmail connected (and
-optionally Calendar and Slack): for Claude Code, `claude mcp list` or the connectors the user enabled in their
-Claude account. If Gmail is missing, connect it if you can, otherwise tell the user where to enable it. Without
-Gmail there is nothing to triage: say so and leave the floor installed but not started.
-
-**Email rounds.** With `mailRound` in the config, the installer added a background job (`com.omniloy.mail-round`)
-that tells Irene when a round is due: every N hours, inside the working hours, only while she is running and not
-in the middle of something. It works the same on Claude Code and Codex. After starting the Business floor:
-
-    team-mail-round --status      # the schedule and when the next round is due
-    team-mail-round --now         # optional: ask for a round right now to see it work
-
-Irene does the first round herself when she starts. Each round triages unread mail, marks as read only what needs
-nothing from the user, and leaves drafts for what needs an answer; it never sends. Tell the user where the results
-appear: "For you" in the office for questions, and the Drafts panel for prepared answers. To change the schedule
-later, edit `mailRound` in `~/.omniloy-biz/team.json` (no restart needed); remove it to stop the rounds. Drafting in the user's voice needs a voice profile built from their sent mail
-(the `email-voice-profile` skill): Irene asks for that consent herself. `~/.omniloy-biz/signature.json` holds the
-signature the drafts end with: fill name, title and links with the user.
 
 ## Step 9. Phone (only if ASK 6 was yes)
 
@@ -176,8 +162,7 @@ signature the drafts end with: fill name, title and links with the user.
    `tailscale serve` complains, this is why; on a company network only the admin can switch it on.
 3. Open the doors, one per port (the servers keep listening on 127.0.0.1 only):
 
-       tailscale serve --bg --https=4317 http://127.0.0.1:4317
-       tailscale serve --bg --https=4318 http://127.0.0.1:4318
+       tailscale serve --bg --https=4317 http://127.0.0.1:4317     # and one line like it for each other floor with a team
        tailscale serve --bg --https=4340 http://127.0.0.1:4340
 
 4. Who may come in: write `~/.omniloy-team/remote.json` as
@@ -243,14 +228,14 @@ The installer and its services are for macOS. On a Linux computer the same files
 them running yourself: the floors (`PORT=4317 node server.mjs` in the app folder) under a service, and, only if
 that computer is the one whose Herdr lists the other machine, `node peer-link.mjs` too, for example as a systemd
 user unit with `ExecStart=<node> %h/.omniloy-office/team-office/peer-link.mjs`, `Restart=always` and
-`~/.local/bin` on its `PATH`. A computer whose floors are not the default two lists them in
+`~/.local/bin` on its `PATH`. A computer whose floors are not the default ones (Dev, CRM, Web, Lab) lists them in
 `~/.omniloy-team/floors.json`: `[{ "name": "Dev", "port": 4317, "dir": ".omniloy-team" }]`.
 
 ## Step 12. Hand over
 
 Run `python3 setup/install.py --check` one last time and give the user a short summary:
 
-- what is installed and running, with the addresses (Dev http://127.0.0.1:4317, Business http://127.0.0.1:4318,
+- what is installed and running, with the addresses (Dev http://127.0.0.1:4317, any other floor that has a team,
   and the phone address if set up);
 - who is started and on which CLI;
 - what you could not verify (always: the real phone, and whether agents are signed in to their connectors);
@@ -270,9 +255,13 @@ to the user's file, show the user what changed and merge it only with their yes.
 the repo are never changed without a yes either: the installer asks when run in a terminal, otherwise it leaves
 `PROTOCOL.md.proposed` next to the file (show the user the diff; `--protocol-sections` applies them).
 Every file it replaces is copied first to `~/.omniloy-office/backups/<date>/` (same path under the home folder).
-A live file that was edited by hand since the last install is not replaced: the run ends with exit code 1, the
-list, and a diff of each in that backups folder. Bring the edits worth keeping into the repo, then rerun; `--force`
-replaces them anyway (after the backup). The first update with this check counts every differing file as edited.
+A live file that was edited by hand since the last install is not replaced: the installer checks every destination
+first and, if one differs like that, stops before writing anything (exit code 1), with the list and a diff of each in
+that backups folder. Bring the edits worth keeping into the repo, then rerun; `--force` replaces them anyway (after
+the backup), and `--keep <file>` leaves one file as it is. The first update with this check counts every differing
+file as edited. It never writes through a symbolic link (a skill folder linked to another repo is listed and left
+alone). The background services are a separate step: run the update with `--no-services`, and only with the user's
+yes `--only-services` (a LaunchAgent is reloaded only if its file changed; `office-up` is never started from here).
 npm dependencies are installed again when an app's `package.json` or `package-lock.json` changed.
 People who are running keep their old instructions until their next session.
 

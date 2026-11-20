@@ -78,7 +78,16 @@ await test('connected: an answer only to an open request that went to that build
   peers('on', { home: 'aaaa1111' });
   assert.equal((await call('/peer/answer', { body: { ref: { local: 2 }, text: 'yes' }, headers: P })).code, 403, 'already answered');
   assert.equal((await call('/peer/answer', { body: { ref: { agent: 'nobody' }, text: 'yes' }, headers: P })).code, 403, 'unknown agent');
+  assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 403, 'open, but never forwarded there');
+  peers('on', { home: 'aaaa1111', sent: { 1: 'bbbb2222' } });
+  assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 403, 'forwarded to another building');
+  peers('on', { home: 'aaaa1111', sent: { 1: 'aaaa1111' } });
   assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 200);
+});
+await test('a building that was connected once cannot be re-keyed by a hello', async () => {
+  fs.writeFileSync(path.join(T, 'peers.json'), JSON.stringify({ me: { id: 'cccc3333', name: 'Here' }, peers: { aaaa1111: { id: 'aaaa1111', name: 'There', status: 'none', met: true, key: 'k1', my: {} } } }));
+  const r = await call('/peer/hello', { body: { from: { id: 'aaaa1111', name: 'Evil' }, key: 'REPLACED' } });
+  assert.equal(r.code, 409);
 });
 await test('shared requests: only this floor\'s, only while connected, and only those can be answered', async () => {
   requests([{ id: 3, kind: 'request', from: 'bob', status: 'open', title: 'Mine?' }, { id: 4, kind: 'request', from: 'zed', status: 'open', title: 'Another floor?' }]);

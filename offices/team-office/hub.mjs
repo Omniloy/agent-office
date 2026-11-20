@@ -32,20 +32,21 @@ const writeJson = async (f, v) => { await fs.mkdir(path.dirname(f), { recursive:
 const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
 const b64u = (b) => Buffer.from(b).toString('base64url');
 const hash = (text) => { let h = 2166136261; for (const c of String(text)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0).toString(36); };
-// One writer at a time for a file every floor rewrites (push/subs.json): a lock file made with O_EXCL, taken over
-// when it is older than 10 s (its writer died).
+// One writer at a time for a file every floor rewrites (push/subs.json): a lock file made with O_EXCL that holds who
+// took it, taken over when it is older than 10 s (its writer died). It never writes without the lock: after 30 s of
+// waiting it gives up with an error, and it removes the lock only while the lock is still its own.
 async function withLock(file, fn) {
-  const lock = `${file}.lock-js`;
+  const lock = `${file}.lock-js`, me = `${process.pid}:${crypto.randomBytes(6).toString('hex')}`;
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  for (let i = 0; ; i++) {
-    try { await (await fs.open(lock, 'wx')).close(); break; } catch {
+  for (const t0 = Date.now(); ;) {
+    try { await fs.writeFile(lock, me, { flag: 'wx', mode: 0o600 }); break; } catch {
       const st = await fs.stat(lock).catch(() => null);
       if (st && Date.now() - st.mtimeMs > 10_000) { await fs.unlink(lock).catch(() => {}); continue; }
-      if (i > 100) break; // ~5 s: go ahead rather than lose the change
+      if (Date.now() - t0 > 30_000) throw new Error(`${path.basename(file)} is busy (another floor holds its lock); try again`);
       await new Promise((r) => setTimeout(r, 50));
     }
   }
-  try { return await fn(); } finally { await fs.unlink(lock).catch(() => {}); }
+  try { return await fn(); } finally { if ((await fs.readFile(lock, 'utf8').catch(() => '')) === me) await fs.unlink(lock).catch(() => {}); }
 }
 
 // ---------------------------------------------------------------- who works where
@@ -262,7 +263,7 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
     const reqs = await readJson(path.join(SHARED, 'requests.json'), { items: [] });
     for (const x of reqs.items || []) {
       if (x.status !== 'open' || (x.to || '__OWNER_ID__') !== '__OWNER_ID__') continue;
-      const p = who[x.from] || { port: 4317, name: x.from, color: '#888' };
+      const p = who[x.from] || { port: OFFICES[0].port, name: x.from, color: '#888' }; // someone on no floor (another building): the ground floor
       items.push({ id: `r${x.id}`, port: p.port, kind: x.kind === 'request' ? 'request' : 'note', who: p.name, from: x.from, color: p.color, title: clip(x.title || x.body, 140), created: x.created });
     }
     for (const o of OFFICES) {
@@ -327,22 +328,39 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
   const LABEL = { request: 'needs your answer', note: 'left you a message', draft: 'has a draft for you to check', stuck: 'is waiting for you' };
   let known = null;
   const tries = new Map(); // push key -> failed attempts (3 at most)
+  // A claim file says who sends an item: "pending <ms>" while the send is under way, "sent" (or empty, older claims)
+  // once it is over. A pending claim older than 2 minutes was left by an office that stopped mid-send: it is sent again.
+  const claimOf = (k) => path.join(PUSH, 'sent', k.replace(/[^\w.-]/g, '_'));
+  const claimState = async (claim) => {
+    const t = await fs.readFile(claim, 'utf8').catch(() => null); if (t == null) return 'none';
+    const m = /^pending (\d+)/.exec(t); return !m ? 'sent' : Date.now() - Number(m[1]) > 120_000 ? 'stale' : 'pending';
+  };
   async function watch() {
     try {
       await writeLocal();
       const items = await attention(), keyOf = (x) => x.push || x.id;
-      if (!known) { known = new Set(items.map(keyOf)); return; } // only what arrives from now on
+      if (!known) { // only what arrives from now on, plus what an office left half-sent
+        known = new Set();
+        for (const x of items) if ((await claimState(claimOf(keyOf(x)))) !== 'stale') known.add(keyOf(x));
+        return;
+      }
       for (const x of items) {
         const k = keyOf(x);
         if (known.has(k)) continue;
         known.add(k);
         if (x.kind === 'stuck' && x.port !== port) continue; // the office they sit in announces it
-        const claim = path.join(PUSH, 'sent', k.replace(/[^\w.-]/g, '_'));
-        try { await fs.mkdir(path.join(PUSH, 'sent'), { recursive: true, mode: 0o700 }); await fs.writeFile(claim, '', { flag: 'wx' }); } catch { continue; } // another office already sent it
+        const claim = claimOf(k), mark = `pending ${Date.now()} ${port}`;
+        await fs.mkdir(path.join(PUSH, 'sent'), { recursive: true, mode: 0o700 }).catch(() => {});
+        try { await fs.writeFile(claim, mark, { flag: 'wx' }); } catch {
+          const st = await claimState(claim);
+          if (st === 'pending') { known.delete(k); continue; } // another office is sending it: look again next round
+          if (st !== 'stale') continue; // already sent
+          await fs.writeFile(claim, mark); // that office stopped mid-send: this one sends it
+        }
         const out = await sendAll({ title: `${x.who} ${LABEL[x.kind] || 'needs you'}`, body: `${x.office} · ${x.title}`, port: x.port, hash: x.kind === 'stuck' ? `p=${x.from}` : 'foryou', tag: x.id });
         if (transient(out) && (tries.get(k) || 0) < 2) { // let go of the claim: this office or another tries again next round
           tries.set(k, (tries.get(k) || 0) + 1); known.delete(k); await fs.unlink(claim).catch(() => {});
-        } else tries.delete(k);
+        } else { tries.delete(k); await fs.writeFile(claim, 'sent').catch(() => {}); }
       }
       if (known.size > 4000) known = new Set(items.map(keyOf));
       if (tries.size > 200) tries.clear();
@@ -355,7 +373,8 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
 
   // ---------------------------------------------------------------- routes (the caller has already checked the office token)
   const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
-  const readBody = (req, max = 16_000) => new Promise((resolve, reject) => { let s = ''; req.on('data', (c) => { s += c; if (s.length > max) { reject(new Error('too large')); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch (e) { reject(e); } }); req.on('error', reject); });
+  // over the limit: a 400 once the body has arrived (the caller's catch answers e.status); past 1 MB the connection is cut
+  const readBody = (req, max = 16_000) => new Promise((resolve, reject) => { let s = '', n = 0, big = false; req.on('data', (c) => { n += c.length; if (big) { if (n > 1e6) req.destroy(); return; } s += c; if (s.length > max) { big = true; s = ''; } }); req.on('end', () => { if (big) return reject(Object.assign(new Error('the body is too large'), { status: 400 })); try { resolve(JSON.parse(s || '{}')); } catch { reject(Object.assign(new Error('the body is not JSON'), { status: 400 })); } }); req.on('error', reject); });
   const peers = createPeers({ port, agents, OFFICES, APP, chatLog, theme }); // other buildings: guest listener and connections
   async function route(req, res, p) {
     if (p === '/api/buildings' || p === '/api/visits' || p.startsWith('/api/peers/')) return peers.route(req, res, p);
@@ -464,6 +483,10 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
           else { // "not running" only when that is true: waiting on a menu is the usual reason
             let t = {}; try { t = JSON.parse(await hcOut(['get', me.herdrName, '--json'])); } catch { /* not running */ }
             const stopped = !!(t.status && ['blocked', 'error'].includes(t.status.state));
+            if (t.state === 'live' && t.status && t.status.state === 'blocked') { // on a menu: kept in the outbox and typed in once it is answered, like a request answer
+              const q = await new Promise((resolve) => execFile(path.join(HOME, '.local', 'bin', 'team-deliver'), [me.herdrName, text, '--source', 'chat'], { timeout: 30_000 }, (err, out) => resolve(err ? '' : String(out).trim())));
+              if (/^(queued|delivered)/.test(q)) { json(res, 200, { ok: true, queued: q.startsWith('queued'), note: q.startsWith('queued') ? `${person.name} is answering a question in the terminal: the message is kept and typed in as soon as it is answered` : '' }); return true; }
+            }
             const why = t.state !== 'live' ? `${person.name} is not running in Herdr`
               : stopped ? `${person.name} is waiting on a question in the terminal: answer it first (the card above, For you or Live screen), then send again`
               : `${person.name} did not take the message: ${clip(r.err, 160) || 'Herdr refused it'}`;

@@ -471,6 +471,14 @@ recapBox.onclick = () => recapBox.classList.remove('show');
 const menuHide = new Map(), menuFresh = new Map(), menuQuiet = new Set(), menuBusy = new Set(); // quiet: a box you just ticked is the same question, not a new one
 const menuHidden = (id) => { const t = menuHide.get(id); if (t > Date.now()) return true; if (t) menuHide.delete(id); return false; };
 const menuIsNew = (id) => (menuFresh.get(id) || 0) > Date.now();
+// The follow-up question appears where the answered one was: for its first 1.5 s on screen it takes no tap, so a
+// second tap meant for the old card does not approve the next command.
+const ARM_MS = 1500, menuSeen = new Map();
+const menuArming = (id) => {
+  if (!id) return 0;
+  if (!menuSeen.has(id)) { if (!menuIsNew(id)) return 0; menuSeen.set(id, Date.now()); if (menuSeen.size > 300) menuSeen.delete(menuSeen.keys().next().value); }
+  return Math.max(0, ARM_MS - (Date.now() - menuSeen.get(id)));
+};
 const FREE = /type something|tell (Claude|Codex)|what to do differently|chat about this/i; // the option that takes your own words
 const BOX = /^(\d\.\s+)(\[[ xX✓✔]\]|[☐☑◻◼□▣])\s*/; // a multiple choice question: each number ticks one box, Enter confirms
 const isMulti = (x) => (x.options || []).some((o) => BOX.test(o));
@@ -519,8 +527,8 @@ function answerActs(x) {
   if (x.kind !== 'request') return '<div class="acts"><button type="button" data-read>Mark as read</button></div>';
   const opts = x.options || [];
   if (x.menu) {
-    const multi = isMulti(x), free = opts.find((o) => FREE.test(o));
-    return `<div class="acts" role="group" aria-label="${esc(x.title || x.question || '')}">${opts.map((o, i) => `<button type="button" class="${multi ? (ticked(o) ? 'on' : '') : i ? '' : 'pri'}" data-answer="${esc(o)}"${multi && BOX.test(o) ? ` aria-pressed="${ticked(o)}"` : ''}>${esc(multi ? o.replace(BOX, (_, n, b) => `${n}${ticked(`${n}${b}`) ? '☑' : '☐'} `) : o)}</button>`).join('')}</div>`
+    const multi = isMulti(x), free = opts.find((o) => FREE.test(o)), arm = menuArming(x.menuId);
+    return `<div class="acts${arm ? ' arming' : ''}" role="group" aria-label="${esc(x.title || x.question || '')}"${arm ? ` style="animation-duration:${arm}ms"` : ''}>${opts.map((o, i) => `<button type="button" class="${multi ? (ticked(o) ? 'on' : '') : i ? '' : 'pri'}" data-answer="${esc(o)}"${multi && BOX.test(o) ? ` aria-pressed="${ticked(o)}"` : ''}>${esc(multi ? o.replace(BOX, (_, n, b) => `${n}${ticked(`${n}${b}`) ? '☑' : '☐'} `) : o)}</button>`).join('')}</div>`
       + (multi ? '<div class="mhint">Varias respuestas: cada toque marca o desmarca una casilla. Para confirmar, pulsa Enter en Live screen.</div>' : '')
       + (free ? `<div class="acts mfree" hidden><input placeholder="Tu respuesta para ${esc(x.name || '')}…" aria-label="Tu respuesta"><button type="button" class="pri" data-free="${esc(free)}">Enviar</button></div>` : '')
       + `<div class="acts"><button type="button" class="mlive" data-live="${esc(x.from)}">Live screen ›</button></div>`;
@@ -584,7 +592,10 @@ async function answerClick(e, card, list, leave) {
   if (b.hasAttribute('data-read')) { await api('/api/requests/read', { id }); return true; }
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? (card.querySelector('.acts:not(.mfree) input') || {}).value?.trim() : null);
   if (!text) return false;
-  if (card.dataset.menuId) { if (!sure(b, text)) return false; busy(); try { await answerMenuItem(x, text); } finally { done(); } return true; }
+  if (card.dataset.menuId) {
+    if (menuArming(card.dataset.menuId)) return false; // just appeared: that tap was meant for the card before it
+    if (!sure(b, text)) return false; busy(); try { await answerMenuItem(x, text); } finally { done(); } return true;
+  }
   busy();
   try { const r = await api('/api/requests/answer', { id, text }); sayDelivered(r, from, text); } finally { done(); }
   return true;
@@ -720,8 +731,9 @@ function onState(s) {
   }
   booted = true;
   window.office.ready = true;
-  $('#banner').classList.toggle('show', !s.hcOk);
-  if (!s.hcOk) $('#banner').textContent = 'Herdr is not answering, so statuses may be stale. Is the Herdr app running?';
+  $('#banner').classList.toggle('show', !s.hcOk || !!s.teamError);
+  if (s.teamError) $('#banner').textContent = s.teamError; // the floor's team.json cannot be read: say so instead of an empty room
+  else if (!s.hcOk) $('#banner').textContent = 'Herdr is not answering, so statuses may be stale. Is the Herdr app running?';
   renderStats(); renderRoster(); renderFeed(fresh); renderPanel(false);
 }
 // Another theme for the building: reload with it, once nobody is halfway through typing here.
@@ -780,7 +792,7 @@ if (!window.__GUEST__ && !EMBED) {
         head.innerHTML = `Theme<small>${esc(nameOf(c.effective || c.theme) || 'Oficina')}${c.mode === 'daily' ? ' · del día' : ''} ${open ? '⌄' : '›'}</small>`;
         opts.forEach((b, i) => { const x = items[i]; b.classList.toggle('on', isOn(x, c)); b.innerHTML = `<span>${esc(x.label)}</span><small>${esc(noteOf(x, c))}</small>`; b.style.display = open ? '' : 'none'; });
       }
-      head.onclick = () => { open = !open; paint(); if (open) opts[opts.length - 1].scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }; // the choices sit under the fold otherwise
+      head.onclick = () => { open = !open; paint(); if (open) requestAnimationFrame(() => opts[opts.length - 1].scrollIntoView({ block: 'end', behavior: 'smooth' })); }; // after the rows are laid out: the choices sit under the fold otherwise
       const sw = [...sheet.children].find((x) => /Switch office/.test(x.textContent));
       for (const el of [head, ...opts]) sheet.insertBefore(el, sw || null);
       paint();
@@ -797,7 +809,15 @@ function connect() {
   es.addEventListener('state', (e) => { $('#live').classList.add('on'); if (/Lost the local server/.test($('#banner').textContent)) $('#banner').classList.remove('show'); onState(JSON.parse(e.data)); });
   es.onerror = () => {
     $('#live').classList.remove('on');
-    if (es.readyState === EventSource.CLOSED) { fetch('/api/state', { headers: { 'x-office-token': TOKEN } }).then((r) => { if (r.status === 401) staleToken(); }).catch(() => {}); $('#banner').classList.add('show'); $('#banner').textContent = 'Lost the local server. Start it again and reload this page.'; }
+    if (es.readyState === EventSource.CLOSED) {
+      const say = (t) => { $('#banner').classList.add('show'); $('#banner').textContent = t; };
+      fetch('/api/state', { headers: { 'x-office-token': TOKEN } }).then((r) => {
+        if (r.status !== 401) return;
+        if (window.__GUEST__) say('This building does not know who you are: visit it from your own office (zoom out to the city and tap it), once the two buildings have met.');
+        else staleToken();
+      }).catch(() => {});
+      say('Lost the local server. Start it again and reload this page.');
+    }
   };
 }
 connect();
@@ -813,7 +833,7 @@ async function sendMessage(targets, text) {
     for (const r of results) {
       const a = agentBy(r.name), n = a ? first(a) : r.name;
       if (!r.ok) toast(`Could not reach <b>${esc(n)}</b>: ${esc(r.error)}`, 'err', 8000);
-      else toast(r.queued ? `Queued for <b>${esc(n)}</b>. It lands when their prompt is free.` : `Sent to <b>${esc(n)}</b>`);
+      else toast(r.held ? `Guardado para <b>${esc(n)}</b>: espera una respuesta en el terminal y lo recibirá en cuanto la contestes.` : r.queued ? `Queued for <b>${esc(n)}</b>. It lands when their prompt is free.` : `Sent to <b>${esc(n)}</b>`);
     }
     return results.some((r) => r.ok);
   } catch (e) { toast(esc(e.message), 'err', 8000); return false; }

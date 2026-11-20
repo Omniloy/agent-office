@@ -15,6 +15,11 @@
   team-peer home [<building>|none]               the building where your owner reads requests. With it set, every request or
                                                  note to the owner (team-ask ... --to __OWNER_ID__) also lands in their box there,
                                                  and their answer comes back and closes it here. Only the owner sets this.
+  team-peer forget <building>                    remove a building that is not connected (its key, name and switches), so it
+                                                 can introduce itself again with a new key. Only the owner does this.
+
+Ending a connection (decline or disconnect, from either side) also switches off what was granted to that building:
+shared requests, chats, and requests to the owner. Connecting again starts with them off.
 
 <building> is its id or the start of its name. Store: ~/.omniloy-team/peers.json (connections), peers-seen.json (what was found)."""
 import sys, os, json, time, secrets, subprocess, urllib.request, urllib.error, fcntl, re, socket
@@ -81,6 +86,9 @@ def opts(a):
         if a[i].startswith("--"): o[a[i][2:]] = a[i + 1] if i + 1 < len(a) and not a[i + 1].startswith("--") else True; i += 2 if o[a[i][2:]] is not True else 1
         else: pos.append(a[i]); i += 1
     return o, pos
+def ungrant(p):   # a connection that ends takes its grants with it: a new one starts with nothing shared
+    p["chats"] = False; p["ask"] = False
+    for m in (p.get("my") or {}).values(): m["share"] = False
 def status_line(p): return {"none": "not connected", "out": "request sent", "in": "wants to connect", "on": "connected", "paused": "paused"}.get(p.get("status", "none"), p.get("status"))
 
 a = sys.argv[1:]; c = a[0] if a else ""; o, pos = opts(a[1:])
@@ -114,13 +122,14 @@ elif c in ("request", "accept", "decline", "disconnect", "pause", "resume"):
         elif c == "accept":
             if st != "in": sys.exit("they have not asked to connect")
             p["status"] = "on"
-        elif c in ("decline", "disconnect"): p["status"] = "none"; p.pop("pausedBy", None)
+        elif c in ("decline", "disconnect"): p["status"] = "none"; p.pop("pausedBy", None); ungrant(p)
         elif c == "pause":
             if st != "on": sys.exit("not connected")
             p["status"], p["pausedBy"] = "paused", "me"
         elif c == "resume":
             if st != "paused" or p.get("pausedBy") != "me": sys.exit("it was not paused from here" if st == "paused" else "not paused")
             p["status"] = "on"; p.pop("pausedBy", None)
+        if p["status"] == "on": p["met"] = True   # once connected, its key is kept (forget removes it)
         new = p["status"]; me = d["me"]
     r = call(pid, "/peer/state", {"status": new, "verb": c, "from": me})
     print(f'{p["name"]}: {status_line(p)}' + ("" if r.get("ok") else f' (they could not be told now: {r.get("error", "no answer")})'))
@@ -141,6 +150,13 @@ elif c == "home":
         if pos: d["home"] = "" if pos[0] == "none" else find(d, pos[0])["id"]
         h = d["peers"].get(d.get("home") or "")
         print(f'requests to the owner also go to {h["name"]} ({status_line(h)})' if h else "requests to the owner stay in this building")
+elif c == "forget":
+    with Box() as d:
+        p = find(d, pos[0] if pos else sys.exit("which building?"))
+        if p.get("status", "none") not in ("none", "out"): sys.exit(f'{p["name"]} is {status_line(p)}: disconnect it first')
+        d["peers"].pop(p["id"]); d["sent"] = {k: v for k, v in (d.get("sent") or {}).items() if v != p["id"]}
+        if d.get("home") == p["id"]: d["home"] = ""
+    print(f'{p["name"]} forgotten: it can introduce itself again')
 elif c == "forward":   # called by team-ask for a request or note to the owner; the item as JSON on stdin
     x = json.load(sys.stdin)
     with Box() as d: p = d["peers"].get(d.get("home") or ""); me = d["me"]
@@ -149,6 +165,10 @@ elif c == "forward":   # called by team-ask for a request or note to the owner; 
     port, fl, me_p = person(x["from"])
     r = call(p["id"], "/peer/message", {"to": "owner", "text": x["title"], "body": x.get("body", ""), "options": x.get("options") or [], "note": x.get("kind") == "note",
                                         "agent": x["from"], "name": str(x.get("name") or x["from"]).split(" ")[0], "building": me["name"], "fromFloor": fl["name"] if fl else "", "fromPort": int(port) if port else 0, "local": x["id"]})
+    if r.get("ok"):   # what went where: only that building may answer this request (peers.mjs answerFits)
+        with Box() as d:
+            sent = d.setdefault("sent", {}); sent[str(x["id"])] = p["id"]
+            while len(sent) > 500: sent.pop(next(iter(sent)))
     err = str(r.get("error", "no answer"))
     try: err = json.loads(err).get("error", err)
     except Exception: pass
@@ -175,7 +195,8 @@ elif c == "incoming":   # called by the office server for what arrives from anot
     if kind == "hello":   # first contact through a new tunnel: remember who they are and how to reach their floors
         with Box() as d:
             fr = b["from"]; p = d["peers"].setdefault(fr["id"], {"id": fr["id"], "status": "none", "my": {}})
-            if p.get("key") and p["key"] != b.get("key") and p.get("status") in ("on", "paused", "in"): sys.exit(json.dumps({"error": "this building is already known with another key"}))
+            if p.get("key") and p["key"] != b.get("key") and (p.get("status") in ("on", "paused", "in") or p.get("met")):
+                sys.exit(json.dumps({"error": "this building is already known with another key (its owner here can remove it: team-peer forget)"}))
             p.update({"name": fr.get("name") or fr["id"], "owner": fr.get("owner", ""), "machine": b.get("machine", ""), "key": b.get("key", "")})
             s = seen(); s[fr["id"]] = {"floors": b.get("floors") or [], "at": int(time.time())}; save(SEEN, s)
             print(json.dumps({"ok": True, "me": d["me"], "status": p["status"]}))
@@ -188,9 +209,10 @@ elif c == "incoming":   # called by the office server for what arrives from anot
             elif verb == "accept" and st == "out": p["status"] = "on"; note = f'{p["name"]} accepted: your agents can now talk with it.'
             elif verb in ("decline", "disconnect"):
                 if st != "none": note = f'{p["name"]} {"declined the connection" if verb == "decline" else "disconnected"}.'
-                p["status"] = "none"; p.pop("pausedBy", None)
+                p["status"] = "none"; p.pop("pausedBy", None); ungrant(p)
             elif verb == "pause" and st == "on": p["status"], p["pausedBy"] = "paused", "them"; note = f'{p["name"]} paused the connection.'
             elif verb == "resume" and st == "paused" and p.get("pausedBy") == "them": p["status"] = "on"; p.pop("pausedBy", None); note = f'{p["name"]} resumed the connection.'
+            if p["status"] == "on": p["met"] = True
             name, owner = p["name"], p.get("owner") or "Someone"
         if note == "ASK": ask("external", "--to", "owner", "--name", f"{owner} · {name}", "--peer", pid, "--connect", "--options", "Accept|Decline", f"{name} wants to connect its agents with yours. Accept?")
         elif note: ask("external", "--to", "owner", "--note", "--name", name, "--peer", pid, note)
@@ -226,6 +248,8 @@ elif c == "incoming":   # called by the office server for what arrives from anot
         ref = b.get("ref") or {}; who = b.get("lead") or "The lead"; nm = (load(F, {}).get("peers", {}).get(pid) or {}).get("name", "the other building")
         if ref.get("local"):   # it was a request to the owner opened here: closing it tells the agent and frees their card
             r = ask("answer", str(int(ref["local"])), str(b.get("text", "")), "--as", "__OWNER_ID__")
+            if r.returncode == 0:
+                with Box() as d: (d.get("sent") or {}).pop(str(int(ref["local"])), None)
             print(json.dumps({"ok": r.returncode == 0, **({} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[:200]})})); sys.exit()
         msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
         if ref.get("agent") and ref["agent"] in L.people(admin=True):   # typed in now, or held until they are off their menu

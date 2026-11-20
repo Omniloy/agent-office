@@ -39,7 +39,9 @@ html.phone #guest { bottom: calc(var(--tab, 54px) + 10px); }
     go.disabled = false;
   }
   go.onclick = send;
-  const home = () => { if (history.length > 1) history.back(); else location.href = `${location.protocol}//${location.hostname}:4317/`; };
+  // back to the visitor's own office: the door says the port of its ground floor (x-peer-back), on this same host
+  const back = /^\d{2,5}$/.test(String(G.back || '')) ? `${location.protocol}//${location.hostname}:${G.back}/` : '';
+  const home = () => { if (back) location.href = back; else if (history.length > 1) history.back(); else msg.textContent = 'Open your own office again from its address.'; };
   box.querySelector('.bk').onclick = home;
   // zooming all the way out of someone else's room goes back to your own city, not to a building view of theirs
   const hook = () => { if (window.office && window.office.floors) window.office.floors.show = home; else setTimeout(hook, 400); }; hook();

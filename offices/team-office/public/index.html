@@ -235,6 +235,8 @@ body.embed .tag .bubble small { font-size: 12.5px; }
 .ask .atitle { margin-top: 5px; font-size: 14px; line-height: 1.38; overflow-wrap: anywhere; }
 .ask .abody { margin-top: 5px; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .ask .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.acts.arming { animation: menu-arm 1.5s linear forwards; } /* a card that just appeared: its buttons wake up (main.js menuArming) */
+@keyframes menu-arm { from { opacity: .35; } 90% { opacity: .35; } to { opacity: 1; } }
 .ask button { border: 1px solid var(--line); background: var(--glass-2); border-radius: var(--r-s); padding: 4px 10px; font-size: 12.5px; text-align: left; }
 .ask button:hover { border-color: var(--muted); }
 .ask button.pri { background: var(--text); color: var(--panel); border-color: var(--text); font-weight: 600; }

@@ -7,8 +7,9 @@
   team-deliver flush                           try every queued message again (the watchdog does this every 10 s)
   team-deliver ls [--json]                     what is waiting, per person (counts only)
 
-Queued messages are typed in, in order, as soon as the person is running and not on a menu. One that could not
-be delivered for 2 days is dropped (outbox/dropped.jsonl says when and to whom, not what).
+Queued messages are typed in, in order, as soon as the person is running and not on a menu. They are never
+dropped: one still waiting after 2 days is reported to __OWNER__ once by the watchdog (who it is for and since when,
+not what it says).
 Store: ~/.omniloy-team/outbox/<name>.jsonl"""
 import sys, os, json
 sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))

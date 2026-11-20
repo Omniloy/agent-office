@@ -131,6 +131,11 @@ if a[0] == "run":
         try:   # messages held for people who were on a menu or not running
             for n, r in L.flush().items(): print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {r}", flush=True)
             RUN["flushedAt"] = int(time.time() * 1000)
+            for n, (k, since) in L.overdue().items():   # held for days (the person is not running): __OWNER__ hears it once
+                lead = (L.people(admin=True).get(n) or {}).get("lead") or n
+                print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {k} message(s) waiting since {since[:16]}; owner told", flush=True)
+                subprocess.run([f"{L.BIN}/team-ask", "note", "--from", lead, f"Watchdog: {k} message(s) for {n} have waited since {since[:16].replace('T', ' ')}"[:140],
+                                "--body", f"{n} has not been able to take them (not running, or on a question in the terminal) for {L.KEEP_DAYS} days. They are still kept and will be typed in when {n} is back; `team-deliver ls` lists them. Start {n} or tell the team."], capture_output=True)
         except Exception as e: print("outbox flush failed:", e, flush=True)
         if t0 - last_check >= cfg()["interval"]:
             last_check = t0

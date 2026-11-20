@@ -17,8 +17,6 @@ answers to the questions they ask you.
 - **A Dev floor** (port 4317): Lucía (product lead), Daniel (development), Marta (verification), Kenji
   (infrastructure). They plan, build, review and verify work through cards, with strict guardrails: no merge,
   deploy or production change without you.
-- **A Business floor** (port 4318): Irene (coordinator, triages your inbox), Pablo (clients), Elena (partners and
-  proposals). Irene runs an email round on a schedule (every 2 hours by default); they prepare drafts in your voice and never send anything.
 - **Zeus**, your own assistant above the building: he does anything you ask from the chat, like Claude Code at your
   own terminal, and he is the one who changes the office system itself: new floors, new people, how things look and work.
 - **Chat with every agent**, with markdown, tables, links to PRs and tickets, image attachments and dictation.
@@ -79,10 +77,10 @@ Everything travels inside ssh tunnels between 127.0.0.1 ports; no new port is op
 
 | In the repo | Installed to | What |
 |---|---|---|
-| `offices/team-office`, `offices/biz-office` | `~/.omniloy-office/` | The office web apps (Node, no build step) |
+| `offices/team-office` | `~/.omniloy-office/team-office` | The office web app every floor runs (Node, no build step). `offices/biz-office` is the retired Business floor's app: kept, not installed |
 | `services/artifacts` | `~/.omniloy-office/artifacts` | Local pages server (port 4340) |
 | `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `team-peer`, `omniloy-team`, `office-restart`, `office-up` (recover after a reboot), `team-memory` and friends |
-| `teams/dev`, `teams/biz`, `teams/admin` | `~/.omniloy-team`, `~/.omniloy-biz`, `~/.omniloy-admin` | Team definition, protocol, memory |
+| `teams/dev`, `teams/admin` | `~/.omniloy-team`, `~/.omniloy-admin` | Team definition, protocol, memory (`teams/biz`: the retired Business floor, not installed) |
 | `teams/*/agents` | `~/.claude/agents/` | Each person's instructions |
 | `skills/` | `~/.claude/skills`, `~/.codex/skills` | Skills every agent gets |
 | `herdr/` | `~/.config/herdr-app/` | Panels and layout for the Herdr app |

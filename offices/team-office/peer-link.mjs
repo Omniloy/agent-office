@@ -40,7 +40,8 @@ function door(port) {
     if (!local && !far) { res.writeHead(403, { 'content-type': 'application/json' }); return res.end('{"error":"bad host"}'); }
     if (!d.target) { res.writeHead(502, { 'content-type': 'text/plain' }); return res.end('That building is not reachable right now.'); }
     const peers = (await readJson(path.join(SHARED, 'peers.json'), {})).peers || {};
-    const headers = { ...req.headers, host: `127.0.0.1:${d.target}`, 'x-peer-id': me.id, 'x-peer-key': (peers[d.id] || {}).key || '', 'x-peer-user': me.owner || '', 'x-peer-back': d.back || '' };
+    const home = ((await readJson(path.join(SHARED, 'building.json'), {})).floors || [])[0]; // "back to mine": this building's ground floor, same host
+    const headers = { ...req.headers, host: `127.0.0.1:${d.target}`, 'x-peer-id': me.id, 'x-peer-key': (peers[d.id] || {}).key || '', 'x-peer-user': me.owner || '', 'x-peer-back': home ? String(home.port) : '' };
     delete headers['tailscale-user-login']; delete headers['tailscale-user-name'];
     const up = http.request({ host: '127.0.0.1', port: d.target, method: req.method, path: req.url, headers }, (r) => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
     up.on('error', () => { if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }); res.end('That building is not reachable right now.'); });
