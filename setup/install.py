@@ -9,6 +9,8 @@
   ... --keep PATH          leave this live file as it is even with --force (repeatable; e.g. a role file with a live-only rule)
   ... --only-services      install or update only the background services (LaunchAgents): a separate step, run
                            only with the owner's yes. A normal run never touches them.
+  ... --login-resume       with --only-services: also com.omniloy.office-up (replaces com.omniloy.offices), which at
+                           login restarts the people who were running: paid sessions, so only with the owner's yes
   ... --no-services        accepted for older instructions; a normal run already leaves the services alone
 
 It copies the apps, tools, Herdr panels, skills and role instructions to their places, filling in the owner's
@@ -72,8 +74,9 @@ def herdr_app(): return which("herdr-app", ["~/Applications/Herdr.app/Contents/M
 def herdr_core(): return which("hc", ["~/.local/share/herdr-core/current/Contents/MacOS/herdr-core"]) or which("herdr-core")
 
 class Run:
-    def __init__(self, cfg, dry, force=False, sections=False, keep=(), quiet=False):
+    def __init__(self, cfg, dry, force=False, sections=False, keep=(), quiet=False, resume=False):
         self.cfg, self.dry, self.done, self.warn = cfg, dry, [], []
+        self.resume = resume   # --login-resume: com.omniloy.office-up replaces com.omniloy.offices (it resumes people at login)
         self.force, self.sections, self.quiet = force, sections, quiet
         self.keep = {os.path.abspath(os.path.expanduser(k)) for k in keep}
         self.drift, self.wrote, self.changed, self.backed, self.linked, self.kept = [], {}, set(), 0, [], []
@@ -313,8 +316,12 @@ class Run:
                 # "watchdog" terminal) only stands by on its lock, so it never runs twice.
                 ("com.omniloy.watchdog", ["/usr/bin/python3", f"{BIN}/team-watch", "run"], TEAMS["dev"], f"{TEAMS['dev']}/logs/watchdog.log", True)]
         # the retired Business floor's email rounds: no new job (an existing one is left as it is)
+        if not self.resume:   # office-up restarts paid sessions at login: only with --login-resume (the owner's own yes)
+            jobs = [j for j in jobs if j[0] != "com.omniloy.office-up"]
+            self.say("com.omniloy.office-up not set up (it resumes people at login: --login-resume, with the owner's yes); "
+                     + ("com.omniloy.offices still starts the floors at login" if os.path.exists(f"{LA}/com.omniloy.offices.plist") else "nothing starts the floors at login"))
         old = f"{LA}/com.omniloy.offices.plist"   # replaced by com.omniloy.office-up: backed up, then unloaded
-        if os.path.exists(old):
+        if self.resume and os.path.exists(old):
             if not self.dry:
                 self.backup(old)
                 subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.omniloy.offices"], capture_output=True); os.remove(old)
@@ -410,6 +417,7 @@ def main():
     ap.add_argument("--config"); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--check", action="store_true")
     ap.add_argument("--no-services", action="store_true", help="kept for older instructions: a normal run never touches the background services")
     ap.add_argument("--only-services", action="store_true", help="install or update only the background services (LaunchAgents), with the owner's yes")
+    ap.add_argument("--login-resume", action="store_true", help="with --only-services: also com.omniloy.office-up, which at login restarts the people who were running (paid sessions), in place of com.omniloy.offices")
     ap.add_argument("--force", action="store_true", help="also replace live files edited since the last install (backed up first)")
     ap.add_argument("--keep", action="append", default=[], metavar="PATH", help="never replace this live file, even with --force (repeatable)")
     ap.add_argument("--protocol-sections", action="store_true", help="apply the protocol sections that follow the repo without asking")
@@ -427,14 +435,15 @@ def main():
         if a.only_services: r.services()   # the background services only ever change in their own step, with the owner's yes
         else: r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
     # 1. look: every destination is compared first, nothing is written
-    look = Run(cfg, True, force=a.force, sections=a.protocol_sections, keep=a.keep, quiet=True)
+    if a.login_resume and not a.only_services: ap.error("--login-resume goes with --only-services")
+    look = Run(cfg, True, force=a.force, sections=a.protocol_sections, keep=a.keep, quiet=True, resume=a.login_resume)
     steps(look)
     if look.drift and not a.force:
         look.dry = a.dry_run; look.report_drift(); look.report_links()
         print("\nNothing was changed: the install stops before writing anything while live files differ like this.")
         sys.exit(1)
     # 2. do it (or say it, with --dry-run)
-    r = Run(cfg, a.dry_run, force=a.force, sections=a.protocol_sections, keep=a.keep)
+    r = Run(cfg, a.dry_run, force=a.force, sections=a.protocol_sections, keep=a.keep, resume=a.login_resume)
     steps(r)
     r.record()
     for w in r.warn: print("NOTE: " + w)

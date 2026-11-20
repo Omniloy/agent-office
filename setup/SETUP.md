@@ -106,11 +106,11 @@ last install, nothing was changed: read the diffs it points to with the user, an
 with `--force` (each replaced file is backed up first) or `--keep <file>` for a file to leave as it is.
 
 What the installer did (so you can tell the user): apps in `~/.omniloy-office`, tools in `~/.local/bin`, the Dev and
-admin team folders, role instructions in `~/.claude/agents`, skills, Herdr panels and layout, and the background
-services: `com.omniloy.artifacts`, `com.omniloy.peer-link`, `com.omniloy.watchdog` (started now), and
-`com.omniloy.office-up`, which is only written: it runs `office-up` at the next login, where it starts the floors
-and the watchdog and brings back the people who were running when the Mac went down, each in their own previous
-conversation (paid sessions), so they pick up where they were.
+admin team folders, role instructions in `~/.claude/agents`, skills, Herdr panels and layout. With
+`--only-services` (the user's yes): `com.omniloy.artifacts`, `com.omniloy.peer-link` and `com.omniloy.watchdog`
+(started now). Only if the user also wants it, `--only-services --login-resume` writes `com.omniloy.office-up`: it
+runs `office-up` at the next login, where it starts the floors and the watchdog and brings back the people who were
+running when the Mac went down, each in their own previous conversation (paid sessions), so they pick up where they were.
 
 ## Step 5. Herdr layout
 
