@@ -818,15 +818,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { results });
     }
     if (p === '/api/requests') return json(res, 200, await loadRequests());
-    if (p === '/api/drafts') { // read only: what the business team has drafted in the person's name
-      const r = await run(bin('team-draft'), ['json']);
-      let d = { drafts: [] }; try { d = JSON.parse(r.stdout); } catch { /* no drafts yet */ }
-      const people = {};
-      for (const f of [path.join(HOME, '.omniloy-biz', 'team.json'), path.join(TEAM_DIR, 'team.json')]) {
-        try { for (const x of (await readJson(f)).personas || []) people[x.herdrName] = { name: x.name, color: x.color, role: x.role }; } catch { /* that team is not set up */ }
-      }
-      return json(res, 200, { drafts: d.drafts || [], people, readOnly: true });
-    }
+    // Drafts (/api/drafts*) are served by hub.mjs → drafts-api.mjs, the same on every floor.
     if (req.method === 'POST' && (p === '/api/requests/answer' || p === '/api/requests/read')) {
       if (!String(req.headers['content-type'] || '').includes('application/json')) return json(res, 415, { error: 'json only' });
       const body = await readBody(req);

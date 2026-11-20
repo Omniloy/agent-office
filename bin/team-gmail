@@ -8,6 +8,8 @@ sign-in the Google Workspace connector already holds on this Mac. Used by `team-
   team-gmail sent-after <threadId> <ISO time>   -> JSON {sent: bool, messageId}   (a message from me in the thread after that time)
   team-gmail thread <threadId>                  -> JSON {messages: [{from, to, cc, date, mine, text, attachments}]} oldest first, drafts left
                                                 out, each message without the mail it quotes (read-only, for the Drafts popup)
+  team-gmail files <draftId>                    -> JSON {messageId, files: [{part, name, mime, size}]} what the draft carries attached
+  team-gmail file <messageId> <partId>          the bytes of one attachment (of a draft's message or a thread message), to stdout
   team-gmail render <text file> [--text]        -> the HTML (or normalised text) for a message, signature per signature.json
 """
 import sys, os, json, re, html, base64, glob, email, email.policy, urllib.request, urllib.parse, urllib.error, datetime
@@ -84,6 +86,24 @@ def put(did, d, msg):
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     return call("PUT", f"/drafts/{did}", {"message": {"raw": raw, "threadId": d["message"].get("threadId")}})
 
+def tree(p):
+    yield p
+    for q in p.get("parts") or []: yield from tree(q)
+def header(p, name):
+    return next((h["value"] for h in p.get("headers", []) if h["name"].lower() == name), "")
+def files_of(payload):
+    """The attachments of a message: real files, and pictures pasted into the text. Tiny inline images (logos in a
+    signature) are left out."""
+    out = []
+    for p in tree(payload):
+        name = p.get("filename")
+        if not name: continue
+        size = int(p.get("body", {}).get("size") or 0)
+        inline = header(p, "content-disposition").lower().startswith("inline") or bool(header(p, "content-id"))
+        if inline and p.get("mimeType", "").startswith("image/") and size < 15000: continue
+        out.append({"part": p.get("partId", ""), "name": name, "mime": p.get("mimeType", "application/octet-stream"), "size": size})
+    return out
+
 a = sys.argv[1:]
 if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
 cmd = a[0]
@@ -159,6 +179,18 @@ elif cmd == "thread":
         out.append({"id": m["id"], "from": h.get("from", ""), "to": h.get("to", ""), "cc": h.get("cc", ""),
                     "date": datetime.datetime.fromtimestamp(int(m.get("internalDate", 0)) / 1000).isoformat(timespec="minutes"),
                     "mine": "SENT" in m.get("labelIds", []), "text": text[:8000] + ("\n[…]" if len(text) > 8000 else ""),
-                    "attachments": [p["filename"] for p in ps if p.get("filename")]})
+                    "attachments": files_of(m.get("payload", {}))})
     print(json.dumps({"messages": out[-40:]}, ensure_ascii=False))
+elif cmd == "files":
+    d = call("GET", f"/drafts/{a[1]}?format=full", ok404=True)
+    if d is None: print(json.dumps({"exists": False, "files": []})); sys.exit()
+    print(json.dumps({"exists": True, "messageId": d["message"]["id"], "files": files_of(d["message"].get("payload", {}))}, ensure_ascii=False))
+elif cmd == "file":
+    if not re.fullmatch(r"[0-9a-zA-Z_-]+", a[1]) or not re.fullmatch(r"[0-9.]+", a[2]): sys.exit("bad message or part id")
+    m = call("GET", f"/messages/{a[1]}?format=full")
+    p = next((q for q in tree(m.get("payload", {})) if q.get("partId") == a[2]), None)
+    if p is None or not p.get("filename"): sys.exit("that attachment is not in the message")
+    b = p.get("body", {})
+    raw = b.get("data") or call("GET", f"/messages/{a[1]}/attachments/{b['attachmentId']}")["data"]
+    sys.stdout.buffer.write(base64.urlsafe_b64decode(raw + "=="))
 else: print(__doc__); sys.exit(1)

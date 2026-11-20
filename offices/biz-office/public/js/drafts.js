@@ -1,7 +1,7 @@
 // Drafts: every outgoing message the team has prepared in __OWNER__'s name (written by `team-draft`,
-// stored in ~/.omniloy-biz/drafts.json). A popup to read, edit, open in the real app, and ask the
-// author about a draft. Nothing is sent from here: sending happens in Gmail or WhatsApp.
-// Self-contained: main.js doesn't know it.
+// stored in ~/.omniloy-biz/drafts.json). A popup to read, edit, send, and ask the author about a draft, with the
+// thread it answers and the files attached. Shared file: the same on every floor (edit it in team-office, copy it to
+// the other two apps); the routes are in drafts-api.mjs. Self-contained: main.js doesn't know it.
 const TOKEN = window.__TOKEN__;
 const EMBED = new URLSearchParams(location.search).has('embed');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -17,7 +17,7 @@ style.textContent = `
 #btn-drafts b { margin-left: 6px; padding: 0 6px; border-radius: 99px; background: #2dd4bf; color: #06231f; font-size: 11px; }
 #drafts-veil { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; background: rgba(6, 12, 14, .55); backdrop-filter: blur(3px); }
 #drafts-veil.show { display: flex; }
-#drafts { width: min(1080px, calc(100vw - 40px)); height: min(720px, calc(100vh - 60px)); display: grid; grid-template-columns: 330px 1fr; grid-template-rows: auto 1fr;
+#drafts { width: min(1500px, calc(100vw - 32px)); height: calc(100vh - 40px); display: grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr;
   border-radius: 18px; background: rgba(16, 24, 28, .96); border: 1px solid rgba(255,255,255,.14); color: #e8f0ee; font-size: 13px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
 #drafts header { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,.1); }
 #drafts header h2 { margin: 0; font-size: 17px; } #drafts header small { color: #8fa3a0; flex: 1; }
@@ -65,26 +65,56 @@ style.textContent = `
 #dr-detail h4 { margin: 8px 0 0; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8fa3a0; font-weight: 600; }
 .talk { display: flex; flex-direction: column; gap: 6px; } .talk div { padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.05); line-height: 1.45; white-space: pre-wrap; }
 .talk div.me { background: rgba(45,212,191,.1); } .talk b { font-size: 11.5px; color: #8fa3a0; font-weight: 600; margin-right: 6px; }
-#dr-thread { border: 1px solid rgba(255,255,255,.12); border-radius: 10px; background: rgba(255,255,255,.035); flex: none; }
-#dr-thread .th { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; padding: 8px 12px; text-align: left; color: #a9bbb8; border-radius: 10px; }
-#dr-thread .th b { color: #e8f0ee; font-weight: 600; } #dr-thread .th i { font-style: normal; display: inline-block; width: 10px; transition: transform .12s; } #dr-thread.open .th i { transform: rotate(90deg); }
-#dr-thread .th span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#dr-thread .last { padding: 0 12px 10px 30px; color: #c5d2d0; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
-#dr-thread .msgs { max-height: min(42vh, 380px); overflow: auto; border-top: 1px solid rgba(255,255,255,.1); overscroll-behavior: contain; }
-#dr-thread .m { border-bottom: 1px solid rgba(255,255,255,.07); } #dr-thread .m:last-child { border-bottom: 0; }
-#dr-thread .m .mh { display: flex; gap: 8px; align-items: baseline; padding: 8px 12px; cursor: pointer; } #dr-thread .m .mh:hover { background: rgba(255,255,255,.05); }
-#dr-thread .m .mh b { font-weight: 600; white-space: nowrap; } #dr-thread .m.mine .mh b { color: #5eead4; }
-#dr-thread .m .mh span { flex: 1; min-width: 0; color: #8fa3a0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } #dr-thread .m .mh time { color: #8fa3a0; font-size: 11.5px; white-space: nowrap; }
-#dr-thread .m .mb { display: none; padding: 0 12px 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: #dbe5e3; } #dr-thread .m.on .mb { display: block; } #dr-thread .m.on .mh span { visibility: hidden; }
-#dr-thread .m .mt { color: #8fa3a0; font-size: 11.5px; margin-bottom: 6px; white-space: normal; } #dr-thread .note { padding: 8px 12px; color: #8fa3a0; }
-@media (max-width: 760px) { #drafts { grid-template-columns: 1fr; grid-template-rows: auto 200px 1fr; } #dr-list { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.1); } }
+/* a Gmail draft with a thread: the reply and the thread side by side; on a narrow screen, two tabs */
+#dr-detail.split { padding: 0; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: 1fr; gap: 0; }
+#dr-detail.split .pane { overflow: auto; padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+#dr-detail.split .pane.th { border-left: 1px solid rgba(255,255,255,.1); background: rgba(0,0,0,.14); padding-top: 0; }
+#dr-detail .seg { display: none; }
+@media (max-width: 1180px) {
+  #dr-detail.split { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  #dr-detail .seg { display: flex; gap: 4px; padding: 10px 16px 0; }
+  #dr-detail .seg button { flex: 1; border-radius: 9px; } #dr-detail .seg button.on { border-color: #2dd4bf; background: rgba(45,212,191,.14); font-weight: 600; }
+  #dr-detail.split.v-reply .pane.th, #dr-detail.split.v-thread .pane.rp { display: none; }
+  #dr-detail.split .pane.th { border-left: 0; }
+}
+.thh { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 14px 0 10px; background: rgb(17, 25, 29); border-bottom: 1px solid rgba(255,255,255,.08); }
+.thh h3 { margin: 0; font-size: 14px; } .thh small { color: #8fa3a0; flex: 1; min-width: 120px; }
+.thh button, .thh a.lnk { font-size: 12px !important; padding: 4px 10px !important; }
+.msgs { display: flex; flex-direction: column; gap: 8px; }
+.mc { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; background: rgba(255,255,255,.035); scroll-margin-top: 64px; }
+.mc.mine { border-color: rgba(45,212,191,.28); background: rgba(45,212,191,.05); }
+.mc .mh { display: flex; gap: 10px; align-items: center; padding: 9px 12px; cursor: pointer; border-radius: 12px; }
+.mc .mh:hover { background: rgba(255,255,255,.04); }
+.mc .av { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 12px; color: #06231f; flex: none; }
+.mc .who { min-width: 0; flex: 1; } .mc .who b { font-weight: 600; } .mc.mine .who b { color: #5eead4; }
+.mc .who span { display: block; color: #8fa3a0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc.on .who span.snip { display: none; } .mc:not(.on) .who span.to { display: none; }
+.mc time { color: #8fa3a0; font-size: 11.5px; white-space: nowrap; } .mc .clip { color: #8fa3a0; font-size: 11.5px; white-space: nowrap; }
+.mc .mb { display: none; padding: 2px 14px 14px 50px; } .mc.on .mb { display: block; }
+.mc .tx { line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: #dbe5e3; font-size: 13.5px; }
+.mc details.legal { margin-top: 8px; color: #8fa3a0; font-size: 12px; } .mc details.legal summary { cursor: pointer; } .mc details.legal div { white-space: pre-wrap; margin-top: 6px; line-height: 1.45; }
+.files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.files .fi { display: flex; flex-direction: column; width: 150px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.25); color: #e8f0ee; text-decoration: none; cursor: pointer; }
+.files .fi .pv { height: 100px; display: grid; place-items: center; background: rgba(255,255,255,.04); overflow: hidden; font-size: 26px; }
+.files .fi .pv img { width: 100%; height: 100%; object-fit: cover; }
+.files .fi .nm { padding: 5px 8px 6px; font-size: 11.5px; line-height: 1.3; } .files .fi .nm b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .files .fi .nm span { color: #8fa3a0; }
+.files .fi:hover { border-color: #2dd4bf; }
+.files .more { align-self: center; color: #8fa3a0; font-size: 12px; }
+#dr-files h4 { margin: 0; }
+#dr-files .note, #dr-thread .note { color: #8fa3a0; padding: 8px 0; }
+#dr-inline-thread { border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 0 12px 12px; max-height: 50vh; overflow: auto; flex: none; }
+#dr-lb { position: fixed; inset: 0; z-index: 40; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 10px; background: rgba(0,0,0,.85); padding: 20px; }
+#dr-lb.show { display: flex; } #dr-lb img { max-width: 100%; max-height: calc(100vh - 110px); border-radius: 8px; background: #fff; }
+#dr-lb .bar { display: flex; gap: 10px; align-items: center; color: #e8f0ee; } #dr-lb .bar a, #dr-lb .bar button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,.25); background: rgba(255,255,255,.1); color: #fff; text-decoration: none; cursor: pointer; }
+@media (max-width: 760px) { #drafts { width: 100vw; height: 100dvh; border-radius: 0; grid-template-columns: 1fr; grid-template-rows: auto 150px 1fr; } #dr-list { border-right: 0; border-bottom: 1px solid rgba(255,255,255,.1); } .mc .mb { padding-left: 14px; } .mc { scroll-margin-top: 110px; } .files .fi { width: calc(50% - 4px); } }
 `;
 document.head.appendChild(style);
 
 const btn = document.createElement('button'); btn.id = 'btn-drafts'; btn.title = 'Messages the team has drafted for you to send (D)'; btn.textContent = 'Drafts';
 const tools = document.querySelector('.tools'); if (tools && !EMBED) tools.insertBefore(btn, document.querySelector('#btn-more'));
 const veil = document.createElement('div'); veil.id = 'drafts-veil';
-veil.innerHTML = `<section id="drafts" role="dialog" aria-label="Drafts"><header><h2>Drafts</h2><small id="dr-sub"></small><button class="x" id="dr-close" title="Close (Esc)">✕</button></header><div id="dr-list"></div><div id="dr-detail"></div></section>`;
+veil.innerHTML = `<section id="drafts" role="dialog" aria-label="Drafts"><header><h2>Drafts</h2><small id="dr-sub"></small><button class="x" id="dr-close" title="Close (Esc)">✕</button></header><div id="dr-list"></div><div id="dr-detail"></div></section>
+  <div id="dr-lb" role="dialog" aria-label="Picture"><img alt=""><div class="bar"><span></span><a target="_blank" rel="noopener">Open in a new tab</a><button type="button">Close (Esc)</button></div></div>`;
 document.body.appendChild(veil);
 const $ = (s) => veil.querySelector(s);
 
@@ -121,37 +151,80 @@ function preview(text) {
   return body.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
     .map((p) => `<p>${esc(p).replace(/(https?:\/\/[^\s<]+[^\s<.,;:)])/g, '<a href="$1" target="_blank" rel="noopener">$1</a>').replace(/\n/g, '<br>')}</p>`).join('') + sigHtml;
 }
-// The mail this draft answers, read live from Gmail when the draft is picked. Closed, it shows who wrote last and
-// the start of what they said; open, the whole thread in a box that scrolls on its own, the last message unfolded.
-const threads = new Map(); let thOpen = false; const msgOpen = new Set();
+// The mail this draft answers, read live from Gmail when the draft is picked: one card per message, oldest first, the
+// last one open. Legal notices fold away; a file already sent earlier in the thread (a logo quoted again) shows once.
+const threads = new Map(); let view = 'reply'; const msgOpen = new Set();
 const short = (addr) => (String(addr || '').split('<')[0].replace(/"/g, '').trim() || String(addr || '').replace(/[<>]/g, '')).split(',')[0];
+const mailOf = (addr) => (/<([^>]+)>/.exec(String(addr || '')) || [0, String(addr || '')])[1];
 const when = (iso) => { const t = new Date(iso); return isNaN(t) ? '' : t.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' + t.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); };
-function threadHtml(x) {
-  const t = threads.get(x.id);
-  if (!t || t.state === 'loading') return '<div class="note">Loading the thread…</div>';
-  if (t.state === 'err') return `<div class="note">The thread could not be read: ${esc(t.error)} <button id="dr-th-retry">Try again</button></div>`;
-  const ms = t.messages, n = ms.length;
-  if (!n) return '<div class="note">Nothing earlier in this thread: this message starts it.</div>';
-  const last = ms[n - 1];
-  const head = `<button class="th" id="dr-th-toggle" aria-expanded="${thOpen}"><i>▸</i><b>Thread · ${n} ${n === 1 ? 'message' : 'messages'}</b><span>${thOpen ? '' : `last from ${esc(last.mine ? 'you' : short(last.from))}, ${esc(when(last.date))}`}</span></button>`;
-  if (!thOpen) return head + `<div class="last" id="dr-th-last" title="Show the whole thread">${esc(last.text.slice(0, 600))}</div>`;
-  return head + `<div class="msgs">${ms.map((m, i) => {
-    const on = msgOpen.has(m.id) || (i === n - 1 && !msgOpen.has('-' + m.id));
-    return `<div class="m ${m.mine ? 'mine' : ''} ${on ? 'on' : ''}" data-m="${esc(m.id)}"><div class="mh"><b>${esc(m.mine ? 'You' : short(m.from))}</b><span>${esc(m.text.replace(/\s+/g, ' ').slice(0, 160))}</span><time>${esc(when(m.date))}</time></div>
-      <div class="mb"><div class="mt">to ${esc(m.to)}${m.cc ? ` · cc ${esc(m.cc)}` : ''}${m.attachments.length ? ` · attached: ${esc(m.attachments.join(', '))}` : ''}</div>${esc(m.text) || '<i>(no text)</i>'}</div></div>`;
+const size = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n > 1e3 ? `${Math.round(n / 1e3)} KB` : `${n || 0} B`);
+const hue = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 60% 70%)`; };
+const fileUrl = (msg, f, dl) => `/api/drafts/file?msg=${encodeURIComponent(msg)}&part=${encodeURIComponent(f.part)}&mime=${encodeURIComponent(f.mime)}&name=${encodeURIComponent(f.name)}&token=${encodeURIComponent(TOKEN)}${dl ? '&download=1' : ''}`;
+const ICON = (m) => (/pdf/.test(m) ? '📄' : /sheet|excel|csv/.test(m) ? '📊' : /presentation|powerpoint/.test(m) ? '📽️' : /word|document/.test(m) ? '📝' : /zip|compressed/.test(m) ? '🗜️' : /video/.test(m) ? '🎞️' : /audio/.test(m) ? '🎧' : '📎');
+function filesHtml(msg, files) {
+  return `<div class="files">${files.map((f) => {
+    const img = /^image\/(png|jpe?g|gif|webp|bmp)$/i.test(f.mime), opens = img || /pdf|^text\/plain|^video|^audio/.test(f.mime);
+    return `<a class="fi" href="${fileUrl(msg, f, !opens)}" ${img ? `data-img="${esc(fileUrl(msg, f))}" data-name="${esc(f.name)}"` : 'target="_blank" rel="noopener"'} title="${esc(f.name)}${opens ? '' : ' (downloads)'}">
+      <div class="pv">${img ? `<img loading="lazy" alt="" src="${fileUrl(msg, f)}">` : ICON(f.mime)}</div><div class="nm"><b>${esc(f.name)}</b><span>${size(f.size)}</span></div></a>`;
   }).join('')}</div>`;
 }
-function paintThread() {
+const LEGAL = /confidencial|confidential|destinatari|intended recipient|privileged|protecci[oó]n de datos|data protection|RGPD|GDPR|LOPD|prohibida|prohibited|aviso legal|legal notice|disclaimer|this (e-?mail|message) (and any|is)|este (mensaje|correo)|aquest missatge|el seu contingut/i;
+function textHtml(t) {
+  const clean = String(t || '').replace(/\[cid:[^\]\n]+\]/g, '').replace(/<(?:https?:|mailto:)[^>\s]+>/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n'); // Outlook's picture slots and link tails
+  const ps = clean.split(/\n\s*\n/), keep = [], legal = [];
+  ps.forEach((p, i) => ((i > 0 && p.length > 140 && LEGAL.test(p)) ? legal : keep).push(p));
+  return `<div class="tx">${esc(keep.join('\n\n').trim()) || '<i>(no text)</i>'}</div>${legal.length ? `<details class="legal"><summary>Legal notice (${legal.length})</summary><div>${esc(legal.join('\n\n'))}</div></details>` : ''}`;
+}
+function msgsHtml(ms) {
+  const n = ms.length, seen = new Set();
+  return `<div class="msgs">${ms.map((m, i) => {
+    const all = m.attachments || [], fresh = all.filter((f) => typeof f === 'object' && !seen.has(`${f.name}|${f.size}`)), again = all.length - fresh.length;
+    for (const f of all) if (typeof f === 'object') seen.add(`${f.name}|${f.size}`);
+    const on = msgOpen.has(m.id) || (i === n - 1 && !msgOpen.has('-' + m.id)), name = m.mine ? 'You' : short(m.from);
+    return `<div class="mc ${m.mine ? 'mine' : ''} ${on ? 'on' : ''}" data-m="${esc(m.id)}">
+      <div class="mh"><i class="av" style="background:${m.mine ? '#2dd4bf' : hue(mailOf(m.from))}">${esc((name[0] || '?').toUpperCase())}</i>
+        <div class="who"><b>${esc(name)}</b><span class="snip">${esc(m.text.replace(/\s+/g, ' ').slice(0, 180))}</span><span class="to">${esc(m.mine ? '' : mailOf(m.from) + ' · ')}to ${esc(m.to)}${m.cc ? ` · cc ${esc(m.cc)}` : ''}</span></div>
+        ${fresh.length ? `<span class="clip">📎 ${fresh.length}</span>` : ''}<time>${esc(when(m.date))}</time></div>
+      <div class="mb">${textHtml(m.text)}${fresh.length ? filesHtml(m.id, fresh) : ''}${again ? `<div class="files"><span class="more">${again} ${again === 1 ? 'file' : 'files'} already sent earlier in the thread</span></div>` : ''}</div></div>`;
+  }).join('')}</div>`;
+}
+function threadHtml(x) {
+  const t = threads.get(x.id), link = x.link ? `<a class="lnk" href="${esc(x.link)}" target="_blank" rel="noopener" title="Opens this thread in Gmail">Open in Gmail ↗</a>` : '';
+  let body, n = 0, people = 0;
+  if (!t || t.state === 'loading') body = '<div class="note">Loading the thread from Gmail…</div>';
+  else if (t.state === 'err') body = `<div class="note">The thread could not be read: ${esc(t.error)} <button id="dr-th-retry">Try again</button></div>`;
+  else if (!(n = t.messages.length)) body = '<div class="note">Nothing earlier in this thread: this message starts it.</div>';
+  else { people = new Set(t.messages.map((m) => mailOf(m.from).toLowerCase())).size; body = msgsHtml(t.messages); }
+  return `<div class="thh"><h3>Thread</h3><small>${n ? `${n} ${n === 1 ? 'message' : 'messages'} · ${people} ${people === 1 ? 'person' : 'people'}` : ''}</small>${n > 1 ? '<button id="dr-th-all">Open all</button><button id="dr-th-none">Close all</button>' : ''}${link}</div>${body}`;
+}
+function paintThread(toEnd) {
   const x = drafts.find((d) => d.id === cur), el = $('#dr-thread'); if (!x || !el) return;
-  el.classList.toggle('open', thOpen); el.innerHTML = threadHtml(x);
-  const box = el.querySelector('.msgs'); if (box) box.scrollTop = box.scrollHeight;
+  el.innerHTML = threadHtml(x);
+  const t = threads.get(x.id), sb = $('#dr-v-thread'); if (sb) sb.textContent = `Thread${t && t.messages && t.messages.length ? ` · ${t.messages.length}` : ''}`;
+  if (toEnd) { const last = el.querySelector('.mc:last-child'); if (last) last.scrollIntoView({ block: 'start' }); }
+}
+// What the Gmail draft carries attached (read from Gmail, so it is what will really go out).
+const dfiles = new Map();
+function draftFilesHtml(x) {
+  const t = dfiles.get(x.id);
+  if (!t || t.state === 'loading') return '<div class="note">Checking the attachments…</div>';
+  if (t.state === 'err') return `<div class="note">The attachments could not be read: ${esc(t.error)}</div>`;
+  if (!t.files.length) return '';
+  return `<h4>Attached · ${t.files.length}</h4>${filesHtml(t.messageId, t.files)}`;
+}
+async function loadFiles(x, again) {
+  if (x.channel !== 'gmail' || !x.draftId || (dfiles.has(x.id) && !again)) return;
+  dfiles.set(x.id, { state: 'loading' });
+  try { const d = await api(`/api/drafts/files?id=${x.id}${again ? '&fresh=1' : ''}`); dfiles.set(x.id, { state: 'ok', files: d.files || [], messageId: d.messageId }); }
+  catch (e) { dfiles.set(x.id, { state: 'err', error: e.message }); }
+  const el = $('#dr-files'); if (cur === x.id && el) el.innerHTML = draftFilesHtml(x);
 }
 async function loadThread(x, again) {
   if (threads.has(x.id) && !again) return;
   threads.set(x.id, { state: 'loading' });
   try { const d = await api(`/api/drafts/thread?id=${x.id}`); threads.set(x.id, { state: 'ok', messages: d.messages || [] }); }
   catch (e) { threads.set(x.id, { state: 'err', error: e.message }); }
-  if (cur === x.id) paintThread();
+  if (cur === x.id) paintThread(true);
 }
 // ---- calendar drafts: an event to create (Google emails the guests) or an answer to an invitation. Nothing happens until he presses the button.
 const RESP = { accepted: 'Accept', tentative: 'Maybe', declined: 'Decline' }, SAID = { accepted: 'accepted', tentative: 'maybe', declined: 'declined', needsAction: 'not answered' };
@@ -221,7 +294,7 @@ function renderEvent(x, box) {
       <span>From</span><div>${esc(who(x.from).name)} · ${ago(x.created)}${x.client ? ` · client ${esc(x.client)}` : ''}${x.edited ? ' · edited by you' : ''}</div>
       ${x.why ? `<span>Why</span><div class="why">${esc(x.why)}</div>` : ''}</div>
     <div id="dr-cal-live">${liveHtml(x)}</div>
-    ${x.thread ? `<div id="dr-thread" class="${thOpen ? 'open' : ''}">${threadHtml(x)}</div>` : ''}
+    ${x.thread ? `<div id="dr-inline-thread"><div id="dr-thread">${threadHtml(x)}</div></div>` : ''}
     ${!rsvp && x.body ? `<div class="desc">${esc(x.body)}</div>` : ''}`;
   const form = `<div class="evform">
       <label>Title<input id="ev-title" value="${esc(x.title)}"></label>
@@ -253,24 +326,27 @@ function renderEvent(x, box) {
 let editing = false;
 function renderDetail() {
   const x = drafts.find((d) => d.id === cur), box = $('#dr-detail');
+  box.className = '';
   if (!x) { box.innerHTML = `<div class="empty">${drafts.length ? 'Pick a draft on the left.' : ''}</div>`; return; }
   if (x.channel === 'calendar') return renderEvent(x, box);
   const app = APP[x.channel] || x.channel, author = firstName(x.from);
   const stale = !x.synced, canSend = x.channel === 'gmail' && Boolean(x.draftId);
   const openHint = x.channel === 'whatsapp' ? (x.phone ? 'Opens the chat with this text already typed. You press send there.' : `Opens WhatsApp. Find the chat${x.chat ? ` “${esc(x.chat)}”` : ''}; ${author} may have typed the text there already, or use Copy text.`)
     : x.thread ? 'Opens the thread in Gmail with the draft at the bottom. You press send there.' : 'Opens your Gmail drafts. You press send there.';
-  box.innerHTML = `
+  const split = x.channel === 'gmail' && x.thread;
+  const reply = `
     <div class="meta"><span>To</span><div>${esc(x.to)}</div>${x.cc ? `<span>Cc</span><div>${esc(x.cc)}</div>` : ''}
       <span>From</span><div>${esc(who(x.from).name)} · ${ago(x.created)}${x.client ? ` · client ${esc(x.client)}` : ''}</div>
-      ${x.why ? `<span>Why</span><div class="why">${esc(x.why)}</div>` : ''}</div>
-    ${x.channel === 'gmail' ? `<input id="dr-subject" value="${esc(x.subject)}" placeholder="Subject" aria-label="Subject" ${editing ? '' : 'hidden'}>${editing ? '' : `<div class="meta"><span>Subject</span><div>${esc(x.subject)}</div></div>`}` : ''}
-    ${x.channel === 'gmail' && x.thread ? `<div id="dr-thread" class="${thOpen ? 'open' : ''}">${threadHtml(x)}</div>` : ''}
+      ${x.why ? `<span>Why</span><div class="why">${esc(x.why)}</div>` : ''}
+      ${x.channel === 'gmail' && !editing ? `<span>Subject</span><div>${esc(x.subject)}</div>` : ''}</div>
+    ${x.channel === 'gmail' ? `<input id="dr-subject" value="${esc(x.subject)}" placeholder="Subject" aria-label="Subject" ${editing ? '' : 'hidden'}>` : ''}
     <div id="dr-preview" ${editing ? 'hidden' : ''}>${preview(x.body)}</div>
     <textarea id="dr-body" aria-label="Message text" spellcheck="true" ${editing ? '' : 'hidden'}>${esc(x.body)}</textarea>
+    ${x.channel === 'gmail' && x.draftId ? `<div id="dr-files">${draftFilesHtml(x)}</div>` : ''}
     ${stale ? `<div class="warn">${x.syncError ? `Gmail was not updated: ${esc(x.syncError)}` : `${app} still has the earlier text. Copy text gives you your version now.`}</div>` : ''}
     ${flash ? `<div class="ok">${esc(flash)}</div>` : ''}
     <div class="acts">
-      ${canSend ? `<button class="pri" id="dr-send" title="Sends this email now from your Gmail, exactly as shown">Send</button>` : ''}
+      ${canSend ? `<button class="pri" id="dr-send" title="Sends this email now from your Gmail, exactly as shown, with its attachments">Send</button>` : ''}
       <button id="dr-edit">${editing ? 'Preview' : 'Edit'}</button>
       <button id="dr-save" disabled ${editing ? '' : 'hidden'}>Save changes</button>
       ${x.link ? `<a class="${canSend ? 'lnk' : 'pri'}" id="dr-open" href="${esc(x.link)}" target="_blank" rel="noopener" title="${esc(openHint)}">Open in ${esc(app)}</a>` : ''}
@@ -281,8 +357,15 @@ function renderDetail() {
     <h4>Ask ${esc(author)} about this draft</h4>
     ${(x.talk || []).length ? `<div class="talk">${x.talk.map((t) => `<div class="${t.who === '__OWNER_ID__' ? 'me' : ''}"><b>${t.who === '__OWNER_ID__' ? 'You' : esc(firstName(t.who))}</b>${esc(t.text)}</div>`).join('')}</div>` : ''}
     <div class="acts"><input id="dr-q" placeholder="Why this tone? Can you make it shorter? Who else is on the thread?" aria-label="Question about this draft"><button id="dr-ask">Ask</button></div>`;
+  const t = threads.get(x.id), n = t && t.messages ? t.messages.length : 0;
+  box.className = split ? `split v-${view}` : '';
+  box.innerHTML = split
+    ? `<div class="seg"><button id="dr-v-reply" class="${view === 'reply' ? 'on' : ''}">Your reply</button><button id="dr-v-thread" class="${view === 'thread' ? 'on' : ''}">Thread${n ? ` · ${n}` : ''}</button></div>
+       <div class="pane rp">${reply}</div><div class="pane th" id="dr-thread">${threadHtml(x)}</div>`
+    : reply;
   dirty = false; flash = '';
-  if (x.channel === 'gmail' && x.thread) { loadThread(x); const mb = box.querySelector('#dr-thread .msgs'); if (mb) mb.scrollTop = mb.scrollHeight; }
+  if (split) { loadThread(x); const last = box.querySelector('#dr-thread .mc:last-child'); if (last) last.scrollIntoView({ block: 'start' }); }
+  loadFiles(x);
 }
 function render() { renderList(); renderDetail(); }
 
@@ -308,12 +391,17 @@ veil.addEventListener('input', (e) => { if (e.target.id === 'dr-body' || e.targe
 veil.addEventListener('click', async (e) => {
   if (e.target.closest('#dr-close')) return open(false);
   const f = e.target.closest('[data-f]'); if (f) { filter = f.dataset.f; return renderList(); }
-  const row = e.target.closest('.dr'); if (row) { cur = Number(row.dataset.id); editing = false; thOpen = false; return render(); }
-  if (e.target.closest('#dr-th-toggle, #dr-th-last')) { thOpen = !thOpen; return paintThread(); }
+  const row = e.target.closest('.dr'); if (row) { cur = Number(row.dataset.id); editing = false; view = 'reply'; msgOpen.clear(); return render(); }
+  const img = e.target.closest('[data-img]'); if (img) { e.preventDefault(); const lb = $('#dr-lb'); lb.querySelector('img').src = img.dataset.img; lb.querySelector('a').href = img.dataset.img; lb.querySelector('span').textContent = img.dataset.name; lb.classList.add('show'); return; }
+  if (e.target.closest('#dr-lb')) { if (!e.target.closest('a')) $('#dr-lb').classList.remove('show'); return; }
+  if (e.target.closest('.fi')) return; // a file: the link opens or downloads it
+  if (e.target.closest('#dr-v-reply, #dr-v-thread')) { view = e.target.closest('#dr-v-thread') ? 'thread' : 'reply'; const box = $('#dr-detail'); box.classList.toggle('v-reply', view === 'reply'); box.classList.toggle('v-thread', view === 'thread'); box.querySelectorAll('.seg button').forEach((x) => x.classList.toggle('on', x.id === `dr-v-${view}`)); if (view === 'thread') { const last = box.querySelector('#dr-thread .mc:last-child'); if (last) last.scrollIntoView({ block: 'start' }); } return; }
+  if (e.target.closest('#dr-th-all, #dr-th-none')) { const on = !!e.target.closest('#dr-th-all'); $('#dr-detail').querySelectorAll('#dr-thread .mc').forEach((m) => { m.classList.toggle('on', on); msgOpen.delete(on ? '-' + m.dataset.m : m.dataset.m); msgOpen.add(on ? m.dataset.m : '-' + m.dataset.m); }); return; }
   if (e.target.closest('#dr-th-retry')) { const y = drafts.find((d) => d.id === cur); if (y) { loadThread(y, true); paintThread(); } return; }
   if (e.target.closest('#dr-ev-retry')) { const y = drafts.find((d) => d.id === cur); if (y) { loadLive(y, true); paintLive(); } return; }
+  if (e.target.closest('details.legal')) return;
   const mh = e.target.closest('#dr-thread .mh'); if (mh) { const m = mh.parentElement, id = m.dataset.m, on = !m.classList.contains('on'); m.classList.toggle('on', on); msgOpen.delete(on ? '-' + id : id); msgOpen.add(on ? id : '-' + id); return; }
-  const b = e.target.closest('button, a.pri'); if (!b || cur === null) return;
+  const b = e.target.closest('button, a.pri, a#dr-open'); if (!b || cur === null || b.closest('.thh')) return;
   const x = drafts.find((d) => d.id === cur); if (!x) return;
   const body = $('#dr-body') ? $('#dr-body').value : '', subject = $('#dr-subject') ? $('#dr-subject').value : undefined;
   try {
@@ -347,15 +435,15 @@ veil.addEventListener('click', async (e) => {
   } catch (err) { flash = ''; b.textContent = err.message; b.disabled = false; b.dataset.sure = ''; }
 });
 veil.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { e.preventDefault(); if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) e.target.blur(); else open(false); }
+  if (e.key === 'Escape') { e.preventDefault(); if ($('#dr-lb').classList.contains('show')) $('#dr-lb').classList.remove('show'); else if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) e.target.blur(); else open(false); }
   else if (e.key === 'Enter' && e.target.id === 'dr-q') { e.preventDefault(); $('#dr-ask').click(); }
   e.stopPropagation();
 });
 addEventListener('keydown', (e) => {
   if (EMBED || e.metaKey || e.ctrlKey || e.altKey || ['INPUT', 'TEXTAREA'].includes(document.activeElement && document.activeElement.tagName)) return;
   if (e.key === 'd' || e.key === 'D') { e.preventDefault(); open(); }
-  else if (e.key === 'Escape' && veil.classList.contains('show')) { e.stopImmediatePropagation(); open(false); }
+  else if (e.key === 'Escape' && veil.classList.contains('show')) { e.stopImmediatePropagation(); if ($('#dr-lb').classList.contains('show')) $('#dr-lb').classList.remove('show'); else open(false); }
 }, true);
-window.__openDraft = (id) => { if (drafts.some((x) => x.id === id)) { cur = id; editing = false; thOpen = false; } open(true); }; // the For you panel opens a draft straight here
+window.__openDraft = (id) => { if (drafts.some((x) => x.id === id)) { cur = id; editing = false; view = 'reply'; msgOpen.clear(); } open(true); }; // the For you panel opens a draft straight here
 if (location.hash === '#drafts') open(true);
 poll(); setInterval(poll, 4000);

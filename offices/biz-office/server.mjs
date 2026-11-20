@@ -441,7 +441,6 @@ function readBody(req) {
 // Pending requests for __OWNER__ (written by `team-ask`); the office shows them and can answer.
 const TEAM_ASK = bin('team-ask');
 const TEAM_DRAFT = bin('team-draft');
-const threadCache = new Map(); // draft id -> { at, d }
 // Drafts sent or deleted in Gmail itself drop off the list on their own.
 setInterval(() => { run(TEAM_DRAFT, ['sync'], { timeout: 60000 }).catch(() => {}); }, 60000).unref();
 const shortName = (n) => { const m = /^(\S+) (\d+) \(temp\)/.exec(String(n)); return m ? `${m[1]} ${m[2]}` : String(n).split(' ')[0]; }; // a temp keeps its number: "Nora 3"
@@ -566,71 +565,7 @@ const server = http.createServer(async (req, res) => {
       scheduleRefresh();
       return json(res, r.ok ? 200 : 502, r.ok ? { ok: true, result: oneLine(r.stdout) } : { error: clip(oneLine(r.stderr || r.stdout), 240) });
     }
-    // Drafts: outgoing messages the team prepared for __OWNER__ (`team-draft`). Nothing is sent from here.
-    if (p === '/api/drafts') {
-      const r = await run(TEAM_DRAFT, ['json']);
-      let d = { drafts: [] }; try { d = JSON.parse(r.stdout); } catch { /* no drafts yet */ }
-      const people = {};
-      for (const f of [path.join(TEAM_DIR, 'team.json'), path.join(HOME, '.omniloy-team', 'team.json')]) {
-        try { for (const x of (await readJson(f)).personas || []) people[x.herdrName] = { name: x.name, color: x.color, role: x.role }; } catch { /* that team is not set up */ }
-      }
-      return json(res, 200, { drafts: d.drafts, signature: d.signature || null, people });
-    }
-    if (p === '/api/drafts/thread') { // the mail a draft answers: read live from Gmail for the owner, kept two minutes in memory, never on disk
-      const id = String(Number(url.searchParams.get('id')) || '');
-      if (!id) return json(res, 400, { error: 'id is required' });
-      const hit = threadCache.get(id);
-      if (hit && Date.now() - hit.at < 120000) return json(res, 200, hit.d);
-      const r = await run(TEAM_DRAFT, ['thread', id], { timeout: 60000 });
-      if (!r.ok) return json(res, 502, { error: clip(oneLine(r.stderr || r.stdout), 240) });
-      let d = { messages: [] }; try { d = JSON.parse(r.stdout); } catch { /* nothing readable */ }
-      threadCache.set(id, { at: Date.now(), d }); if (threadCache.size > 30) threadCache.delete(threadCache.keys().next().value);
-      return json(res, 200, d);
-    }
-    if (p === '/api/drafts/event') { // a calendar draft: what else is in the calendar at that time, read live, kept one minute in memory, never on disk
-      const id = String(Number(url.searchParams.get('id')) || '');
-      if (!id) return json(res, 400, { error: 'id is required' });
-      const key = 'ev' + id, hit = threadCache.get(key);
-      if (hit && Date.now() - hit.at < 60000 && !url.searchParams.has('fresh')) return json(res, 200, hit.d);
-      const r = await run(TEAM_DRAFT, ['event', id], { timeout: 60000 });
-      if (!r.ok) return json(res, 502, { error: clip(oneLine(r.stderr || r.stdout), 240) });
-      let d = { conflicts: [] }; try { d = JSON.parse(r.stdout); } catch { /* nothing readable */ }
-      threadCache.set(key, { at: Date.now(), d }); if (threadCache.size > 30) threadCache.delete(threadCache.keys().next().value);
-      return json(res, 200, d);
-    }
-    if (req.method === 'POST' && ['/api/drafts/edit', '/api/drafts/ask', '/api/drafts/status', '/api/drafts/send'].includes(p)) {
-      if (!String(req.headers['content-type'] || '').includes('application/json')) return json(res, 415, { error: 'json only' });
-      const body = await readBody(req);
-      const id = String(Number(body.id) || '');
-      if (!id) return json(res, 400, { error: 'id is required' });
-      let args;
-      if (p.endsWith('/edit') && body.event && typeof body.event === 'object') { // a calendar draft: the fields of the event
-        const e = {}; for (const k of ['title', 'start', 'end', 'location', 'description', 'response']) if (typeof body.event[k] === 'string') e[k] = body.event[k].slice(0, k === 'description' ? 8000 : 300);
-        if (typeof body.event.guests === 'string') e.guests = body.event.guests.slice(0, 4000);
-        if (typeof body.event.meet === 'boolean') e.meet = body.event.meet;
-        const tmp = path.join(os.tmpdir(), `biz-event-${id}-${Date.now()}.json`);
-        await fs.writeFile(tmp, JSON.stringify(e));
-        threadCache.delete('ev' + id);
-        args = ['edit', id, '--event-file', tmp];
-      } else if (p.endsWith('/edit')) {
-        const text = String(body.body || '').trim();
-        if (!text || text.length > 20000) return json(res, 400, { error: 'the message is empty or too long' });
-        const tmp = path.join(os.tmpdir(), `biz-draft-${id}-${Date.now()}.txt`);
-        await fs.writeFile(tmp, text);
-        args = ['edit', id, '--body-file', tmp, ...(typeof body.subject === 'string' ? ['--subject', body.subject.slice(0, 300)] : [])];
-      } else if (p.endsWith('/ask')) {
-        const text = String(body.text || '').trim();
-        if (!text || text.length > 2000) return json(res, 400, { error: 'the question is empty or too long' });
-        args = ['ask', id, text];
-      } else if (p.endsWith('/send')) {
-        args = ['send', id, '--by-owner']; // __OWNER__'s click in the popup; the Gmail draft goes out as it reads there
-      } else {
-        if (!['sent', 'discarded'].includes(body.status)) return json(res, 400, { error: 'status must be sent or discarded' });
-        args = [body.status === 'sent' ? 'sent' : 'discard', id, '--by-owner'];
-      }
-      const r = await run(TEAM_DRAFT, args, { timeout: 90000 });
-      return json(res, r.ok ? 200 : 502, r.ok ? { ok: true } : { error: clip(oneLine(r.stderr || r.stdout), 240) });
-    }
+    // Drafts (/api/drafts*) are served by hub.mjs → drafts-api.mjs, the same on every floor.
     return json(res, 404, { error: 'not found' });
   } catch (e) {
     return json(res, 500, { error: e.message });

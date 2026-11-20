@@ -126,7 +126,7 @@ function render(force) {
         <div class="t">${esc(x.subject || x.to || 'Draft')}</div>
         <div class="m">To ${esc(x.to || x.chat || x.phone || '—')}${x.why ? ` · ${esc(x.why)}` : ''}</div>
         <div class="b">${esc(x.body || '')}</div>
-        <div class="acts">${x.link ? `<a class="pri" href="${esc(x.link)}" target="_blank" rel="noopener">Open in ${esc(app)}</a>` : ''}${readOnly ? '' : `<button type="button" data-full="${esc(x.id)}">Edit or ask about it</button>`}</div>
+        <div class="acts">${readOnly ? '' : `<button type="button" class="pri" data-full="${esc(x.id)}">${x.channel === 'gmail' && x.draftId ? 'Review, edit or send' : 'Review or edit'}</button>`}${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">Open in ${esc(app)}</a>` : ''}</div>
       </div>`;
     }).join('') + (readOnly ? '<div class="grp">To edit a draft or ask its author about it, open the Business office.</div>' : '')
       : `<div class="empty">No drafts are waiting for you.<br>When the business team writes a message in your name, it shows up here to check before it goes out.${readOnly ? '' : '<div class="acts" style="justify-content:center"><button type="button" data-full>See sent and older drafts</button></div>'}</div>`;

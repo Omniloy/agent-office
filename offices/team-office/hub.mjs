@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createPeers } from './peers.mjs';
+import { draftsRoute } from './drafts-api.mjs';
 
 const APP = path.dirname(fileURLToPath(import.meta.url)); // this office app's folder
 const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = path.join(SHARED, 'push');
@@ -339,6 +340,7 @@ export function createHub({ port, stuck, agents }) {
   const readBody = (req, max = 16_000) => new Promise((resolve, reject) => { let s = ''; req.on('data', (c) => { s += c; if (s.length > max) { reject(new Error('too large')); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch (e) { reject(e); } }); req.on('error', reject); });
   const peers = createPeers({ port, agents, OFFICES, APP, chatLog }); // other buildings: guest listener and connections
   async function route(req, res, p) {
+    if (p.startsWith('/api/drafts')) return draftsRoute(req, res, p); // every floor opens and edits drafts (drafts-api.mjs)
     if (p === '/api/buildings' || p === '/api/visits' || p.startsWith('/api/peers/')) return peers.route(req, res, p);
     if (p === '/api/attention') {
       const items = await attention();
