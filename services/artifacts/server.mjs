@@ -4,10 +4,18 @@
 //   URL     http://127.0.0.1:4340/<owner>/<slug>/      (the phone: the same path on the Mac's Tailscale name)
 // It listens on this machine only. `tailscale serve` forwards the Tailscale name to it; only the accounts listed in
 // ~/.omniloy-team/remote.json get in from there, the same door as the offices.
+// Pages are written by agents and often hold health data, so:
+//   - every answer carries a Content-Security-Policy: a page runs its own inline code but cannot load anything from
+//     the internet nor send anything there (connect-src 'self', no external scripts, images or forms);
+//   - .md is rendered as plain Markdown (nothing runs); .mdx, which is a program, is rendered in a separate Node
+//     process that may read only this app and the document's folder, with no environment and a 10 s limit (render-mdx.mjs).
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { evaluate } from '@mdx-js/mdx';
 import * as runtime from 'react/jsx-runtime';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -18,6 +26,11 @@ const ROOT = path.join(HOME, '.omniloy-team', 'artifacts');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TYPES = { html: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', mjs: 'text/javascript; charset=utf-8', json: 'application/json', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon', pdf: 'application/pdf', txt: 'text/plain; charset=utf-8', csv: 'text/csv; charset=utf-8', md: 'text/plain; charset=utf-8', mdx: 'text/plain; charset=utf-8', woff2: 'font/woff2', mp4: 'video/mp4', webm: 'video/webm', mp3: 'audio/mpeg', wav: 'audio/wav' };
 const SAFE = /^[a-z0-9][a-z0-9._-]{0,80}$/i;
+const APP = path.dirname(fileURLToPath(import.meta.url));
+// the renderer reads this app and its libraries (node_modules may be a link to another folder)
+const READ = [...new Set([APP, (() => { try { return realpathSync(path.join(APP, 'node_modules')); } catch { return APP; } })()])].map((d) => `--allow-fs-read=${d}${path.sep}`);
+const CSP = ["default-src 'self' data: blob:", "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
+  "font-src 'self' data:", "media-src 'self' data: blob:", "connect-src 'self'", "form-action 'none'", "frame-src 'self'", "base-uri 'self'", "object-src 'none'"].join('; ');
 
 async function remoteOk(req, host) {
   let r; try { r = JSON.parse(await fs.readFile(path.join(HOME, '.omniloy-team', 'remote.json'), 'utf8')); } catch { return false; }
@@ -56,19 +69,39 @@ blockquote { margin: 1em 0; padding: 2px 16px; border-left: 3px solid var(--line
 ul.idx { list-style: none; padding: 0; } ul.idx li { padding: 12px 0; border-bottom: 1px solid var(--line); } ul.idx a { font-weight: 600; text-decoration: none; } ul.idx small { display: block; color: var(--muted); }
 ${extra}</style></head><body><main>${body}</main></body></html>`;
 
+// .mdx in its own process (see the top of this file); the same document is rendered once per change
+const mdxCache = new Map(); // file -> { key, out }
+function renderMdx(file) {
+  return new Promise((resolve) => {
+    const args = ['--permission', ...READ, `--allow-fs-read=${path.dirname(file)}${path.sep}`, path.join(APP, 'render-mdx.mjs'), file];
+    execFile(process.execPath, args, { cwd: APP, env: {}, timeout: 10_000, maxBuffer: 8e6, killSignal: 'SIGKILL' }, (err, stdout) => {
+      let d = null; try { d = JSON.parse(String(stdout)); } catch { /* killed or crashed */ }
+      resolve(d || { error: err && err.killed ? 'it took longer than 10 seconds' : 'it stopped before finishing' });
+    });
+  });
+}
 async function mdx(file, meta, owner) {
   const src = await fs.readFile(file, 'utf8');
   const by = `<div class="by"><a href="/">Artifacts</a> · ${esc(owner)} · ${esc(String(meta.updated || meta.created || '').replace('T', ' ').slice(0, 16))}</div>`;
-  try {
-    const mod = await evaluate(src, { ...runtime, remarkPlugins: [remarkGfm], format: file.endsWith('.mdx') ? 'mdx' : 'md', baseUrl: `file://${file}` });
-    return SHELL(meta.title || 'Artifact', by + renderToStaticMarkup(runtime.jsx(mod.default, {})));
-  } catch (e) { // a document that does not compile is still readable: say why, then show the source
-    return SHELL(meta.title || 'Artifact', `${by}<div class="err">This document could not be rendered: ${esc(e.message)}</div><pre>${esc(src)}</pre>`);
+  let html = '', error = '';
+  if (file.endsWith('.mdx')) {
+    const st = await fs.stat(file), key = `${st.size}:${st.mtimeMs}`, hit = mdxCache.get(file);
+    const out = hit && hit.key === key ? hit.out : await renderMdx(file);
+    mdxCache.delete(file); mdxCache.set(file, { key, out }); while (mdxCache.size > 100) mdxCache.delete(mdxCache.keys().next().value);
+    html = out.html || ''; error = out.html == null ? out.error || 'unknown error' : '';
+  } else {
+    try { // plain Markdown: no code, no JSX, nothing runs
+      const mod = await evaluate(src, { ...runtime, remarkPlugins: [remarkGfm], format: 'md' });
+      html = renderToStaticMarkup(runtime.jsx(mod.default, {}));
+    } catch (e) { error = e.message; }
   }
+  if (!error) return SHELL(meta.title || 'Artifact', by + html);
+  // a document that does not compile is still readable: say why, then show the source
+  return SHELL(meta.title || 'Artifact', `${by}<div class="err">This document could not be rendered: ${esc(error)}</div><pre>${esc(src)}</pre>`);
 }
 
 const server = http.createServer(async (req, res) => {
-  const send = (code, type, body, head = {}) => { res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...head }); res.end(body); };
+  const send = (code, type, body, head = {}) => { res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': CSP, ...head }); res.end(body); };
   try {
     const host = String(req.headers.host || ''), local = /^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host);
     if (!local && !(await remoteOk(req, host))) return send(403, 'text/plain', 'not allowed');

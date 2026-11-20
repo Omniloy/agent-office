@@ -31,6 +31,22 @@ const readJson = async (f, dflt) => { try { return JSON.parse(await fs.readFile(
 const writeJson = async (f, v) => { await fs.mkdir(path.dirname(f), { recursive: true, mode: 0o700 }); const t = `${f}.${process.pid}.tmp`; await fs.writeFile(t, JSON.stringify(v), { mode: 0o600 }); await fs.rename(t, f); };
 const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
 const b64u = (b) => Buffer.from(b).toString('base64url');
+const hash = (text) => { let h = 2166136261; for (const c of String(text)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0).toString(36); };
+// One writer at a time for a file every floor rewrites (push/subs.json): a lock file made with O_EXCL, taken over
+// when it is older than 10 s (its writer died).
+async function withLock(file, fn) {
+  const lock = `${file}.lock-js`;
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  for (let i = 0; ; i++) {
+    try { await (await fs.open(lock, 'wx')).close(); break; } catch {
+      const st = await fs.stat(lock).catch(() => null);
+      if (st && Date.now() - st.mtimeMs > 10_000) { await fs.unlink(lock).catch(() => {}); continue; }
+      if (i > 100) break; // ~5 s: go ahead rather than lose the change
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+  try { return await fn(); } finally { await fs.unlink(lock).catch(() => {}); }
+}
 
 // ---------------------------------------------------------------- who works where
 const shortName = (n) => { const m = /^(\S+) (\d+) \(temp\)/.exec(String(n)); return m ? `${m[1]} ${m[2]}` : String(n).split(' ')[0]; }; // a temp keeps its number: "Nora 3"
@@ -229,9 +245,12 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
     for (const k of [...since.keys()]) if (!list.some((a) => a.herdrName === k)) since.delete(k);
     for (const a of list) if (!since.has(a.herdrName)) since.set(a.herdrName, Date.now());
     const items = list.flatMap((a) => {
-      const t = since.get(a.herdrName);
+      // Herdr's own "since" (status_ms) keeps the same id across restarts of this server: a restart is not a new wait
+      const t = Number(a.statusSince) || since.get(a.herdrName);
       // a terminal menu: its readable title ("¿Ejecutar `git push …`?") goes to the phone; the rest lets the Dev floor list and answer it
-      if (a.menu) return [{ id: `menu:${a.herdrName}:${a.menu.id}`, port, kind: 'request', who: shortName(a.name || a.herdrName), name: a.name || a.herdrName, role: a.role || '', from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.title || a.menu.question, 140), created: new Date(a.statusSince || t).toISOString(),
+      // push: what makes a phone notification new. The menu id also changes with Herdr's status time while the same
+      // question stays on screen; the question, its context and options in this terminal and turn do not.
+      if (a.menu) return [{ id: `menu:${a.herdrName}:${a.menu.id}`, push: `menu:${a.herdrName}:${hash([a.menu.terminalId, a.turn || '', a.menu.question, ...(a.menu.context || []), ...(a.menu.options || [])].join('\n'))}`, port, kind: 'request', who: shortName(a.name || a.herdrName), name: a.name || a.herdrName, role: a.role || '', from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.title || a.menu.question, 140), created: new Date(a.statusSince || t).toISOString(),
         menu: { id: a.menu.id, terminalId: a.menu.terminalId, question: a.menu.question, title: a.menu.title || a.menu.question, context: a.menu.context || [], options: a.menu.options, said: a.menu.said || '' } }];
       if (Date.now() - t <= 15_000) return []; // a short stop is not a wait
       return [{ id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() }];
@@ -300,24 +319,33 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
       out.push(status);
       if (status === 404 || status === 410) gone.add(s.endpoint); // the phone dropped this subscription
     }
-    if (gone.size) await writeJson(SUBS, (await readJson(SUBS, [])).filter((s) => !gone.has(s.endpoint)));
+    if (gone.size) await withLock(SUBS, async () => writeJson(SUBS, (await readJson(SUBS, [])).filter((s) => !gone.has(s.endpoint))));
     return out;
   }
+  // A send that reached no phone because of the network or the push service (no answer, 429, 5xx) is tried again.
+  const transient = (out) => out.length > 0 && !out.some((x) => x >= 200 && x < 300) && out.some((x) => x === 0 || x === 429 || x >= 500);
   const LABEL = { request: 'needs your answer', note: 'left you a message', draft: 'has a draft for you to check', stuck: 'is waiting for you' };
   let known = null;
+  const tries = new Map(); // push key -> failed attempts (3 at most)
   async function watch() {
     try {
       await writeLocal();
-      const items = await attention();
-      if (!known) { known = new Set(items.map((x) => x.id)); return; } // only what arrives from now on
+      const items = await attention(), keyOf = (x) => x.push || x.id;
+      if (!known) { known = new Set(items.map(keyOf)); return; } // only what arrives from now on
       for (const x of items) {
-        if (known.has(x.id)) continue;
-        known.add(x.id);
+        const k = keyOf(x);
+        if (known.has(k)) continue;
+        known.add(k);
         if (x.kind === 'stuck' && x.port !== port) continue; // the office they sit in announces it
-        try { await fs.mkdir(path.join(PUSH, 'sent'), { recursive: true, mode: 0o700 }); await fs.writeFile(path.join(PUSH, 'sent', x.id.replace(/[^\w.-]/g, '_')), '', { flag: 'wx' }); } catch { continue; } // another office already sent it
-        await sendAll({ title: `${x.who} ${LABEL[x.kind] || 'needs you'}`, body: `${x.office} · ${x.title}`, port: x.port, hash: x.kind === 'stuck' ? `p=${x.from}` : 'foryou', tag: x.id });
+        const claim = path.join(PUSH, 'sent', k.replace(/[^\w.-]/g, '_'));
+        try { await fs.mkdir(path.join(PUSH, 'sent'), { recursive: true, mode: 0o700 }); await fs.writeFile(claim, '', { flag: 'wx' }); } catch { continue; } // another office already sent it
+        const out = await sendAll({ title: `${x.who} ${LABEL[x.kind] || 'needs you'}`, body: `${x.office} · ${x.title}`, port: x.port, hash: x.kind === 'stuck' ? `p=${x.from}` : 'foryou', tag: x.id });
+        if (transient(out) && (tries.get(k) || 0) < 2) { // let go of the claim: this office or another tries again next round
+          tries.set(k, (tries.get(k) || 0) + 1); known.delete(k); await fs.unlink(claim).catch(() => {});
+        } else tries.delete(k);
       }
-      if (known.size > 4000) known = new Set(items.map((x) => x.id));
+      if (known.size > 4000) known = new Set(items.map(keyOf));
+      if (tries.size > 200) tries.clear();
     } catch { /* try again next round */ }
   }
   setInterval(watch, 5000).unref(); watch();
@@ -412,10 +440,15 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
       const name = String(q.get('name') || body.name || '');
       let me = null, admin = false;
       if (name) me = (agents ? agents() : []).find((x) => x.herdrName === name) || null;
-      else { const team = await readJson(path.join(HOME, '.omniloy-admin', 'team.json'), { personas: [] }); me = team.personas.find((x) => x.herdrName === team.lead) || team.personas[0]; admin = true; }
-      if (!me) { json(res, 404, { error: name ? 'nobody with that name on this floor' : 'there is no superadmin' }); return true; }
+      if (!me) { // the superadmin (no name, or his own name: a request or menu of his opened from For you), else someone of another floor
+        const team = await readJson(path.join(HOME, '.omniloy-admin', 'team.json'), { personas: [] }), lead = (team.personas || []).find((x) => x.herdrName === team.lead) || (team.personas || [])[0];
+        if (lead && (!name || lead.herdrName === name)) { me = lead; admin = true; }
+        else if (name) { const o = (await whoIsWho())[name]; if (o) me = { herdrName: name, name: o.name, color: o.color, role: '' }; }
+      }
+      if (!me) { json(res, 404, { error: name ? 'nobody with that name in this building' : 'there is no superadmin' }); return true; }
       const person = { herdrName: me.herdrName, name: String(me.name || me.herdrName).split(' ')[0], role: me.role || '', color: me.color || '#fbbf24', admin };
-      const hcDo = (args) => new Promise((resolve) => execFile(path.join(HOME, '.local', 'bin', 'hc'), args, { timeout: 60_000 }, (err) => resolve(!err)));
+      const hcTry = (args) => new Promise((resolve) => execFile(path.join(HOME, '.local', 'bin', 'hc'), args, { timeout: 60_000 }, (err, _o, stderr) => resolve({ ok: !err, err: String(stderr || (err && err.message) || '').trim() })));
+      const hcDo = async (args) => (await hcTry(args)).ok;
       if (p === '/api/chat') {
         json(res, 200, { ...(await chatLog(me.herdrName, Number(q.get('pos')) || 0, q.get('file') || '', String(q.get('worker') || '').replace(/[^A-Za-z0-9]/g, ''))), person });
       } else if (p === '/api/chat/status') {
@@ -425,7 +458,18 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
       else if (p === '/api/chat/send') {
         const text = String(body.text || '').trim();
         if (!text || text.length > 6000) json(res, 400, { error: 'message is empty or too long' });
-        else { const ok = await hcDo(['send', '--json', me.herdrName, '--', text]); json(res, ok ? 200 : 502, ok ? { ok: true } : { error: `${person.name} is not running in Herdr` }); }
+        else {
+          const r = await hcTry(['send', '--json', me.herdrName, '--', text]);
+          if (r.ok) json(res, 200, { ok: true });
+          else { // "not running" only when that is true: waiting on a menu is the usual reason
+            let t = {}; try { t = JSON.parse(await hcOut(['get', me.herdrName, '--json'])); } catch { /* not running */ }
+            const stopped = !!(t.status && ['blocked', 'error'].includes(t.status.state));
+            const why = t.state !== 'live' ? `${person.name} is not running in Herdr`
+              : stopped ? `${person.name} is waiting on a question in the terminal: answer it first (the card above, For you or Live screen), then send again`
+              : `${person.name} did not take the message: ${clip(r.err, 160) || 'Herdr refused it'}`;
+            json(res, 502, { error: why, blocked: stopped });
+          }
+        }
       } else if (p === '/api/chat/stop') { const ok = await hcDo(['interrupt', me.herdrName, '--json']); json(res, ok ? 200 : 502, ok ? { ok: true } : { error: 'could not stop' }); }
       else json(res, 404, { error: 'not found' });
       return true;
@@ -485,14 +529,16 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
     if (p === '/api/push/subscribe') {
       const s = b.sub || {};
       if (!/^https:\/\//.test(String(s.endpoint || '')) || !s.keys || !s.keys.p256dh || !s.keys.auth) { json(res, 400, { error: 'bad subscription' }); return true; }
-      const subs = (await readJson(SUBS, [])).filter((x) => x.endpoint !== s.endpoint);
-      subs.push({ endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth }, port, added: new Date().toISOString() });
-      await writeJson(SUBS, subs.slice(-20));
+      await withLock(SUBS, async () => { // every floor rewrites this file: one at a time, or a phone added on one floor is lost
+        const subs = (await readJson(SUBS, [])).filter((x) => x.endpoint !== s.endpoint);
+        subs.push({ endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth }, port, added: new Date().toISOString() });
+        await writeJson(SUBS, subs.slice(-20));
+      });
       const sent = await sendAll({ title: 'Notifications are on', body: 'You will hear from every office here.', port, hash: '', tag: 'hello' }, s.endpoint);
       json(res, 200, { ok: true, status: sent[0] || 0 });
       return true;
     }
-    if (p === '/api/push/unsubscribe') { await writeJson(SUBS, (await readJson(SUBS, [])).filter((x) => x.endpoint !== b.endpoint)); json(res, 200, { ok: true }); return true; }
+    if (p === '/api/push/unsubscribe') { await withLock(SUBS, async () => writeJson(SUBS, (await readJson(SUBS, [])).filter((x) => x.endpoint !== b.endpoint))); json(res, 200, { ok: true }); return true; }
     if (p === '/api/push/test') { json(res, 200, { status: await sendAll({ title: 'Test from the office', body: 'This is how a notification looks.', port, hash: '', tag: 'test' }, b.endpoint || null) }); return true; }
     json(res, 404, { error: 'not found' });
     return true;

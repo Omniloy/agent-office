@@ -47,7 +47,7 @@ pre.mdpre { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: rg
 #term .pri { background: #2dd4bf; color: #06231f; border-color: #2dd4bf; font-weight: 600; }
 #term .tabs { display: flex; gap: 4px; } #term .tabs button { padding: 4px 10px; border-radius: 99px; color: #a9bbb8; background: transparent; } #term .tabs button.on { color: #e8f0ee; border-color: #2dd4bf; background: rgba(255,255,255,.07); }
 #term-ask { flex: none; padding: 8px 16px; background: rgba(251,191,36,.1); border-bottom: 1px solid rgba(251,191,36,.3); color: #fcd34d; line-height: 1.4; }
-#term-ask b { color: #fde68a; } #term [hidden] { display: none !important; }
+#term-ask b { color: #fde68a; } #term-ask .tell { display: flex; gap: 6px; align-items: center; margin-top: 6px; color: #e8f0ee; cursor: pointer; } #term [hidden] { display: none !important; }
 #term-x { flex: 1; min-height: 0; padding: 8px 4px 4px 10px; overflow: hidden; } #term-x .pane { width: 100%; height: 100%; } #term-x .pane[hidden] { display: none; }
 #term .keys { flex: none; display: flex; gap: 6px; padding: 6px 12px 0; overflow-x: auto; } #term .keys button { padding: 4px 10px; font-size: 12px; color: #a9bbb8; white-space: nowrap; }
 #term-line { flex: none; display: flex; gap: 8px; padding: 8px 12px 10px; align-items: flex-end; }
@@ -115,7 +115,7 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
     for (const [id, p] of panes) p.el.hidden = id !== cur;
     const ask = $('#term-ask');
     ask.hidden = !ctx;
-    if (ctx) ask.innerHTML = `${ctx.name ? `<b>${esc(ctx.name)}</b> marked this command.` : 'This command comes from a message.'} It runs on <b>${esc(where(cur))}</b>${cur === 'local' && info ? ` as ${esc(info.user)}` : ''} when you press Run. Read it first; you can change it.`;
+    if (ctx) ask.innerHTML = `${ctx.name ? `<b>${esc(ctx.name)}</b> marked this command.` : 'This command comes from a message.'} It runs on <b>${esc(where(cur))}</b>${cur === 'local' && info ? ` as ${esc(info.user)}` : ''} when you press Run. Read it first; you can change it.${ctx.from ? `<label class="tell"><input type="checkbox" id="term-tell" checked> When it finishes, send ${esc(ctx.name || 'them')} what it prints (tokens and passwords masked)</label>` : ''}`;
     const p = panes.get(cur); if (p) requestAnimationFrame(() => resize(p));
   }
   function grow() { const t = $('#term-in'); t.style.height = 'auto'; t.style.height = `${Math.min(132, t.scrollHeight + 2)}px`; }
@@ -135,7 +135,8 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
     const mine = ctx; b.disabled = true;
     try {
       const p = pane(cur); if (!p.es) p.connect();
-      await api('/api/term/run', { id: cur, cmd, from: mine ? mine.from || '' : '' });
+      const tell = $('#term-tell'); // the owner decides, before Run, whether the output goes back to whoever marked it
+      await api('/api/term/run', { id: cur, cmd, from: mine ? mine.from || '' : '', share: tell ? tell.checked : true });
       $('#term-in').value = ''; grow(); ctx = null; $('#term-ask').hidden = true;
       const sh = $('#term-share');
       if (mine && (mine.reqId || mine.from)) {

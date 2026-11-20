@@ -4,18 +4,19 @@
 // Made for a Herdr tab (Herdr panels cannot embed a web page, but its terminals draw images).
 //   node office-tty.mjs            Ctrl+C quits.
 //   OFFICE_DPR=1.5  sharper picture, fewer frames per second (default 1)
-//   OFFICE_FPS=30   frame rate cap
+//   OFFICE_FPS=15   frame rate cap (each frame is a PNG from a headless browser: more frames, more CPU)
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile, execFileSync } from 'node:child_process';
 import os from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { OFFICES } from './hub.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BASE = `http://127.0.0.1:${Number(process.env.PORT) || 4317}`;
 const DPR = Math.min(2, Math.max(0.5, Number(process.env.OFFICE_DPR) || 1));
-const FPS = Math.min(60, Math.max(1, Number(process.env.OFFICE_FPS) || 30));
+const FPS = Math.min(60, Math.max(1, Number(process.env.OFFICE_FPS) || 15));
 const SCREEN_SCALE = Number(process.env.OFFICE_SCREEN_SCALE) || 2; // terminal pixels per page pixel (Retina = 2)
 const LOG = process.env.OFFICE_LOG || path.join(ROOT, process.env.PORT && process.env.PORT !== '4317' ? `tty-${process.env.PORT}.log` : 'tty.log');
 const log = (...a) => { try { fs.appendFileSync(LOG, `${new Date().toISOString().slice(11, 19)} ${a.join(' ')}\n`); } catch {} };
@@ -57,7 +58,13 @@ async function pixelSize() {
 async function ensureServer() {
   const up = () => fetch(`${BASE}/health`).then((r) => r.ok).catch(() => false);
   if (await up()) return;
-  spawn(process.execPath, [path.join(ROOT, 'server.mjs')], { cwd: ROOT, detached: true, stdio: 'ignore' }).unref();
+  // the floor on that port with its own team (without TEAM_DIR every port would serve the Dev team); its output goes to
+  // the same log as ours, so a server that will not start says why
+  const port = Number(new URL(BASE).port), floor = OFFICES.find((o) => o.port === port), env = { ...process.env, PORT: String(port) };
+  if (floor && floor.dir !== '.omniloy-team') env.TEAM_DIR = path.join(os.homedir(), floor.dir); else delete env.TEAM_DIR;
+  const fd = fs.openSync(LOG, 'a');
+  spawn(process.execPath, [path.join(ROOT, 'server.mjs')], { cwd: ROOT, env, detached: true, stdio: ['ignore', fd, fd] }).unref();
+  fs.closeSync(fd);
   for (let i = 0; i < 40; i++) { await sleep(250); if (await up()) return; }
   throw new Error('the office server did not start');
 }

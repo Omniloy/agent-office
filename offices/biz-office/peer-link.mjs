@@ -20,7 +20,14 @@ const TS = ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/usr/bin/ta
 
 const links = new Map();  // machine name -> { proc, id }
 const doors = new Map();  // door port -> { target port }
+const waits = new Map();  // machine name -> { fails, next }: a link that keeps failing is retried less and less often
 let remote = null, me = null, slots = {};
+const failed = (name, why) => {
+  const w = waits.get(name) || { fails: 0, next: 0 }; w.fails++;
+  const ms = Math.min(30 * 60_000, 30_000 * 2 ** Math.min(6, w.fails - 1)); // 30 s, 1 min, 2 min … 30 min
+  w.next = Date.now() + ms; waits.set(name, w);
+  log(`${name}: ${why}; next try in ${Math.round(ms / 1000)} s`);
+};
 
 function door(port) {
   if (doors.has(port)) return;
@@ -49,29 +56,44 @@ async function link(m) {
   const r = await run('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', m.target, 'cat ~/.omniloy-team/building.json 2>/dev/null']);
   let b = null; try { b = JSON.parse(r.out); } catch { /* no office there */ }
   if (!b || !b.id || !(b.floors || []).length || b.id === me.id) return;
-  const slot = slots[m.name] || (slots[m.name] = Math.max(0, ...Object.values(slots)) + 1);
+  const slot = slots[m.name] || (slots[m.name] = Math.max(0, ...Object.values(slots).filter(Number.isFinite)) + 1);
   const mine = (await readJson(path.join(SHARED, 'building.json'), {})).floors || [];
-  const T = (j) => 6000 + slot * 100 + j, D = (j) => 7000 + slot * 100 + j, R = (k) => 6900 + (parseInt(me.id.slice(0, 2), 16) % 30) * 10 + k;
+  // Our floors' ports over there: a block of 10 picked from our id. Another building (or a stale link of ours) may hold
+  // that block on their side; then ssh says "remote port forwarding failed" and the next try moves to the next block.
+  const rb = slots.remote || (slots.remote = {}), block = rb[m.name] ?? (rb[m.name] = parseInt(me.id.slice(0, 2), 16) % 30);
+  const T = (j) => 6000 + slot * 100 + j, D = (j) => 7000 + slot * 100 + j, R = (k) => 6900 + block * 10 + k;
   const args = ['-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=20', '-o', 'ServerAliveCountMax=3', '-o', 'ConnectTimeout=10'];
   b.floors.forEach((f, j) => args.push('-L', `127.0.0.1:${T(j)}:127.0.0.1:${f.port + 1000}`));
   mine.forEach((f, k) => args.push('-R', `127.0.0.1:${R(k)}:127.0.0.1:${f.port + 1000}`));
   const proc = spawn('ssh', [...args, m.target], { stdio: ['ignore', 'ignore', 'pipe'] });
   let errText = ''; proc.stderr.on('data', (c) => { errText = (errText + c).slice(-400); });
   links.set(m.name, { proc, id: b.id });
-  proc.on('exit', (code) => { log(`link to ${m.name} ended (${code}) ${errText.trim().split('\n').pop() || ''}`); links.delete(m.name); for (const [p, d] of doors) if (d.id === b.id) d.target = 0; });
+  proc.on('exit', (code) => {
+    const why = errText.trim().split('\n').pop() || '';
+    log(`link to ${m.name} ended (${code}) ${why}`); links.delete(m.name); for (const [, d] of doors) if (d.id === b.id) d.target = 0;
+    if (/remote port forwarding failed/i.test(errText)) { // that block is taken over there: the next try uses the next one
+      slots.remote = { ...(slots.remote || {}), [m.name]: (block + 1) % 30 };
+      fs.writeFile(path.join(SHARED, 'peer-slots.json'), JSON.stringify(slots)).catch(() => {});
+    }
+    failed(m.name, 'the link ended');
+  });
   await new Promise((ok) => setTimeout(ok, 3000));
   if (!links.has(m.name)) return;
+  try { await greet(m, b, mine, proc, T, D, R); } catch (e) { log(`${m.name}: ${e.message}`); proc.kill(); } // never a link without doors
+}
+async function greet(m, b, mine, proc, T, D, R) {
   const known = ((await readJson(path.join(SHARED, 'peers.json'), {})).peers || {})[b.id] || {}, key = known.key || crypto.randomBytes(16).toString('hex');
   let card = null, myCard = [];
   try { myCard = (await (await fetch(`http://127.0.0.1:${mine[0].port + 1000}/peer/info`, { signal: AbortSignal.timeout(4000) })).json()).floors || []; } catch { /* our floors are starting */ }
   try {
     const res = await fetch(`http://127.0.0.1:${T(0)}/peer/hello`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(8000),
       body: JSON.stringify({ from: me, key, machine: os.hostname().split('.')[0], floors: mine.map((f, k) => ({ ...(myCard.find((x) => x.port === f.port) || {}), port: f.port, name: f.name, local: R(k) })) }) });
-    const d = await res.json(); if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`); card = d.card;
+    const d = await res.json(); if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`); card = d.card || {};
   } catch (e) { log(`${m.name}: the building did not greet back (${e.message})`); proc.kill(); return; }
-  const floors = (card.floors || b.floors).map((f) => { const j = b.floors.findIndex((x) => x.port === f.port); return { ...f, local: T(j), door: D(j) }; });
+  const floors = (card.floors || b.floors).map((f) => { const j = b.floors.findIndex((x) => x.port === f.port); return j < 0 ? null : { ...f, local: T(j), door: D(j) }; }).filter(Boolean);
   await run(path.join(BIN, 'team-peer'), ['incoming', 'hello'], { input: JSON.stringify({ from: { id: card.id || b.id, name: card.name || b.name, owner: card.owner || b.owner || '' }, key, machine: m.name, floors }) });
   for (const f of floors) { door(f.door); Object.assign(doors.get(f.door), { target: f.local, id: b.id }); await serveDoor(f.door); }
+  waits.delete(m.name);
   log(`linked to ${m.name}: ${card.name || b.name}, ${floors.length} floor(s), doors ${floors.map((f) => f.door).join(', ')}`);
 }
 
@@ -84,7 +106,8 @@ async function round() {
   let machines = []; try { machines = JSON.parse(r.out).machines || []; } catch { /* Herdr is closed */ }
   for (const m of machines) {
     if (m.state !== 'connected' || m.temporary || links.has(m.name)) continue;
-    try { await link(m); } catch (e) { log(`${m.name}: ${e.message}`); }
+    if ((waits.get(m.name) || {}).next > Date.now()) continue; // backing off after failures
+    try { await link(m); } catch (e) { failed(m.name, e.message); }
   }
   await fs.writeFile(path.join(SHARED, 'peer-slots.json'), JSON.stringify(slots)).catch(() => {});
 }

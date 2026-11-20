@@ -5,16 +5,20 @@
 //   GET  /api/term/info                      -> { host, user, cwd, machines, sessions }
 //   GET  /api/term/stream?id=local|<machine> -> server-sent events: init (what is on screen), out, exit
 //   POST /api/term/input  { id, data }       keys typed in the page
-//   POST /api/term/run    { id, cmd, from }  a command pressed in a message; when it finishes, its author is sent what it printed
+//   POST /api/term/run    { id, cmd, from, share }  a command pressed in a message; when it finishes, its author is sent what
+//                                           it printed (share: false sends only that it finished). 409 while the shell is busy.
 //   POST /api/term/resize { id, cols, rows } · POST /api/term/kill { id }
 //   GET  /api/term/last?id=                  -> { cmd, text, done } what the last pressed command printed, as plain text
-// What the terminals print is also kept as plain text in ~/.omniloy-team/terminal.log (this user only), so the
-// agent who asked for a command can read the result with `team-term tail`.
+// What a pressed command prints is also kept as plain text in ~/.omniloy-team/terminal.log (this user only), so the
+// agent who asked for it can read the result with `team-term last`. Only those runs: what the owner types by hand in
+// the terminal (a psql session, a cat of a secrets file) is never logged, and tokens and passwords are masked in
+// what is logged or sent.
 import { spawn, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { maskSecrets } from './menu.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE = path.join(HERE, 'pty-bridge.py');
@@ -23,6 +27,7 @@ const HC = path.join(HOME, '.local', 'bin', 'hc');
 const LOG = path.join(HOME, '.omniloy-team', 'terminal.log');
 const KEEP = 300_000; // bytes of screen kept for a page that opens later
 const NAME = /^[a-z0-9][a-z0-9._-]{0,62}$/i;
+const RUN_LOG_MAX = 200_000; // characters of one command's output kept in the log
 
 export const clean = (s) => s
   .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, '').replace(/\x1b[()][0-9A-Za-z]/g, '').replace(/\x1b[@-Z\\-_=>]/g, '')
@@ -73,11 +78,15 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
     delete env.OFFICE_TOKEN; delete env.PORT;
     if (!env.LANG) env.LANG = 'en_US.UTF-8';
     const child = spawn('python3', [BRIDGE, ...argv], { cwd: teamDir, env, stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] });
-    const s = { id, child, chunks: [], size: 0, clients: new Set(), alive: true, since: '', cmd: '', pend: '', started: Date.now(), idle: id === 'local', lastOut: Date.now(), run: 0, done: true };
+    const s = { id, child, chunks: [], size: 0, clients: new Set(), alive: true, since: '', cmd: '', pend: '', started: Date.now(), idle: id === 'local', lastOut: Date.now(), run: 0, done: true, logging: false, logged: 0 };
     const emit = (event, data) => { for (const res of s.clients) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
     const flush = (all) => { // whole lines only, so an escape code cut in two never reaches the log
       const cut = all ? s.pend.length : s.pend.lastIndexOf('\n') + 1;
-      if (cut > 0) { logText(clean(s.pend.slice(0, cut))); s.pend = s.pend.slice(cut); }
+      if (cut <= 0) return;
+      const text = clean(s.pend.slice(0, cut)); s.pend = s.pend.slice(cut);
+      if (!s.logging || s.logged >= RUN_LOG_MAX) return; // only while a pressed command runs, and only so much of it
+      const part = maskSecrets(text).slice(0, RUN_LOG_MAX - s.logged); s.logged += part.length;
+      logText(part + (s.logged >= RUN_LOG_MAX ? '\n[… the rest is not kept]\n' : ''));
     };
     const onData = (d) => {
       s.chunks.push(d); s.size += d.length;
@@ -91,28 +100,30 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
     child.stdio[4].on('data', (d) => { const w = String(d).trim().split('\n').pop(); if (w === 'idle' || w === 'busy') s.idle = w === 'idle'; }); // the bridge says when the shell is back at its prompt
     child.on('error', (e) => onData(Buffer.from(`\r\n[the terminal could not start: ${e.message}]\r\n`)));
     child.on('exit', () => { s.alive = false; flush(true); emit('exit', {}); });
+    s.flush = flush;
     sessions.set(id, s);
-    logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} terminal opened (${id === 'local' ? os.hostname() : id})\n`);
     return s;
   }
   // A pressed command has finished when the shell is waiting at its prompt again. A local shell tells us exactly
   // (pty-bridge.py); over ssh we go by a quiet screen that ends in a prompt. Its author is then sent what it printed.
-  function watch(s, cmd, person, where) {
+  function watch(s, cmd, person, where, share = true) {
     const mine = ++s.run, typed = Date.now(); let warned = false; s.done = false;
     const tell = (text) => { if (person) execFile(HC, ['send', person.herdrName, text], { timeout: 20000 }, () => {}); };
-    const short = cmd.length > 300 ? `${cmd.slice(0, 300)}…` : cmd;
+    const short = maskSecrets(cmd.length > 300 ? `${cmd.slice(0, 300)}…` : cmd);
     const tick = () => {
       if (s.run !== mine) return; // another command was pressed after this one
       const age = Date.now() - typed, quiet = Date.now() - s.lastOut;
       const back = !s.alive || (s.id === 'local' ? s.idle && age > 1200 && quiet > 500 : age > 2500 && quiet > 2500 && PROMPT.test(clean(s.since).trimEnd().split('\n').pop() || ''));
       if (back) {
-        s.done = true;
-        const out = printed(s.since, cmd), secs = Math.round(age / 1000);
+        s.done = true; s.flush(true); s.logging = false;
+        const out = maskSecrets(printed(s.since, cmd)), secs = Math.round(age / 1000);
         logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} finished after ${secs}s${s.alive ? '' : ' (the terminal ended)'}\n`);
+        if (!share) return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s): ${short}\n\n${owner} chose not to share what it printed. If you need it, ask ${owner} with team-ask what you need to know from it.`);
         return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s): ${short}\n\nIt printed${out.length > 3500 ? ' (the last part; all of it: `team-term last`)' : ''}:\n${out ? out.slice(-3500) : '(nothing)'}\n\nDo not ask for the output to be pasted.`);
       }
       if (!warned && age > 5 * 60000) { warned = true; tell(`${owner} ran the command you marked, in the office terminal on ${where}, ${Math.round(age / 60000)} minutes ago and it is still running (it may be waiting for input from ${owner}): ${short}\nYou will be told when it finishes. \`team-term last\` shows what it has printed so far.`); }
       if (age < 2 * 3600000) setTimeout(tick, 500).unref();
+      else { s.logging = false; s.done = true; } // two hours: stop logging and stop waiting
     };
     setTimeout(tick, 800).unref();
   }
@@ -169,13 +180,18 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
       if (p === '/api/term/run') {
         const cmd = String(body.cmd || '').replace(/\r/g, '').trim();
         if (!cmd || cmd.length > 8000) return json(res, 400, { error: 'the command is empty or too long' }), true;
-        const fresh = !(sessions.get(id) && sessions.get(id).alive), s = live(id);
+        const old = sessions.get(id), fresh = !(old && old.alive);
+        // typed into whatever holds the terminal: a password prompt, psql, vim or a command still running would take it
+        // as its input. A local shell says when it is back at its prompt; over ssh nobody can tell, so it goes ahead.
+        if (!fresh && id === 'local' && !old.idle) return json(res, 409, { error: 'The terminal is busy: a program is running or waiting for input (maybe a password). Finish it or press Ctrl+C there, then press Run again.', busy: true }), true;
+        const s = live(id), share = body.share !== false;
         const who = String(body.from || ''), person = who ? (await personas()).find((x) => x.herdrName === who || x.slug === who) : null;
         const where = id === 'local' ? os.hostname().replace(/\.local$/, '') : id;
-        logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${owner} ran on ${where}${person ? ` (marked by ${person.herdrName})` : ''}: ${cmd}\n`);
-        s.done = false;
-        setTimeout(() => { s.since = ''; s.cmd = cmd; if (s.alive) s.child.stdin.write(`${cmd.replace(/\n/g, '\r')}\r`); watch(s, cmd, person, where); }, fresh ? (id === 'local' ? 700 : 2500) : 0); // a new shell needs a moment before it listens
-        return json(res, 200, { ok: true, told: person ? person.name : '' }), true;
+        s.flush(true); // what was on screen before this command stays out of its log
+        logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${owner} ran on ${where}${person ? ` (marked by ${person.herdrName})` : ''}: ${maskSecrets(cmd)}\n${share ? '' : '(what it prints is not shared)\n'}`);
+        s.done = false; s.logging = share; s.logged = 0;
+        setTimeout(() => { s.since = ''; s.cmd = cmd; if (s.alive) s.child.stdin.write(`${cmd.replace(/\n/g, '\r')}\r`); watch(s, cmd, person, where, share); }, fresh ? (id === 'local' ? 700 : 2500) : 0); // a new shell needs a moment before it listens
+        return json(res, 200, { ok: true, told: person ? person.name : '', shared: share }), true;
       }
       return json(res, 404, { error: 'not found' }), true;
     } catch (e) { return json(res, 500, { error: e.message }), true; }
