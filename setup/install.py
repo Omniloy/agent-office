@@ -368,7 +368,8 @@ def check():
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
     opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
     opt(os.path.exists(f"{LA}/com.omniloy.peer-link.plist"), "link to other buildings installed (optional, see setup/SETUP.md step 11)")
-    opt(up(5317), "Dev floor's guest listener answers on 5317 (what another building reaches)")
+    g = (fl[0]["port"] if fl else 4317) + 1000
+    opt(up(g), f"{fl[0]['name'] if fl else 'Dev'} floor's guest listener answers on {g} (what another building reaches)")
     opt(os.path.exists(f"{TEAMS['dev']}/remote.json"), "phone door remote.json (optional)")
     try:
         t = json.load(open(f"{TEAMS['dev']}/team.json")); j = t.get("jira") or {}
