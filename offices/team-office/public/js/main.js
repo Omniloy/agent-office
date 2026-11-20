@@ -468,23 +468,39 @@ recapBox.onclick = () => recapBox.classList.remove('show');
 // What the agent asks is shown as written, in monospace and escaped, never through rich(): a command here must not
 // become a Run button. After an answer the menu id is hidden for 10 s, so a poll that started earlier cannot bring
 // the old card back; a different menu that comes right after is a new card, marked "new".
-const menuHide = new Map(), menuFresh = new Map(), menuBusy = new Set();
+const menuHide = new Map(), menuFresh = new Map(), menuQuiet = new Set(), menuBusy = new Set(); // quiet: a box you just ticked is the same question, not a new one
 const menuHidden = (id) => { const t = menuHide.get(id); if (t > Date.now()) return true; if (t) menuHide.delete(id); return false; };
 const menuIsNew = (id) => (menuFresh.get(id) || 0) > Date.now();
+const FREE = /type something|tell (Claude|Codex)|what to do differently|chat about this/i; // the option that takes your own words
+const BOX = /^(\d\.\s+)(\[[ xX✓✔]\]|[☐☑◻◼□▣])\s*/; // a multiple choice question: each number ticks one box, Enter confirms
+const isMulti = (x) => (x.options || []).some((o) => BOX.test(o));
+// An option that gives away more than this one question (always allow, don't ask again, auto mode, bypass) takes a
+// second tap: the first one only says what it does.
+const WIDE = /always allow|don't ask again|do not ask again|auto mode|bypass|dangerously/i;
+function sure(b, label) {
+  if (!WIDE.test(label) || b.dataset.sure === '1') return true;
+  const was = b.innerHTML; b.dataset.sure = '1'; b.classList.add('sure'); b.textContent = `¿Seguro? «${label}» vale también para lo que venga. Toca otra vez`;
+  setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.classList.remove('sure'); b.innerHTML = was; } }, 5000);
+  return false;
+}
+const ticked = (o) => { const b = BOX.exec(o); return !!b && !/\[ \]|[☐◻□]/.test(b[2]); };
 function menuBody(x) {
   const ctx = x.context || [], shown = ctx.slice(0, 6);
   return (x.question && x.question !== x.title ? `<div class="mq">${esc(x.question)}</div>` : '')
-    + (shown.length ? `<pre class="menuctx">${esc(shown.join('\n'))}${ctx.length > 6 ? `\n<i>… ${ctx.length - 6} more lines on Live screen</i>` : ''}</pre>` : '')
+    + (shown.length ? `<pre class="menuctx">${esc(shown.join('\n'))}${ctx.length > 6 ? `\n<i>… ${ctx.length - 6} líneas más en Live screen</i>` : ''}</pre>` : '')
     + (x.said ? `<div class="msaid"><b>${esc(x.name || '')}:</b> ${esc(x.said)}</div>` : '');
 }
 async function answerMenuItem(x, label, extra = {}) {
   if (menuBusy.has(x.from)) return null; // one answer at a time per person: a second tap never presses again
   menuBusy.add(x.from);
   try {
-    const r = await api('/api/requests/answer', { id: x.id || `menu:${x.from}`, text: label, menuId: x.menuId, terminalId: x.terminalId, via: PHONE ? 'phone' : 'office', ...extra });
+    const multi = isMulti(x), r = await api('/api/requests/answer', { id: x.id || `menu:${x.from}`, text: label, menuId: x.menuId, terminalId: x.terminalId, via: PHONE ? 'phone' : 'office', ...extra });
+    const toggle = multi && r.next && isMulti(r.next);
     menuHide.set(x.menuId, Date.now() + 10000);
-    toast(`<i class="dot" style="background:#4ade80"></i><span>Sent to <b>${esc(x.name || x.from)}</b>: ${esc(label)}</span>`, 'ok', 5000);
-    if (r.next) { menuFresh.set(r.next.menuId, Date.now() + 20000); toast(`<i class="dot blocked"></i><span>Contestado. Ahora <b>${esc(r.next.name || x.name)}</b> pregunta: ${esc(String(r.next.title || '').slice(0, 90))}</span><button type="button" class="go" data-go="requests">Open</button>`, '', 12000); }
+    if (extra.message && r.sent === false) toast(`<i class="dot blocked"></i><span>Se eligió «${esc(label)}», pero tu texto no se envió: <b>${esc(x.name || x.from)}</b> ya pregunta otra cosa.</span>`, 'err', 9000);
+    else toast(`<i class="dot" style="background:#4ade80"></i><span>${toggle ? (ticked(label) ? 'Desmarcado para' : 'Marcado para') : 'Enviado a'} <b>${esc(x.name || x.from)}</b>: ${esc(toggle ? label.replace(BOX, '$1') : label)}</span>`, 'ok', 5000);
+    if (r.next && toggle) menuQuiet.add(r.next.menuId);
+    if (r.next) { menuFresh.set(r.next.menuId, Date.now() + (toggle ? 0 : 20000)); if (!toggle) toast(`<i class="dot blocked"></i><span>Contestado. Ahora <b>${esc(r.next.name || x.name)}</b> pregunta: ${esc(String(r.next.title || '').slice(0, 90))}</span><button type="button" class="go" data-go="requests">Ver</button>`, '', 12000); }
     return r;
   } catch (e) {
     if (/no longer on the screen/i.test(e.message)) menuHide.set(x.menuId, Date.now() + 10000);
@@ -493,17 +509,106 @@ async function answerMenuItem(x, label, extra = {}) {
 }
 const menuData = (x) => (x.menu ? ` data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : '');
 
+// ------------------------------------------------------------------ answering: one card body and one click handler
+// for the person panel (#asks here) and For you (inbox.js), so a fix lands in both.
+//   a terminal menu   its options; the free one ("Type something.") opens a box in the card and sends option + text
+//                     together; a multiple choice one shows its boxes ticked or not; every card has Live screen
+//   a request         its options (one that carries a command is answered when you run it: term.js) and a box
+//   a message         Mark as read
+function answerActs(x) {
+  if (x.kind !== 'request') return '<div class="acts"><button type="button" data-read>Mark as read</button></div>';
+  const opts = x.options || [];
+  if (x.menu) {
+    const multi = isMulti(x), free = opts.find((o) => FREE.test(o));
+    return `<div class="acts" role="group" aria-label="${esc(x.title || x.question || '')}">${opts.map((o, i) => `<button type="button" class="${multi ? (ticked(o) ? 'on' : '') : i ? '' : 'pri'}" data-answer="${esc(o)}"${multi && BOX.test(o) ? ` aria-pressed="${ticked(o)}"` : ''}>${esc(multi ? o.replace(BOX, (_, n, b) => `${n}${ticked(`${n}${b}`) ? '☑' : '☐'} `) : o)}</button>`).join('')}</div>`
+      + (multi ? '<div class="mhint">Varias respuestas: cada toque marca o desmarca una casilla. Para confirmar, pulsa Enter en Live screen.</div>' : '')
+      + (free ? `<div class="acts mfree" hidden><input placeholder="Tu respuesta para ${esc(x.name || '')}…" aria-label="Tu respuesta"><button type="button" class="pri" data-free="${esc(free)}">Enviar</button></div>` : '')
+      + `<div class="acts"><button type="button" class="mlive" data-live="${esc(x.from)}">Live screen ›</button></div>`;
+  }
+  const run = (o, i) => window.termRun && window.termRun.answer && window.termRun.answer(esc(o), i ? '' : 'pri');
+  return `${opts.length ? `<div class="acts">${opts.map((o, i) => run(o, i) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+    <div class="acts"><input placeholder="Write an answer…" aria-label="Your answer"><button type="button" data-send>Send</button></div>`;
+}
+// What team-ask said about the answer reaching them: the server passes its words on (or a `delivery` field).
+function deliveryOf(r) {
+  if (r && r.delivery) return String(r.delivery);
+  if (r && r.delivered === true) return 'delivered';
+  if (r && r.delivered === false) return 'missed';
+  const t = String((r && r.result) || '');
+  if (/delivered|entregad/i.test(t)) return 'delivered';
+  if (/queued|en cola|when (?:they|she|he) (?:is|are) free/i.test(t)) return 'queued';
+  if (/not running|not delivered|will see it|offline|blocked/i.test(t)) return 'missed';
+  return t ? 'other' : '';
+}
+function sayDelivered(r, from, text) {
+  const a = agentBy(from), name = a ? first(a) : from, how = deliveryOf(r), q = esc(String(text).length > 60 ? `${String(text).slice(0, 59)}…` : text);
+  if (how === 'delivered') return toast(`<i class="dot" style="background:#4ade80"></i><span>Entregado a <b>${esc(name)}</b>: «${q}»</span>`, 'ok', 5000);
+  if (how === 'queued') { // kept in the outbox: it is typed in as soon as they can take it
+    const blocked = a && a.status === 'blocked';
+    return toast(`<i class="dot blocked"></i><span>Guardado. <b>${esc(name)}</b> ${blocked ? 'está esperando una respuesta en el terminal: lo recibirá en cuanto la conteste' : 'está ocupado y lo recibirá en cuanto quede libre'}.</span>${blocked ? `<button type="button" class="go" data-live="${esc(from)}">Live screen</button>` : ''}`, '', 12000);
+  }
+  if (how === 'missed') {
+    const why = a && a.status === 'blocked' ? 'está esperando una respuesta en el terminal' : a && a.status === 'offline' ? 'no está en marcha' : 'no lo ha recibido todavía';
+    return toast(`<i class="dot offline"></i><span>Guardado, pero no le llegó: <b>${esc(name)}</b> ${why}. Lo verá en sus peticiones.</span>${a && a.status === 'blocked' ? `<button type="button" class="go" data-live="${esc(from)}">Live screen</button>` : ''}`, 'err', 12000);
+  }
+  return toast(`<i class="dot" style="background:#4ade80"></i><span>Contestado${how === 'other' ? `: ${esc(String(r.result).slice(0, 120))}` : ''}</span>`, 'ok', 5000);
+}
+// The person's Live screen, from a card or a toast. Someone of another floor: their floor opens on them.
+async function openLive(from, leave) {
+  const c = window.office.chat;
+  if (agentBy(from)) { if (leave) leave(); if (c && c.live && c.live(from)) return; select(agentBy(from).slug); return; }
+  const x = (asks.items || []).find((q) => q.from === from && q.floor); // the floors and their ports: the hub's list (floors.json)
+  const d = x ? await api('/api/attention').catch(() => null) : null, o = d && (d.offices || []).find((f) => f.name === x.floor);
+  if (o) { location.href = `${location.protocol}//${location.hostname}:${o.port}/#p=${encodeURIComponent(from)}`; return; }
+  toast(`${esc(from)} no está en esta planta.`, 'err', 6000);
+}
+// A click in a card. `list` is where the card's item is; `leave` closes the panel the card is in (For you) before a
+// chat or a Live screen opens over it. Returns true when something was sent (the caller refreshes its list).
+async function answerClick(e, card, list, leave) {
+  const b = e.target.closest('button'); if (!card || !b) return false;
+  const id = card.dataset.id, from = card.dataset.from;
+  if (b.dataset.live !== undefined) { openLive(b.dataset.live || from, leave); return false; }
+  const x = list.find((q) => (card.dataset.menuId ? q.menu && q.menuId === card.dataset.menuId : String(q.id) === id)) || { id, from, menuId: card.dataset.menuId, terminalId: card.dataset.terminalId, menu: !!card.dataset.menuId, options: [] };
+  if (card.dataset.menuId && b.dataset.answer !== undefined && FREE.test(b.dataset.answer)) { // your own words go with this option: write them first
+    const row = card.querySelector('.mfree'); if (row) { row.hidden = false; row.querySelector('input').focus(); }
+    return false;
+  }
+  const busy = () => { card.classList.add('busy'); card.querySelectorAll('button').forEach((q) => { q.disabled = true; }); };
+  const done = () => { card.classList.remove('busy'); card.querySelectorAll('button').forEach((q) => { q.disabled = false; }); };
+  if (b.dataset.free !== undefined) {
+    const input = card.querySelector('.mfree input'), message = input ? input.value.trim() : '';
+    if (!message) { if (input) input.focus(); return false; }
+    busy(); try { await answerMenuItem(x, b.dataset.free, { message }); } finally { done(); }
+    return true;
+  }
+  if (b.hasAttribute('data-read')) { await api('/api/requests/read', { id }); return true; }
+  const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? (card.querySelector('.acts:not(.mfree) input') || {}).value?.trim() : null);
+  if (!text) return false;
+  if (card.dataset.menuId) { if (!sure(b, text)) return false; busy(); try { await answerMenuItem(x, text); } finally { done(); } return true; }
+  busy();
+  try { const r = await api('/api/requests/answer', { id, text }); sayDelivered(r, from, text); } finally { done(); }
+  return true;
+}
+// A failed answer: what went wrong, and the way to the screen when the error points there.
+function answerFailed(err, card) {
+  const from = card && card.dataset.from, msg = String((err && err.message) || err || 'Could not answer.');
+  toast(`<span>${esc(msg)}</span>${from && /live screen/i.test(msg) ? `<button type="button" class="go" data-live="${esc(from)}">Abrir Live screen</button>` : ''}`, 'err', 10000);
+}
+// Enter in a card's box sends it (the free answer of a menu, or a written answer).
+function answerKey(e) {
+  if (e.key !== 'Enter' || e.target.tagName !== 'INPUT' || e.isComposing) return;
+  e.preventDefault(); const b = e.target.parentElement.querySelector('[data-free], [data-send]'); if (b) b.click();
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('.toast [data-live]'); if (b) openLive(b.dataset.live, () => { const x = $('#inbox.show [data-close]'); if (x) x.click(); }); });
+
 function renderAsks() {
   const a = selected && agentBy(selected), list = a ? asksOf(a) : [];
   asksBox.classList.toggle('show', list.length > 0);
   asksBox.innerHTML = list.map((x) => `<div class="ask ${x.kind === 'request' ? 'request' : 'note'}${x.menu ? ' tmenu' : ''}" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${menuData(x)}>
-    <div class="ahead"><b>${x.menu ? 'Waiting in the terminal' : x.kind === 'request' ? 'Needs your answer' : 'Message for you'}</b>${x.menu && menuIsNew(x.menuId) ? '<i class="mnew">new question</i>' : ''}<span>${esc(since(new Date(x.created).getTime()))}</span>
+    <div class="ahead"><b>${x.menu ? 'Esperando en el terminal' : x.kind === 'request' ? 'Needs your answer' : 'Message for you'}</b>${x.menu && menuIsNew(x.menuId) ? '<i class="mnew">pregunta nueva</i>' : ''}<span>${esc(since(new Date(x.created).getTime()))}</span>
       ${x.ticket && asks.site ? `<a class="key" href="${esc(asks.site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
     <div class="atitle">${x.menu ? esc(x.title || '') : rich(x.title || '')}</div>${x.menu ? menuBody(x) : x.body ? `<div class="abody">${md(x.body)}</div>` : ''}
-    ${x.kind === 'request'
-      ? `${x.options.length ? `<div class="acts">${x.options.map((o, i) => (!x.menu && window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
-         ${x.menu ? '' : '<div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>'}`
-      : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
+    ${answerActs(x)}
   </div>`).join('');
 }
 function applyAsks() {
@@ -515,16 +620,18 @@ function applyAsks() {
   renderStats(); renderRoster(); renderPanel(false);
   if (!asksBox.contains(document.activeElement)) renderAsks();
 }
+// One reader of /api/requests for the whole page: the person panel here, and For you (inbox.js, "office-requests").
 let asksSig = '', asksSeen = null;
 async function pollAsks() {
   try {
     const d = await api('/api/requests'), sig = JSON.stringify(d);
+    dispatchEvent(new CustomEvent('office-requests', { detail: d }));
     if (sig === asksSig) return;
     asksSig = sig;
     asks = { items: (d.items || []).filter((x) => !(x.menu && menuHidden(x.menuId))), more: d.withLucia ?? d.withLead ?? 0, site: d.site || '' };
     const ids = new Set(asks.items.map((x) => x.notifyId || x.id));
     if (asksSeen) for (const x of asks.items) {
-      if (asksSeen.has(x.notifyId || x.id) || x.kind !== 'request' || (x.menu && menuIsNew(x.menuId))) continue; // a follow-up menu already has its "Contestado. Ahora…" toast
+      if (asksSeen.has(x.notifyId || x.id) || x.kind !== 'request' || (x.menu && (menuIsNew(x.menuId) || menuQuiet.has(x.menuId)))) continue; // a follow-up menu already has its "Contestado. Ahora…" toast
       toast(`<i class="dot blocked"></i><b>${esc(x.name)}</b> has a question for you<button type="button" class="go" data-go="requests">Open</button>`, '', 12000); chime([880, 660]);
     }
     asksSeen = ids;
@@ -532,31 +639,10 @@ async function pollAsks() {
   } catch { /* server restarting */ }
 }
 asksBox.addEventListener('click', async (e) => {
-  const card = e.target.closest('.ask'), b = e.target.closest('button');
-  if (!card || !b) return;
-  const id = card.dataset.id;
-  const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? card.querySelector('input').value.trim() : null);
-  try {
-    if (card.dataset.menuId && /type something|tell (Claude|Codex)|chat about this/i.test(text)) {
-      const chat = window.office.chat; // window.office: here `office` is the object itself, not a function (B17)
-      if (chat && chat.open) return chat.open(card.dataset.from || (asks.items.find((x) => String(x.id) === id) || {}).from);
-      throw new Error('Open this person’s chat to type the answer.');
-    }
-    if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
-    else if (text && card.dataset.menuId) {
-      const x = asks.items.find((q) => q.menu && q.menuId === card.dataset.menuId) || { id, from: card.dataset.from, menuId: card.dataset.menuId, terminalId: card.dataset.terminalId };
-      card.classList.add('busy'); card.querySelectorAll('button').forEach((q) => { q.disabled = true; });
-      try { await answerMenuItem(x, text); } finally { card.classList.remove('busy'); }
-    }
-    else if (text) await api('/api/requests/answer', { id, text });
-    else return;
-    if (document.activeElement) document.activeElement.blur();
-    asksSig = ''; pollAsks();
-  } catch (err) { toast(esc(err.message), 'err', 8000); }
+  try { if (await answerClick(e, e.target.closest('.ask'), asks.items)) { if (document.activeElement) document.activeElement.blur(); asksSig = ''; pollAsks(); } }
+  catch (err) { answerFailed(err, e.target.closest('.ask')); }
 });
-asksBox.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); e.target.parentElement.querySelector('[data-send]').click(); }
-});
+asksBox.addEventListener('keydown', answerKey);
 pollAsks(); setInterval(pollAsks, 3000);
 // The count in the top bar jumps to the next person who is waiting.
 $('#stats').addEventListener('click', (e) => {
@@ -596,7 +682,7 @@ function away(isAway) {
 }
 document.addEventListener('visibilitychange', () => away(document.hidden));
 window.office.pause = (p) => { world.setPaused(!!p); away(!!p); };
-Object.assign(window.office, { menus: { body: menuBody, answer: answerMenuItem, hidden: menuHidden, isNew: menuIsNew, hide: (id, ms = 10000) => menuHide.set(id, Date.now() + ms) }, rich, md, selected: () => selected, zap: runZap, api, openCard, closeCard, boardSets, personName, agoOf, toast, chime, select, applyAsks, state: () => state, agents: () => (state ? state.agents : []), refreshAsks: () => { asksSig = ''; pollAsks(); } }); // for inbox.js
+Object.assign(window.office, { menus: { body: menuBody, answer: answerMenuItem, hidden: menuHidden, isNew: menuIsNew, hide: (id, ms = 10000) => menuHide.set(id, Date.now() + ms), next: (id, quiet) => (quiet ? menuQuiet.add(id) : menuFresh.set(id, Date.now() + 20000)) }, answers: { acts: answerActs, click: answerClick, key: answerKey, failed: answerFailed, live: openLive, said: sayDelivered }, forYouKeys: () => asks.items.map((x) => (x.menu ? x.notifyId : `r${x.id}`)), rich, md, selected: () => selected, zap: runZap, api, openCard, closeCard, boardSets, personName, agoOf, toast, chime, select, applyAsks, state: () => state, agents: () => (state ? state.agents : []), refreshAsks: () => { asksSig = ''; pollAsks(); } }); // for inbox.js
 window.office.recap = (sinceMs) => setTimeout(() => recap(sinceMs), 2500); // after a fresh page: let the first state and questions arrive
 
 // ------------------------------------------------------------------ state stream

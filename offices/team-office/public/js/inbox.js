@@ -78,6 +78,12 @@ style.textContent = `
 .msaid b { color: var(--text, #e8ecf5); font-weight: 600; }
 .mnew { font-style: normal; font-size: 11px; padding: 1px 7px; border-radius: 99px; background: rgba(124,156,255,.22); color: #b9c8ff; margin-left: 6px; }
 .it.busy, .ask.busy { opacity: .6; pointer-events: none; }
+.mhint { margin-top: 6px; color: var(--muted, #a9b3c9); font-size: 12px; line-height: 1.4; }
+.acts button.sure { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; }
+.acts button.on { border-color: #4ade80 !important; background: rgba(74, 222, 128, .18) !important; }
+.acts button.mlive { font-size: 12px; opacity: .85; }
+.acts[hidden] { display: none !important; } /* the box for your own words shows when you pick that option */
+.acts button.runans code { font: 12px var(--mono, Menlo, monospace); margin-left: 6px; padding: 0 5px; border-radius: 5px; background: rgba(0,0,0,.25); color: inherit; }
 #inbox .grp.fold { cursor: pointer; user-select: none; }
 #inbox .done { padding: 7px 12px; border-radius: 8px; background: rgba(255,255,255,.03); border-left: 3px solid var(--c, #888); font-size: 12.5px; }
 #inbox .done .h { display: flex; gap: 7px; align-items: baseline; } #inbox .done .h b { font-weight: 650; } #inbox .done .h time { margin-left: auto; color: var(--dim, #7f8aa3); font-size: 11.5px; }
@@ -99,24 +105,29 @@ pop.innerHTML = '<header></header><div class="list"></div>';
 document.body.append(pop);
 
 let tab = 'requests', items = [], sig = '', itemSeen = null, answered = [], doneOpen = false;
-const menus = () => office().menus || {};
+const menus = () => office().menus || {}, answers = () => office().answers || {}; // both from main.js
 const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 let drafts = [], people = {}, draftSeen = null, draftsOn = true, readOnly = false;
 const prs = () => { const s = office().state && office().state(); return (s && s.prs) || []; };
 const agentOf = (name) => (office().agents ? office().agents() : []).find((x) => x.herdrName === name);
 const hasPrs = () => { const s = office().state && office().state(); return !!(s && Array.isArray(s.prs)); };
 
+// Someone on this floor stopped on a question the page cannot read (a long list, a plan to approve, an app it does not
+// know): no buttons for it, but it is waiting for you all the same, so it is listed with the way to their screen.
+const stuck = () => (office().agents ? office().agents() : []).filter((a) => a.status === 'blocked' && a.statusSince && Date.now() - a.statusSince > 15000
+  && !items.some((x) => x.menu && x.from === a.herdrName));
+const stuckSig = () => stuck().map((a) => a.herdrName).join(',');
 const show = (on, which) => { if (which) tab = which; pop.classList.toggle('show', on); btn.classList.toggle('on', on); render(true); if (on && tab === 'prs') refreshPrs(); };
 function render(force) {
   const reqs = items.filter((x) => x.kind === 'request').length, notes = items.length - reqs, open = drafts.length;
   const list = prs(), teamPrs = list.filter((x) => x.owner), approved = teamPrs.filter((x) => x.state === 'approved').length;
-  const waiting = items.length + open; // messages count too: a note left for the person is also waiting to be read
+  const held = stuck(), waiting = items.length + held.length + open; // messages count too: a note left for the person is also waiting to be read
   btn.querySelector('b').textContent = waiting || '';
   btn.classList.toggle('has', waiting > 0);
   if (!pop.classList.contains('show')) return;
   const typing = pop.contains(document.activeElement) && document.activeElement.tagName === 'INPUT';
   if (typing && !force) return;
-  const tabs = [['requests', 'Requests', items.length, reqs ? 'hot' : ''], ['drafts', 'Drafts', open, open ? 'hot' : '']];
+  const tabs = [['requests', 'Requests', items.length + held.length, reqs || held.length ? 'hot' : ''], ['drafts', 'Drafts', open, open ? 'hot' : '']];
   if (hasPrs()) tabs.push(['prs', 'Pull requests', approved ? `${approved} approved` : teamPrs.length, approved ? 'ok' : '']);
   pop.querySelector('header').innerHTML = tabs.map(([id, name, n, cls]) => `<button type="button" class="tab ${tab === id ? 'on' : ''}" data-tab="${id}">${name}${n ? `<b class="${cls}">${n}</b>` : ''}</button>`).join('') + '<button type="button" class="x" data-close title="Close (Esc)">✕</button>';
   const body = pop.querySelector('.list');
@@ -125,14 +136,17 @@ function render(force) {
     const done = answered.length ? `<div class="grp fold" data-fold>${doneOpen ? '▾' : '▸'} Respondidas hoy · ${answered.length}</div>${doneOpen ? answered.map((x) => `
       <div class="done" style="--c:${esc(x.color)}"><div class="h"><b>${esc(x.name)}</b><i>${x.menu ? 'terminal' : x.kind === 'note' ? 'message' : 'request'}${x.answeredVia ? ` · ${esc(x.answeredVia)}` : ''}</i><time>${esc(hhmm(x.answeredAt))}</time></div>
         <div class="t">${esc(x.title || '')}</div>${x.answer ? `<div class="a">✓ ${esc(x.answer)}</div>` : x.status === 'read' ? '<div class="a">✓ read</div>' : ''}</div>`).join('') : ''}` : '';
-    body.innerHTML = (items.length ? items.map((x) => `
+    body.innerHTML = (items.length + held.length ? items.map((x) => `
       <div class="it ${x.kind === 'request' ? 'request' : 'note'}${x.menu ? ' tmenu' : ''}" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${x.menu ? ` data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : ''} style="--c:${esc(x.color)}">
-        <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc(x.name)}</button><i>${x.menu ? `waiting in the terminal${x.floor ? ` · ${esc(x.floor)}` : ''}` : x.kind === 'request' ? 'needs your answer' : 'message'}</i>${x.menu && menus().isNew && menus().isNew(x.menuId) ? '<i class="mnew">new question</i>' : ''}<time>${esc(ago(x.created))}</time></div>
+        <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc(x.name)}</button><i>${x.menu ? `esperando en el terminal${x.floor ? ` · ${esc(x.floor)}` : ''}` : x.kind === 'request' ? 'needs your answer' : 'message'}</i>${x.menu && menus().isNew && menus().isNew(x.menuId) ? '<i class="mnew">pregunta nueva</i>' : ''}<time>${esc(ago(x.created))}</time></div>
         <div class="t">${x.menu ? esc(x.title || '') : ((window.office || {}).rich || esc)(x.title || '')}</div>${x.menu ? menuBody(x) : x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
-        ${x.kind === 'request'
-          ? `${(x.options || []).length ? `<div class="acts">${x.options.map((o, i) => (!x.menu && window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
-             ${x.menu ? '' : '<div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>'}`
-          : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
+        ${answers().acts ? answers().acts(x) : ''}
+      </div>`).join('') + held.map((a) => `
+      <div class="it request tmenu" data-id="stuck:${esc(a.herdrName)}" data-from="${esc(a.herdrName)}" style="--c:${esc(a.color || '#888')}">
+        <div class="h"><button type="button" class="who" data-who="${esc(a.herdrName)}" title="Go to their desk">${esc(a.name.split(' ')[0])}</button><i>esperando en el terminal</i><time>${esc(ago(a.statusSince))}</time></div>
+        <div class="t">${esc(a.statusMsg || a.nowDoing || 'Espera una respuesta en su terminal')}</div>
+        <div class="mhint">No se puede contestar desde aquí: míralo en Live screen.</div>
+        <div class="acts"><button type="button" class="pri" data-live="${esc(a.herdrName)}">Live screen ›</button></div>
       </div>`).join('') : `<div class="empty">No questions or messages are waiting for you.${notes ? '' : '<br>When someone on the team needs an answer, it shows up here.'}</div>`) + done;
   } else if (tab === 'drafts') {
     body.innerHTML = open ? drafts.map((x) => {
@@ -186,21 +200,21 @@ async function refreshPrs(force) { // read GitHub now: when the tab opens, and f
 }
 
 // ---------------------------------------------------------------- requests
-async function poll() {
-  try {
-    const d = await api('/api/requests');
-    const hidden = menus().hidden || (() => false);
-    const next = (d.items || []).filter((x) => !(x.menu && hidden(x.menuId))), s = JSON.stringify([next, d.answered || []]);
-    if (s === sig) return;
-    sig = s; items = next; answered = d.answered || [];
-    if (itemSeen) for (const x of next) { // say so when something new arrives, question or message
-      if (itemSeen.has(x.notifyId || x.id) || x.kind === 'request') continue; // questions are already announced by the main page
-      toast(`<i class="dot" style="background:${esc(x.color || '#fbbf24')}"></i><b>${esc(x.name || x.from)}</b> ${x.kind === 'request' ? 'needs your answer' : 'left you a message'}: ${esc(String(x.title || '').slice(0, 90))}<button type="button" class="go" data-go="requests">Open</button>`, x.kind === 'request' ? 'err' : '', 14000);
-      if (office().chime) office().chime(x.kind === 'request' ? [880, 660] : [660, 784]);
-    }
-    itemSeen = new Set(next.map((x) => x.notifyId || x.id));
-    render();
-  } catch { /* the server is restarting */ }
+// main.js reads /api/requests every 3 s and hands each answer here ("office-requests"): one reader for the page.
+addEventListener('office-requests', (e) => take(e.detail));
+const poll = () => (office().refreshAsks ? office().refreshAsks() : null);
+function take(d) {
+  const hidden = menus().hidden || (() => false);
+  const next = (d.items || []).filter((x) => !(x.menu && hidden(x.menuId))), s = JSON.stringify([next, d.answered || []]);
+  if (s === sig) return;
+  sig = s; items = next; answered = d.answered || [];
+  if (itemSeen) for (const x of next) { // say so when something new arrives, question or message
+    if (itemSeen.has(x.notifyId || x.id) || x.kind === 'request') continue; // questions are already announced by the main page
+    toast(`<i class="dot" style="background:${esc(x.color || '#fbbf24')}"></i><b>${esc(x.name || x.from)}</b> ${x.kind === 'request' ? 'needs your answer' : 'left you a message'}: ${esc(String(x.title || '').slice(0, 90))}<button type="button" class="go" data-go="requests">Open</button>`, x.kind === 'request' ? 'err' : '', 14000);
+    if (office().chime) office().chime(x.kind === 'request' ? [880, 660] : [660, 784]);
+  }
+  itemSeen = new Set(next.map((x) => x.notifyId || x.id));
+  render();
 }
 btn.addEventListener('click', (e) => {
   e.stopPropagation();
@@ -219,34 +233,16 @@ pop.addEventListener('click', async (e) => {
   if (full) { show(false); const id = Number(full.dataset.full); if (id && window.__openDraft) window.__openDraft(id); else { const b = $('#btn-drafts'); if (b) b.click(); } return; }
   const who = e.target.closest('[data-who]');
   if (who) { const a = agentOf(who.dataset.who); if (a && office().select) { show(false); office().select(a.slug); } return; }
-  const card = e.target.closest('.it'), b = e.target.closest('button');
-  if (!card || !b || !card.dataset.id) return;
-  const id = card.dataset.id;
-  const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? card.querySelector('input').value.trim() : null);
-  try {
-    if (card.dataset.menuId && /type something|tell (Claude|Codex)|chat about this/i.test(text)) {
-      if (office().chat && office().chat.open) return office().chat.open(card.dataset.from);
-      throw new Error('Open this person’s chat to type the answer.');
-    }
-    if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
-    else if (text && card.dataset.menuId) { // a terminal menu: pressed once, then the card goes (or the next question comes as a new card)
-      const x = items.find((q) => q.menu && q.menuId === card.dataset.menuId) || { id, from: card.dataset.from, menuId: card.dataset.menuId, terminalId: card.dataset.terminalId };
-      card.classList.add('busy'); card.querySelectorAll('button').forEach((q) => { q.disabled = true; });
-      try {
-        if (menus().answer) await menus().answer(x, text);
-        else await api('/api/requests/answer', { id, text, menuId: x.menuId, terminalId: x.terminalId, via: document.documentElement.classList.contains('phone') ? 'phone' : 'office' });
-      } finally { card.classList.remove('busy'); }
-    }
-    else if (text) await api('/api/requests/answer', { id, text });
-    else return;
-    if (document.activeElement) document.activeElement.blur();
-    sig = ''; await poll(); if (office().refreshAsks) office().refreshAsks();
-  } catch (err) { toast(esc(err.message), 'err', 8000); }
+  const card = e.target.closest('.it');
+  if (!card || !card.dataset.id || !answers().click) return;
+  try { // the same answering as the person panel (main.js); a Live screen or a chat opening over this list closes it
+    if (await answers().click(e, card, items, () => show(false))) { if (document.activeElement) document.activeElement.blur(); sig = ''; poll(); }
+  } catch (err) { answers().failed(err, card); }
 });
 pop.addEventListener('keydown', (e) => {
   e.stopPropagation();
   if (e.key === 'Escape') show(false);
-  if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); e.target.parentElement.querySelector('[data-send]').click(); }
+  if (answers().key) answers().key(e);
 });
 addEventListener('keydown', (e) => {
   if (e.target.closest('input, textarea, [contenteditable]') || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -254,9 +250,9 @@ addEventListener('keydown', (e) => {
   else if (e.key === 'Escape' && pop.classList.contains('show')) show(false);
 });
 addEventListener('pointerdown', (e) => { if (pop.classList.contains('show') && !e.target.closest('#inbox, #btn-reqs, .toast')) show(false); });
-document.addEventListener('click', (e) => { const go = e.target.closest('.toast .go'); if (go) show(true, go.dataset.go === 'drafts' ? 'drafts' : 'requests'); });
-poll(); setInterval(poll, 3000);
+document.addEventListener('click', (e) => { const go = e.target.closest('.toast .go:not([data-live])'); if (go) show(true, go.dataset.go === 'drafts' ? 'drafts' : 'requests'); });
 setInterval(() => { if (pop.classList.contains('show') && tab === 'prs') render(); }, 5000);
+let lastStuck = ''; setInterval(() => { const s = stuckSig(); if (s !== lastStuck) { lastStuck = s; render(); } }, 3000);
 
 // ---------------------------------------------------------------- drafts
 async function pollDrafts() {

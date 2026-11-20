@@ -21,6 +21,9 @@ if (!window.__GUEST__ && TOKEN && TOKEN !== 'guest' && !new URLSearchParams(loca
     // an answer option that carries a command ("A: Create $ python3 x.py"): its label and a Run button, not a plain answer button
     option: (o) => { const m = /^(.*?)\s*`?((?:[a-z0-9][a-z0-9._-]*)?)\$ ([^`]+)`?\s*$/i.exec(String(o)); const c = m && m[3].trim();
       return c && (m[2] || /^[a-z.~\/]/i.test(c)) && c.length > 2 ? `<div class="runo"><b>${m[1].replace(/[:\s]+$/, '')}</b>${window.termRun.chip(c, m[2])}</div>` : ''; },
+    // the same option as an answer: one press opens the terminal with the command ready, and Run there also answers it
+    answer: (o, cls = '') => { const m = /^(.*?)\s*`?((?:[a-z0-9][a-z0-9._-]*)?)\$ ([^`]+)`?\s*$/i.exec(String(o)); const c = m && m[3].trim(), l = m ? m[1].replace(/[:\s]+$/, '') : '';
+      return c && (m[2] || /^[a-z.~\/]/i.test(c)) && c.length > 2 ? `<button type="button" class="${cls} runans" data-answer="${o}" data-run="${c}" data-on="${NAME.test(m[2] || '') ? m[2] : ''}" title="Opens the terminal with this command ready; pressing Run there also answers “${l || o}”">${l || 'Run'}<code>▶ ${c}</code></button>` : ''; },
     shell: (info) => /^(sh|bash|zsh|shell|console|terminal)$/i.test(String(info).trim()),
     chip: (c, on) => `<span class="runc" role="button" tabindex="0" data-run="${c}" data-on="${NAME.test(on || '') ? on : ''}" title="Opens the terminal with this command ready to run${on ? ` on ${on}` : ''}"><i>▶</i>${NAME.test(on || '') ? `<em>${on}$</em>` : ''}<code>${c}</code></span>`,
     block: (c, on) => `<div class="runb" data-run="${c}" data-on="${NAME.test(on || '') ? on : ''}"><pre>${c}</pre><button type="button" title="Opens the terminal with this ready to run">▶ Run${NAME.test(on || '') ? ` on ${on}` : ''}</button></div>`,
@@ -117,6 +120,7 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
     ask.hidden = !ctx;
     if (ctx) ask.innerHTML = `${ctx.name ? `<b>${esc(ctx.name)}</b> marked this command.` : 'This command comes from a message.'} It runs on <b>${esc(where(cur))}</b>${cur === 'local' && info ? ` as ${esc(info.user)}` : ''} when you press Run. Read it first; you can change it.${ctx.from ? `<label class="tell"><input type="checkbox" id="term-tell" checked> When it finishes, send ${esc(ctx.name || 'them')} what it prints (tokens and passwords masked)</label>` : ''}`;
     const p = panes.get(cur); if (p) requestAnimationFrame(() => resize(p));
+    if (ctx && ctx.answer) ask.insertAdjacentHTML('afterbegin', `<b>Run also answers “${esc(ctx.answer)}”.</b> `); // an option of a request: running it is the answer
   }
   function grow() { const t = $('#term-in'); t.style.height = 'auto'; t.style.height = `${Math.min(132, t.scrollHeight + 2)}px`; }
   async function show(on, opts = {}) {
@@ -138,10 +142,16 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
       const tell = $('#term-tell'); // the owner decides, before Run, whether the output goes back to whoever marked it
       await api('/api/term/run', { id: cur, cmd, from: mine ? mine.from || '' : '', share: tell ? tell.checked : true });
       $('#term-in').value = ''; grow(); ctx = null; $('#term-ask').hidden = true;
+      let said = '';
+      if (mine && mine.answer && mine.reqId) { // the option that carried the command: running it is the answer
+        try { const r = await api('/api/requests/answer', { id: Number(mine.reqId), text: mine.answer }); said = `Contestado «${mine.answer}».`; if (office().answers && office().answers.said) office().answers.said(r, mine.from, mine.answer); if (office().refreshAsks) office().refreshAsks(); } // the toast says whether it reached them
+        catch (e) { said = `No se pudo contestar «${mine.answer}»: ${e.message}`; }
+        mine.reqId = ''; // the output, if you send it, goes as a message
+      }
       const sh = $('#term-share');
       if (mine && (mine.reqId || mine.from)) {
         sh.hidden = false; sh.dataset.id = cur; sh.dataset.req = mine.reqId || ''; sh.dataset.from = mine.from || ''; sh.dataset.name = mine.name || '';
-        sh.innerHTML = `<button id="term-send">${mine.reqId ? 'Answer' : 'Send'} ${esc(mine.name || 'them')} what it printed</button><span>when it has finished. ${mine.reqId ? 'It closes their request.' : ''}</span>`;
+        sh.innerHTML = `<button id="term-send">${mine.reqId ? 'Answer' : 'Send'} ${esc(mine.name || 'them')} what it printed</button><span>when it has finished. ${mine.reqId ? 'It closes their request.' : ''}${said ? ` ${esc(said)}` : ''}</span>`;
       } else sh.hidden = true;
       if (!document.documentElement.classList.contains('touch')) p.term.focus();
     } catch (e) { $('#term-ask').hidden = false; $('#term-ask').textContent = e.message; }
@@ -185,13 +195,18 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
 
   // A command in a message: open the terminal with it ready. The second press, on Run, is what runs it.
   function pick(e) {
-    const el = e.target.closest('.runc[data-run], .runb[data-run] button'); if (!el) return;
+    const el = e.target.closest('.runc[data-run], .runb[data-run] button, .runans[data-run]'); if (!el) return;
     const box = el.closest('[data-run]'), cmd = box.dataset.run.trim(); if (!cmd) return;
     e.preventDefault(); e.stopPropagation();
     let c = {};
-    const it = box.closest('.it[data-id]');
-    if (it) { const w = it.querySelector('[data-who]'); c = { reqId: it.classList.contains('request') ? it.dataset.id : '', from: w ? w.dataset.who : '', name: w ? w.textContent.trim().split(' ')[0] : '' }; }
-    else if (box.closest('#chat')) { const slug = office().selected && office().selected(), a = (office().agents ? office().agents() : []).find((x) => x.slug === slug); if (a) c = { from: a.herdrName, name: a.name.split(' ')[0] }; }
+    const ags = office().agents ? office().agents() : [], it = box.closest('.it[data-id], .ask[data-id]');
+    if (it) { // a card in For you or in the person panel
+      const w = it.querySelector('[data-who]'), from = it.dataset.from || (w ? w.dataset.who : ''), a = ags.find((x) => x.herdrName === from);
+      c = { reqId: it.classList.contains('request') ? it.dataset.id : '', from, name: a ? a.name.split(' ')[0] : w ? w.textContent.trim().split(' ')[0] : from, answer: el.classList.contains('runans') ? el.dataset.answer : '' };
+    } else if (box.closest('#chat')) { // the person whose chat this is (not whoever is picked in the room); the superadmin gets no copy
+      const w = office().chat && office().chat.who ? office().chat.who() : '', a = ags.find((x) => x.herdrName === w);
+      if (a) c = { from: a.herdrName, name: a.name.split(' ')[0] };
+    }
     show(true, { cmd, on: box.dataset.on || '', ctx: c });
   }
   document.addEventListener('click', pick, true);

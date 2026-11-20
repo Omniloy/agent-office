@@ -235,6 +235,7 @@ function start() {
   addEventListener('focusout', () => { clearTimeout(typingOff); typingOff = setTimeout(() => { if (!document.activeElement || !document.activeElement.matches('input, textarea')) { root.classList.remove('typing'); scrollTo(0, 0); sync(); } }, 120); });
   // The page must never be pinched or scrolled as a whole: only the room and the sheets move.
   for (const ev of ['gesturestart', 'gesturechange']) addEventListener(ev, (e) => e.preventDefault(), { passive: false });
-  addEventListener('resize', sync); addEventListener('office-chat', sync); addEventListener('orientationchange', () => setTimeout(sync, 300));
+  addEventListener('resize', sync);
+  addEventListener('office-chat', () => { if (root.classList.contains('chat-on') && mine) open(null); else sync(); }); // a chat opened from More (the superadmin) is the sheet now: More goes addEventListener('orientationchange', () => setTimeout(sync, 300));
   sync(); badge();
 }

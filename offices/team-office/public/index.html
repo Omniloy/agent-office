@@ -196,7 +196,7 @@ textarea:focus, #cmd input:focus { border-color: var(--accent); }
 body.panel-open #cmd { left: calc((100vw - var(--panel-w)) / 2); width: min(560px, calc(100vw - var(--panel-w) - 300px)); }
 
 /* toasts + banner */
-#toasts { position: fixed; top: calc(var(--bar) + 12px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; z-index: 9; pointer-events: none; }
+#toasts { position: fixed; top: calc(var(--bar) + 12px); left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; z-index: 58; pointer-events: none; } /* over For you, the chat and what ontop.js raises (40+), under the terminal (60): a toast can carry a button */
 .toast { padding: 9px 14px; display: flex; gap: 9px; align-items: center; font-size: 13px; animation: drop .3s ease-out; pointer-events: auto; }
 .toast.err { border-color: rgba(251, 113, 133, .5); }
 @keyframes drop { from { opacity: 0; transform: translateY(-10px); } }
@@ -329,7 +329,7 @@ body.embed #cards { display: none !important; }
 <aside id="cards" class="glass"></aside>
 <section id="feed" class="glass hidden"><h3>Team feed</h3><ol id="feed-list"></ol></section>
 <div id="banner" class="glass"></div>
-<div id="toasts"></div>
+<div id="toasts" role="status" aria-live="polite"></div>
 
 <aside id="panel" class="glass">
   <div class="phead" id="phead"></div>
