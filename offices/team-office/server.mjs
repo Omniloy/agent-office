@@ -478,7 +478,9 @@ async function watchdogState(team) {
   let c = {}, w = {};
   try { c = await readJson(path.join(HOME, '.omniloy-team', 'watch-config.json')); } catch {}
   try { w = await readJson(path.join(HOME, '.omniloy-team', 'watch.json')); } catch {}
-  return { on: !(c.paused || []).includes(team.name), running: !!w.checkedAt && Date.now() - w.checkedAt < 5 * 60_000, checkedAt: w.checkedAt || 0 };
+  // running: it checked recently (every `interval` s, 60 by default); error: it runs but cannot see the terminals
+  const every = Math.max(60, Number((w.config || {}).interval) || 60) * 1000;
+  return { on: !(c.paused || []).includes(team.name), running: !!w.checkedAt && Date.now() - w.checkedAt < Math.max(5 * 60_000, 3 * every), checkedAt: w.checkedAt || 0, error: w.error || '' };
 }
 // ---------------------------------------------------------------- card details (the wall board)
 // Everything here is local files plus, on demand, one Jira read. Nothing asks a model: no tokens are spent.
@@ -659,7 +661,7 @@ async function refresh() {
     // the watchdog (team-watch) caught someone stopped while it was their move: the room shows a lightning bolt
     let zaps = [];
     try { zaps = ((await readJson(path.join(HOME, '.omniloy-team', 'watch.json'))).events || []).filter((e) => names.has(e.agent))
-      .map((e) => ({ id: e.id, ts: e.ts, type: 'zap', from: e.agent, to: e.to, text: `stopped ${e.idleMin} min holding ${[...(e.cards || []), ...(e.requests || [])].slice(0, 4).join(', ')}` })); } catch {}
+      .map((e) => ({ id: e.id, ts: e.ts, type: 'zap', from: e.agent, to: e.to, text: e.text ? clip(e.text, 160) : `stopped ${e.idleMin} min holding ${[...(e.cards || []), ...(e.requests || [])].slice(0, 4).join(', ')}` })); } catch {}
     const feed = [...statusEvents, ...youEvents, ...zaps, ...agents.flatMap((a) => a.nudges)].sort((x, y) => x.ts - y.ts).slice(-150);
     agents.forEach((a) => delete a.nudges);
     const next = {

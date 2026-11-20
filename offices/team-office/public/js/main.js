@@ -610,7 +610,13 @@ function onState(s) {
   if (s.theme && isTheme(s.theme.effective) && s.theme.effective !== THEME_ID) themeChanged(s.theme.effective);
   world.setAgents(s.agents, { jira: s.jira, trace: pickTrace(s.trace) });
   if (cardsData) paintBoard();
-  { const w = s.watchdog || {}, b = $('#btn-watch'); if (b) { b.textContent = `Watchdog: ${!w.on ? 'off' : w.running ? 'on' : 'on (not running)'}`; b.dataset.on = w.on ? '1' : ''; } }
+  { const w = s.watchdog || {}, b = $('#btn-watch'); if (b) {
+    const down = w.on && !w.running, blind = w.on && w.running && w.error;
+    b.textContent = `Watchdog: ${!w.on ? 'off' : down ? '⚠ not running' : blind ? '⚠ cannot see Herdr' : 'on'}`; b.dataset.on = w.on ? '1' : '';
+    b.style.color = down || blind ? '#f87171' : '';
+    b.title = down ? `The watchdog is switched on for this office but is not running${w.checkedAt ? ` (last check ${dayTime(w.checkedAt)})` : ' (it has never run)'}, so nobody is caught. Start it with: team-watch start` + (w.checkedAt ? '' : '. Its login job (com.omniloy.watchdog) comes with setup/install.py.')
+      : blind ? `The watchdog runs but cannot read the terminals: ${w.error}` : 'The watchdog tells the lead when someone here stops while it is their move. Click to switch it off or on for this office only.';
+  } }
   const fresh = new Set();
   for (const f of s.feed) {
     if (seenFeed.has(f.id)) continue;
@@ -801,7 +807,7 @@ $('#feed-list').addEventListener('click', (e) => {
   if (openFeed.has(id)) openFeed.delete(id); else openFeed.add(id);
   li.classList.toggle('open');
 });
-$('#btn-watch').onclick = async (e) => { const b = e.currentTarget, on = !b.dataset.on; try { await api('/api/watchdog', { on }); b.dataset.on = on ? '1' : ''; b.textContent = `Watchdog: ${on ? 'on' : 'off'}`; toast(on ? '⚡ Watchdog on for this office' : 'Watchdog off for this office'); } catch (err) { toast(esc(err.message), 'err'); } };
+$('#btn-watch').onclick = async (e) => { const b = e.currentTarget, on = !b.dataset.on; try { await api('/api/watchdog', { on }); b.dataset.on = on ? '1' : ''; b.textContent = `Watchdog: ${on ? (state && state.watchdog && !state.watchdog.running ? '⚠ not running' : 'on') : 'off'}`; toast(on ? '⚡ Watchdog on for this office' : 'Watchdog off for this office'); } catch (err) { toast(esc(err.message), 'err'); } };
 $('#btn-feed').onclick = (e) => { e.currentTarget.classList.toggle('on'); $('#feed').classList.toggle('hidden'); };
 // A new browser tab. From the Herdr terminal view this opens the real browser (office-tty hands new windows to it).
 $('#btn-more').onclick = (e) => { e.stopPropagation(); $('#more').classList.toggle('open'); };
