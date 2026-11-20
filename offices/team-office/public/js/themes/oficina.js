@@ -208,8 +208,9 @@ export default {
       room.add(box(0.06, 1.2, 6.8, LOOK.trim, { x: LEFT_X + 0.06, y: 6.35, z: -3.2, cast: false }), sign);
     }
 
-    // each floor's own centrepiece, front right, out of the walkways; people (k.block) and the robot (tick) go round it
-    if (LOOK.prop) k.block(PROP.x - PROP.r, PROP.z - PROP.r, PROP.x + PROP.r, PROP.z + PROP.r);
+    // each floor's own centrepiece, front right, out of the walkways; people (k.block) and the robot (tick) go round it.
+    // A third row of desks has its aisle there: layout() puts it away then.
+    if (LOOK.prop) k.my.propBlock = k.block(PROP.x - PROP.r, PROP.z - PROP.r, PROP.x + PROP.r, PROP.z + PROP.r);
     if (LOOK.prop === 'crm') { // the sales funnel and the bell rung when a deal closes
       const g = new THREE.Group(), brass = mat(0xd4a017, { roughness: 0.25, metalness: 0.85 });
       g.add(box(1.6, 0.5, 1.6, 0x1f3b3a, { y: 0.25, r: 0.05 }));
@@ -220,7 +221,7 @@ export default {
       bell.position.set(0.68, 2.42, 1.05); bell.castShadow = true;
       g.add(bell);
       g.position.set(PROP.x, 0, PROP.z); g.rotation.y = -0.5;
-      room.add(g);
+      room.add(k.my.prop = g);
     } else if (LOOK.prop === 'lab') { // a glowing molecule model on a plinth: ideas being taken apart
       const g = new THREE.Group();
       g.add(box(1.4, 0.7, 1.4, 0x1e1b4b, { y: 0.35, r: 0.05 }));
@@ -237,7 +238,7 @@ export default {
       }
       g.add(cyl(0.05, 0.05, 0.6, 0x1e1b4b, { y: 0.98 }));
       g.position.set(PROP.x, 0, PROP.z); g.rotation.y = -0.5;
-      room.add(g);
+      room.add(k.my.prop = g);
     } else if (LOOK.prop === 'web') { // an easel with a page being designed
       const s = surface(512, 384), c = s.ctx;
       c.fillStyle = '#ffffff'; c.fillRect(0, 0, 512, 384);
@@ -258,7 +259,7 @@ export default {
       g.add(box(2.0, 1.52, 0.06, 0xfaf7f2, { y: 2.2, z: 0.04 }), canvas, box(1.9, 0.08, 0.3, 0, { m: wood, y: 1.42, z: 0.1 }));
       for (const [x, k] of [[-0.55, 0xf97316], [-0.3, 0x8b5cf6], [-0.05, 0xec4899]]) g.add(cyl(0.04, 0.04, 0.12, k, { x, y: 1.52, z: 0.12 }));
       g.position.set(PROP.x, 0, PROP.z); g.rotation.y = -0.5;
-      room.add(g);
+      room.add(k.my.prop = g);
     }
 
     // a little cleaning robot that wanders the open floor (moved in tick)
@@ -289,6 +290,14 @@ export default {
     for (const l of k.my.roomLamps || []) l.intensity = 24 - f * 20;
   },
 
+  // a third row of desks (big teams) has its aisle where the centrepiece stands: it goes, with its blocked area
+  layout(k) {
+    const my = k.my, three = k.frontZ() > 3;
+    if (!my.prop) return;
+    my.prop.visible = !three;
+    if (my.propBlock) { if (three) my.propBlock.set(); else my.propBlock.set(PROP.x - PROP.r, PROP.z - PROP.r, PROP.x + PROP.r, PROP.z + PROP.r); }
+  },
+
   tick(k, dt) {
     const robot = k.my.robot;
     if (!robot) return;
@@ -297,7 +306,7 @@ export default {
     if (robot.position.x < -5.5 || robot.position.x > 7 || robot.position.z < rz || robot.position.z > 7.2) {
       robot.position.x = Math.min(7, Math.max(-5.5, robot.position.x)); robot.position.z = Math.min(7.2, Math.max(rz, robot.position.z));
       k.my.robotDir += 2 + Math.random() * 2;
-    } else if (LOOK.prop && Math.abs(robot.position.x - PROP.x) < PROP.r + 0.35 && Math.abs(robot.position.z - PROP.z) < PROP.r + 0.35) {
+    } else if (k.my.prop && k.my.prop.visible && Math.abs(robot.position.x - PROP.x) < PROP.r + 0.35 && Math.abs(robot.position.z - PROP.z) < PROP.r + 0.35) {
       robot.position.x -= Math.sin(k.my.robotDir) * dt * 0.9; robot.position.z -= Math.cos(k.my.robotDir) * dt * 0.9; // back out of the centrepiece
       k.my.robotDir += 2 + Math.random() * 2;
     }
