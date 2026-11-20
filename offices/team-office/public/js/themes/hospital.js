@@ -37,8 +37,8 @@
 //            from the corridor's downlights and a glowing wayfinding line. The coffee mug in hand is a teal one, steaming.
 //   layout   tall pieces of a desk (tower, gantry, pegboard, cabinet, shelves) show only where they cannot hide a
 //            nameplate: the back row, and the centre with one row of desks. The theatre's light box and blade sign
-//            show with one row only. A third row of desks (big teams, no centre) hides the theatre, the cafeteria
-//            and the stretcher.
+//            show with one row only. A third row of desks (big teams, no centre) hides the theatre and the
+//            stretcher (their blocked areas too), and the cafeteria moves to the theatre's corner with the coffee spot.
 //   people   scrubs in the role colour with a surgical cap, white coats for the doctors in charge, a suit for the
 //            manager, a work uniform and tool belt for the technician, goggles for the researcher; stethoscopes,
 //            masks and gloves; ID badges; clogs. Visitors get a "VISITA" badge and shoe covers.
@@ -51,6 +51,10 @@ const gauss = (x, m, s) => Math.exp(-((x - m) * (x - m)) / (2 * s * s));
 // the coffee corner: people stand in front of the counter (z 4.5..5.15), turned to the room and the camera
 const CAFE_DX = -0.45; // the café sits this far left of where it was built, clear of the whiteboard
 const CAFE = { x: 4.95 + CAFE_DX, z: 6.0, yaw: -0.3 };
+// with a third row of desks (big teams, no centre) the café moves to the front-left corner, where the theatre was
+// (hidden then): in front of the third row it would stand on its aisle and hide its nameplates
+const CAFE3 = { dx: -15.65, dz: 1.52 }; // where the café group stands then (built at x CAFE_DX, z 0)
+const CAFE_3 = { x: 4.95 + CAFE3.dx, z: CAFE.z + CAFE3.dz, yaw: CAFE.yaw };
 
 // ---------------------------------------------------------------- small helpers
 function tex(k, w, h, draw) { const s = k.surface(w, h); draw(s.ctx, w, h); s.tex.needsUpdate = true; return s; }
@@ -861,7 +865,8 @@ function buildCafe(k) {
   const mat = (c, o) => mc(k, c, o);
   const m = M(k);
   const cf = k.my.cafe = new THREE.Group(); k.room.add(cf); cf.position.x = CAFE_DX;
-  const b = kit(k, cf), block = (x0, z0, x1, z1) => k.block(x0 + CAFE_DX, z0, x1 + CAFE_DX, z1);
+  const b = kit(k, cf), blocks = k.my.cafeBlocks = []; // [handle, x0, z0, x1, z1] in the café's own coordinates (layout moves them)
+  const block = (x0, z0, x1, z1) => blocks.push([k.block(x0 + CAFE_DX, z0, x1 + CAFE_DX, z1), x0, z0, x1, z1]);
   const X0 = 3.35, X1 = 7.25, XC = (X0 + X1) / 2, WZ = 4.45, CZ0 = 4.5, CZ1 = 5.15, CZC = (CZ0 + CZ1) / 2, TOP = 1.0, WH = 2.5;
   // the café's wood floor with a walnut edge
   {
@@ -1221,7 +1226,7 @@ function buildFloor(k) {
     w.box(0.32, 0.04, 0.32, m.dark, 0, 0.02, 0, { cast: false, to: hg }); w.cyl(0.035, 0.035, 1.05, m.white, 0, 0.55, 0, { to: hg }); w.box(0.22, 0.32, 0.12, m.white, 0, 1.2, 0, { r: 0.03, to: hg });
     const ht2 = tex(k, 128, 160, (c) => { c.fillStyle = '#14a39a'; c.fillRect(0, 0, 128, 160); c.fillStyle = '#ffffff'; c.beginPath(); c.moveTo(64, 20); c.quadraticCurveTo(100, 70, 64, 104); c.quadraticCurveTo(28, 70, 64, 20); c.fill(); txt(c, 'HIGIENE', 64, 126, '800 20px system-ui', '#ffffff', 'center'); txt(c, 'DE MANOS', 64, 146, '700 15px system-ui', '#d9fff9', 'center'); });
     at(w.sign(0.2, 0.25, ht2, { to: hg }), 0, 1.2, 0.062);
-    k.block(4.35, 2.2, 7.4, 4.33);
+    k.my.wardBlock = k.block(4.35, 2.2, 7.4, 4.33);
     bake(wg);
   }
   // the pharmacy delivery robot that follows the blue line
@@ -2054,7 +2059,7 @@ export default {
   // the director médico (Product, else Lead) runs the floor from the central station (themes/index.js: centre)
   // the dais is 2.66 round (CTR); with two rows of desks it moves forward and left, clear of the second row and the café
   centre: { roles: ['Product', 'Lead'], x: (rows) => (rows === 1 ? 0.6 : -0.3), z: (rows) => (rows === 1 ? 0.9 : 4.9), lift: 0.25, foot: { x0: -2.7, x1: 2.7, z0: CTR.OFF - 2.7, z1: CTR.OFF + 2.7 }, side: 2.95 },
-  spots: { coffee: { x: CAFE.x, z: CAFE.z, yaw: CAFE.yaw } },
+  spots: { coffee: (rows) => (rows > 2 ? CAFE_3 : CAFE) }, // the café moves with a third row (layout)
   boardStyle: { bg: '#0d1c22', ink: '#5eead4' },
   traceStyle: { bg: '#fbfdfc', ink: '#0f2f2b' },
 
@@ -2088,7 +2093,6 @@ export default {
     const ht = tex(k, 512, 96, (c) => { c.fillStyle = '#0f6f68'; rr(c, 0, 0, 512, 96, 12); c.fill(); txt(c, 'HOJA DE EVOLUCIÓN', 256, 50, '800 46px system-ui', '#ffffff', 'center'); });
     const hp = plane(0.82, 0.154, new THREE.MeshStandardMaterial({ map: ht.tex, roughness: 0.45 })); hp.position.z = 0.042; clip.add(hp);
     for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) fx.trace.group.add(k.box(0.24, 0.24, 0.13, 0, { m: m.teal, x: sx * 1.98, y: 2.35 + sy * 1.28, z: 0.0, r: 0.06, cast: false }));
-    k.my.traceMesh = fx.trace.mesh; k.my.boardMesh = fx.board.mesh;
     fx.clock.rim.material = m.white;
     const bez = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.035, 10, 48), m.steel); bez.position.copy(fx.clock.face.position); bez.position.z += 0.01; k.room.add(bez);
   },
@@ -2243,7 +2247,6 @@ export default {
     if (k.my.patchMat) k.my.patchMat.opacity = 0.12 * Math.max(0, f * 1.4 - 0.4);
     if (k.my.bscBlue) k.my.bscBlue.color.setRGB(0.16, 0.5, 1.0).multiplyScalar(1.05 + (1 - f) * 0.35);
     for (const l of k.my.bscLight || []) l.intensity = 0.3 + (1 - f) * 1.8;
-    if (k.my.boardMesh) k.my.boardMesh.material.color.setScalar(0.8 + 0.2 * f);
     if (k.my.windowMat) {
       const night = f < 0.45, want = night ? k.my.skyNight : k.my.skyDay;
       if (want && k.my.windowMat.map !== want) { k.my.windowMat.map = want; k.my.windowMat.needsUpdate = true; }
@@ -2258,7 +2261,6 @@ export default {
     // the teal night lights (skirting, the centre station's lines) are bright at night and quiet by day
     if (k.my.skirt) k.my.skirt.color.setRGB(0.18, 0.88, 0.78).multiplyScalar(0.55 + (1 - f) * 0.75);
     if (k.my.centreGlow) k.my.centreGlow.color.setRGB(0.18, 0.88, 0.78).multiplyScalar(0.9 + (1 - f) * 0.9);
-    if (k.my.traceMesh) k.my.traceMesh.material.color.setScalar(0.52 + 0.46 * f);
   },
 
   // ------------------------------------------------------------ layout and animation
@@ -2267,11 +2269,16 @@ export default {
     // a station's tall back piece (tower, gantry, pegboard, cabinet, shelves) only at the back row and the centre:
     // in a second row it would stand in front of the first row's nameplates
     for (const d of k.desks()) { const t = my.tall && my.tall[d.slug]; if (t) t.visible = d.centre ? fz < 0 : d.row <= 0; }
-    // a third row of desks (big teams, no centre) reaches into the theatre and the cafeteria
+    // a third row of desks (big teams, no centre) reaches into the theatre and the stretcher: they go, and with them
+    // the stretcher's blocked area; the café moves into the theatre's corner, its blocked areas and the coffee spot
+    // (spots.coffee) with it
     if (my.theatre) my.theatre.visible = !three;
-    if (my.cafe) my.cafe.visible = !three;
     if (my.cart) my.cart.visible = !three;
     if (my.wardFill) my.wardFill.visible = !three;
+    if (my.wardBlock) { if (three) my.wardBlock.set(); else my.wardBlock.set(4.35, 2.2, 7.4, 4.33); }
+    const dx = three ? CAFE3.dx : CAFE_DX, dz = three ? CAFE3.dz : 0;
+    if (my.cafe) my.cafe.position.set(dx, three ? 0.002 : 0, dz); // lifted a hair over the theatre's floor inlay
+    for (const [h, x0, z0, x1, z1] of my.cafeBlocks || []) h.set(x0 + dx, z0 + dz, x1 + dx, z1 + dz);
     // the theatre's light box and blade sign stand over the front-left desk of a second row: only with one row
     for (const g of my.orSigns || []) g.visible = fz < 0;
     // forget animated parts of desks that left the room

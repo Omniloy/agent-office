@@ -10,6 +10,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { CopyShader } from 'three/addons/shaders/CopyShader.js';
 import { themeById, DEFAULT_THEME } from './themes/index.js';
+import { rect, route, freeSpot as freeOf } from './paths.js';
 
 const BACK_Z = -9, LEFT_X = -13, DESK_Z = -5.4, SEAT_Z = -6.55, AISLE_Z = -3.3, WALL_H = 7.2, ROW_D = 4.4;
 const STAND_Y = 0.53, SEAT_Y = 0.72;
@@ -199,19 +200,22 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   // in the rows. Its place can follow the number of rows: x, z and yaw may be numbers or functions of `rows`.
   const CENTRE = theme.centre ? { roles: ['Product', 'Lead'], side: 1.9, lift: 0, foot: { x0: -1.55, x1: 1.55, z0: -1.85, z1: 0.85 }, ...theme.centre } : null;
   if (CENTRE) CENTRE.side = Math.max(CENTRE.side, CENTRE.foot.x1 + 0.4); // the step beside the desk is outside its footprint
-  // The coffee spot: idle people walk there, stand with a mug for a while and go back (theme.spots.coffee may move it).
+  // The coffee spot: idle people walk there, stand with a mug for a while and go back. theme.spots.coffee may move it:
+  // { x, z, yaw }, or a function of the number of rows of desks (1, 2, 3...) that gives one (see setAgents).
   const tc = theme.spots && theme.spots.coffee;
-  const COFFEE = tc ? { x: 9.3, z: 0.7, yaw: Math.PI / 2, ...tc } : { x: 9.3, z: 0.7, yaw: Math.PI / 2 };
-  // Areas of the open floor nobody walks through: the centre desk and whatever the theme blocks (k.block). Each is a
-  // rectangle in world x/z; people walk around it with a body's width to spare.
-  const BODY = 0.3, blocks = [];
-  let obs = [], centreFoot = null;
-  const rect = (x0, z0, x1, z1) => {
-    const r = { x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1) };
-    r.ex = { x0: r.x0 - BODY, z0: r.z0 - BODY, x1: r.x1 + BODY, z1: r.z1 + BODY };
-    return r;
+  const coffeeFor = (rows) => {
+    let c = tc;
+    if (typeof tc === 'function') { try { c = tc(rows); } catch (e) { console.warn('theme spots.coffee', e); c = null; } }
+    const out = { x: 9.3, z: 0.7, yaw: Math.PI / 2 };
+    for (const key of ['x', 'z', 'yaw']) if (c && Number.isFinite(c[key])) out[key] = c[key];
+    return out;
   };
-  const rebuildObs = () => { obs = centreFoot ? [...blocks, centreFoot] : blocks.slice(); };
+  const COFFEE = coffeeFor(1);
+  // Areas of the open floor nobody walks through: the centre desk and whatever the theme blocks (k.block). Each is a
+  // rectangle in world x/z; people walk around it with a body's width to spare (paths.js).
+  const blocks = [];
+  let obs = [], centreFoot = null, rowObs = [], walkObs = []; // rowObs: the row desks (rowAreas); walkObs: what walks go round
+  const rebuildObs = () => { obs = centreFoot ? [...blocks, centreFoot] : blocks.slice(); walkObs = obs.concat(rowObs); };
   const k = {
     THREE, scene, room, renderer, camera, hemi, sun, PHONE, TOUCH, texts, title, base: theme.base, my: myTheme,
     C: { BACK_Z, LEFT_X, RIGHT_X: 13, FRONT_Z: 9, WALL_H, DESK_Z, SEAT_Z, AISLE_Z, ROW_D },
@@ -746,71 +750,37 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   const seatOf = (st) => (st.centre ? loc(st, 0, SEAT_Z, st.lift) : V(st.x, SEAT_Z + st.z));
   const sideOf = (st) => (st.centre ? loc(st, CENTRE.side, SEAT_Z) : V(st.x + plan.side, SEAT_Z + st.z));
   const nearSeat = (st, p, r) => { const s = seatOf(st); return Math.hypot(p.x - s.x, p.z - s.z) < r; };
-  // ---- walking around blocked areas (the centre desk, k.block): a straight walk that would cross one goes round
-  // it by its corners instead. A walk that starts or ends inside an area (their own desk) may cross that one.
-  const inR = (x, z, r) => x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1;
-  function segHit(ax, az, bx, bz, r) { // where the segment enters the rectangle's inside (0..1), or -1
-    let t0 = 0, t1 = 1;
-    const dx = bx - ax, dz = bz - az, P = [-dx, dx, -dz, dz], Q = [ax - r.x0, r.x1 - ax, az - r.z0, r.z1 - az];
-    for (let i = 0; i < 4; i++) {
-      if (Math.abs(P[i]) < 1e-9) { if (Q[i] <= 0) return -1; continue; }
-      const t = Q[i] / P[i];
-      if (P[i] < 0) { if (t > t1) return -1; if (t > t0) t0 = t; } else { if (t < t0) return -1; if (t < t1) t1 = t; }
-    }
-    return t1 - t0 > 1e-6 ? t0 : -1;
-  }
+  // ---- walking around blocked areas (the centre desk, k.block) and the row desks with their chairs: a straight walk
+  // that would cross one goes the shortest way round all of them instead (paths.js). A walk that starts or ends inside
+  // an area (their own desk) may cross that one. The walks planned by the aisles never meet a row desk; a walk after
+  // someone who moves (a chase) or to a spot across a row would.
+  const ROOM = { x0: LEFT_X + 0.45, x1: 12.6, z0: BACK_Z + 0.45, z1: 8.9 }; // where a corner of the way round may be
+  let noWay = false, rowSpots = []; // rowSpots: the row desks with room to stand in front, for standing spots
   function detour(a, b) {
-    let best = null, bt = 2, bandA = false, bandB = false;
-    for (const o of obs) {
-      if (inR(a.x, a.z, o) || inR(b.x, b.z, o)) continue;
-      const ia = inR(a.x, a.z, o.ex), ib = inR(b.x, b.z, o.ex), t = segHit(a.x, a.z, b.x, b.z, ia || ib ? o : o.ex);
-      if (t >= 0 && t < bt) { bt = t; best = o; bandA = ia; bandB = ib; }
-    }
-    if (!best) return [];
-    const e = best.ex, E = 0.06, cs = [[e.x0 - E, e.z0 - E], [e.x1 + E, e.z0 - E], [e.x1 + E, e.z1 + E], [e.x0 - E, e.z1 + E]];
-    const inRoom = (c) => c[0] > LEFT_X + 0.45 && c[0] < 12.6 && c[1] > BACK_Z + 0.45 && c[1] < 8.9;
-    // a way round must not cut through another area either (two areas close together: the centre desk and a counter)
-    const others = obs.filter((o) => o !== best && !inR(a.x, a.z, o) && !inR(b.x, b.z, o));
-    const clear = (p, q, band) => segHit(p[0], p[1], q[0], q[1], band ? best : e) < 0 && others.every((o) => segHit(p[0], p[1], q[0], q[1], o) < 0);
-    const A = [a.x, a.z], Bp = [b.x, b.z], d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
-    let way = null, wl = Infinity;
-    for (let i = 0; i < 4; i++) for (const path of [[cs[i]], [cs[i], cs[(i + 1) % 4]], [cs[i], cs[(i + 3) % 4]]]) {
-      if (!path.every(inRoom) || path.some((c) => others.some((o) => inR(c[0], c[1], o.ex)))) continue;
-      const pts = [A, ...path, Bp];
-      let ok = true, len = 0;
-      for (let j = 0; j < pts.length - 1 && ok; j++) { ok = clear(pts[j], pts[j + 1], (j === 0 && bandA) || (j === pts.length - 2 && bandB)); len += d(pts[j], pts[j + 1]); }
-      if (ok && len < wl) { wl = len; way = path; }
-    }
-    return way ? way.map((c) => V(c[0], c[1])) : [];
+    const w = route(a, b, walkObs, ROOM);
+    if (!w) { if (!noWay) { noWay = true; console.warn('no way round the blocked areas', a.x, a.z, '->', b.x, b.z); } return []; }
+    return w.map((c) => V(c[0], c[1]));
   }
-  // A place to stand, moved out of any blocked area it falls in: to its nearest edge that is still on the floor (a
-  // desk near the front wall is left by a side, never through the wall).
+  // A place to stand, moved out of any blocked area and any row desk or chair it falls in, to the nearest edge that is
+  // still on the floor (a desk near the front wall is left by a side, never through the wall).
   const onFloor = (x, z) => x > LEFT_X + 0.45 && x < 12.6 && z > BACK_Z + 0.45 && z < 8.6;
-  function freeSpot(v) {
-    for (const o of obs) {
-      const e = o.ex;
-      if (!inR(v.x, v.z, e)) continue;
-      const ms = [[v.x - e.x0, e.x0 - 0.06, null], [e.x1 - v.x, e.x1 + 0.06, null], [v.z - e.z0, null, e.z0 - 0.06], [e.z1 - v.z, null, e.z1 + 0.06]].sort((p, q) => p[0] - q[0]);
-      const m = ms.find((c) => onFloor(c[1] ?? v.x, c[2] ?? v.z)) || ms[0];
-      if (m[1] != null) v.x = m[1]; else v.z = m[2];
+  const freeSpot = (v) => freeOf(v, obs, rowSpots, onFloor);
+  function rowAreas() { // a row desk and its chair: to walk round (a thin band: people pass between two desks), and to stand clear of
+    rowObs = []; rowSpots = [];
+    for (const s of stations.values()) {
+      if (s.centre) continue;
+      rowObs.push(rect(s.x - 1.5, SEAT_Z + s.z - 0.55, s.x + 1.5, DESK_Z + s.z + 0.75, 0.15));
+      rowSpots.push({ x0: s.x - 1.6, x1: s.x + 1.6, z0: SEAT_Z + s.z - 0.6, z1: DESK_Z + s.z + 1.15 });
     }
-    return v;
+    rebuildObs();
   }
-  // Before a walk starts: round any blocked area on the way (a few levels deep at most).
+  // Before a walk starts: the way round any blocked area on it (every leg of it is already clear).
   function guardSteps(st) {
-    for (let n = 0; n < 4; n++) {
-      const s = st.steps[0];
-      if (!s || s.type !== 'walk' || s.ck) return;
-      s.ck = true;
-      const depth = s.dd || 0;
-      if (depth >= 4) return;
-      const w = detour(st.ch.root.position, s.to);
-      if (!w.length) return;
-      // the rest of the way, from the last corner on, is checked again when it starts: another area may lie on it
-      // (the walk round goes one level deeper each time, so it always ends)
-      s.ck = false; s.dd = depth + 1;
-      st.steps.unshift(...w.map((p) => ({ type: 'walk', to: p, dd: depth + 1 })));
-    }
+    const s = st.steps[0];
+    if (!s || s.type !== 'walk' || s.ck) return;
+    s.ck = true;
+    const w = detour(st.ch.root.position, s.to);
+    if (w.length) st.steps.unshift(...w.map((p) => ({ type: 'walk', to: p, ck: true })));
   }
   const walk = (to) => ({ type: 'walk', to });
   const nearAisle = (z) => Math.max(0, Math.min(lastAisle(), Math.round((z - AISLE_Z) / ROW_D)));
@@ -859,7 +829,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   function coffeeSpot(st) {
     const v = tc ? new THREE.Vector3(COFFEE.x - Math.cos(COFFEE.yaw) * ((st.seed % 2) - 0.5), 0, COFFEE.z + Math.sin(COFFEE.yaw) * ((st.seed % 2) - 0.5))
       : new THREE.Vector3(9.3, 0, 0.2 + (st.seed % 2));
-    return obs.length ? freeSpot(v) : v;
+    return freeSpot(v);
   }
   const placeYaw = (at) => (at === 'board' ? -Math.PI / 2 : Math.atan2(0.66, -0.75));
 
@@ -950,9 +920,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       return new THREE.Vector3(to.x + DESK_ROW[n % 5], 0, AISLE_Z + (to.z || 0) - 0.35 + (n >= 5 ? 0.8 : 0));
     }
     const p = to.ch.root.position, o = RING[n % RING.length];
-    const v = new THREE.Vector3(Math.max(LEFT_X + 0.9, p.x + o[0]), 0, p.z + o[1]);
-    return obs.length ? freeSpot(v) : v;
+    const v = new THREE.Vector3(Math.min(12.2, Math.max(LEFT_X + 0.9, p.x + o[0])), 0, Math.min(8.4, Math.max(BACK_Z + 0.9, p.z + o[1])));
+    return freeSpot(v); // on the floor, never inside a blocked area, a row desk or its chair
   }
+  let chaseSeq = 0;
   function startConversation(from, to, text) {
     const dur = Math.min(11, Math.max(5, 3 + text.length * 0.045));
     const toName = to.agent.name.split(' ')[0];
@@ -964,14 +935,21 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     for (const [f, c] of to.crowd) if (f.talkTo !== to || !f.steps.length || c.until < t0) to.crowd.delete(f);
     const used = new Set([...to.crowd.values()].map((c) => c.n)); let n = 0; while (used.has(n)) n++;
     to.crowd.set(from, { n, until: t0 + 90 }); from.talkTo = to;
-    const spot = () => talkSpot(to, n);
+    // Two people on their way to each other: the one who set off later waits where they are and the other comes (two
+    // chases after each other's moving spot would run off together).
+    const chase = { type: 'chase', to: null, who: to, max: 30, tries: 0, seq: ++chaseSeq };
+    const spot = () => {
+      const c = to.steps.find((x) => x.type === 'chase');
+      return c && c.who === from && c.seq < chase.seq ? from.ch.root.position.clone() : talkSpot(to, n);
+    };
     const face = () => { const a = from.ch.root.position, b = to.ch.root.position; return Math.atan2(b.x - a.x, b.z - a.z); };
     const route = (p, g) => { const a = nearAisle(p.z), b = nearAisle(g.z); return a !== b ? [walk(V(p.x, zA(a))), ...cross(p.x, a, b)] : null; };
     const out = leave(from, nearAisle(spot().z));
     const say = { type: 'wait', dur, pose: 'talk', yaw: face,
       onStart: () => { const t = performance.now() / 1000; showBubble(from, text, dur * 1000, `to ${toName}`); to.listenUntil = t + dur; from.talkingUntil = to.talkingUntil = t + dur; to.holdUntil = Math.max(to.holdUntil || 0, t + dur); },
       onEnd: () => { if (from.talkTo === to) from.talkTo = null; to.crowd.delete(from); } };
-    from.steps = [...out, { type: 'chase', to: spot, who: to, max: 30, tries: 0, route }, say, { type: 'plan', make: () => homeSteps(from) }];
+    chase.to = spot; chase.route = route;
+    from.steps = [...out, chase, say, { type: 'plan', make: () => homeSteps(from) }];
   }
 
   function tickCharacter(st, dt, t) {
@@ -992,14 +970,14 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       st.nextBreak -= dt;
       if (st.nextBreak <= 0) {
         st.nextBreak = 70 + Math.random() * 120;
-        const spot = coffeeSpot(st);
-        st.steps = [...leave(st, lastAisle()), walk(spot), { type: 'wait', dur: 7, pose: 'coffee', yaw: COFFEE.yaw }, ...homeSteps(st, lastAisle(), spot.x)];
+        const spot = coffeeSpot(st), ca = nearAisle(spot.z); // by the aisle nearest the spot: never across a row
+        st.steps = [...leave(st, ca), walk(spot), { type: 'wait', dur: 7, pose: 'coffee', yaw: COFFEE.yaw }, ...homeSteps(st, ca, spot.x)];
       }
     }
     if (st.status !== 'idle' && st.steps.some((s) => s.pose === 'coffee')) { st.steps = st.steps.filter((s) => s.pose !== 'coffee'); st.hurry = true; }
 
     for (let k = 0; k < 4 && st.steps[0] && (st.steps[0].type === 'arrive' || st.steps[0].type === 'plan'); k++) { const s0 = st.steps.shift(); if (s0.type === 'arrive') st.at = s0.at; else st.steps.unshift(...s0.make()); } // 'plan': a route worked out when its turn comes
-    if (obs.length) guardSteps(st);
+    guardSteps(st);
     const step = st.steps[0];
     let yawTarget = 0;
     if (!step) {
@@ -1017,7 +995,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       st.mode = 'walk';
       const goal = step.to(), d = goal.clone().sub(root.position), dist = d.length(), sp = 8.5 * dt;
       const more = step.route && step.tries < 3 && dist > 2.4 ? step.route(root.position, goal) : null;
-      const round = !more && obs.length && (step.dtries || 0) < 6 && dist > 0.3 ? detour(root.position, goal) : null;
+      const round = !more && (step.dtries || 0) < 6 && dist > 0.3 ? detour(root.position, goal) : null;
       if (more) { step.tries++; st.steps.unshift(...more); yawTarget = root.rotation.y; }
       else if (round && round.length) { step.dtries = (step.dtries || 0) + 1; st.steps.unshift(...round.map((p) => walk(p))); yawTarget = root.rotation.y; }
       else {
@@ -1804,6 +1782,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       if (centreSlug) onWall.splice(Math.floor(((tiers === 1 ? n : perTier) - 1) / 2), 0, agents.find((a) => a.slug === centreSlug));
       labelsEl.classList.toggle('crowded', n > 6); // big team: name only on the tags, the role shows on hover
       plan.rows = rows; plan.side = rows === 1 ? 1.9 : gap / 2;
+      Object.assign(COFFEE, coffeeFor(rows)); Object.assign(k.spots.coffee, COFFEE); // the theme's coffee spot may follow the rows
       plan.rowX = Array.from({ length: rows }, () => []);
       centreFoot = null;
       let ri = 0;
@@ -1864,7 +1843,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
         drawScreen(st);
       });
       order = agents.map((a) => a.slug);
-      rebuildObs();
+      rowAreas();
       const lk = [...stations.values()].map((s) => `${s.slug}:${s.x.toFixed(2)},${s.z.toFixed(2)},${s.centre ? 1 : 0}`).join('|');
       if (lk !== layoutKey) { layoutKey = lk; hook('layout'); } // the theme may follow the desks (k.desks(), k.centre(), k.frontZ())
       const h = JSON.stringify([agents.map((a) => [a.slug, a.tickets]), extra.jira && extra.jira.error, new Date().getMinutes()]);
@@ -1921,6 +1900,16 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
     // Someone from another room beams in beside `to`, says `text`, and leaves: { id, name, color, from, to, text, dur }
     visitor(o) { try { return addVisitor(o || {}); } catch (e) { console.warn('visitor', e); return false; } },
     setLight(mode) { lightMode = mode; dayNow = -1; applyLight(); },
+    // The floor as the walks see it, for tests (paths.test.mjs): blocked areas, row desks, aisles and the places
+    // people go, in world x/z.
+    paths() {
+      const r = (o) => [o.x0, o.z0, o.x1, o.z1].map((v) => +v.toFixed(3)), p = (v) => [+v.x.toFixed(3), +v.z.toFixed(3)];
+      const sts = [...stations.values()], c = sts.find((s) => s.centre);
+      return { rows: plan.rows, aisles: plan.rowX.map((_, i) => zA(i)), rowX: plan.rowX, side: plan.side, room: ROOM,
+        obs: obs.map(r), desks: rowObs.map(r), stand: rowSpots.map(r), coffee: [COFFEE.x, COFFEE.z],
+        seats: sts.map((s) => ({ seat: p(seatOf(s)), side: p(sideOf(s)), centre: !!s.centre })),
+        spots: [0, 1, 2, 3].flatMap((i) => [p(placeSpot({ idx: i }, 'board')), p(placeSpot({ idx: i }, 'white'))]), centreFoot: c && centreFoot ? r(centreFoot) : null };
+    },
     order: () => order,
     // Stops drawing entirely (used when the Herdr tab showing the office is not on screen).
     setPaused(paused) { renderer.setAnimationLoop(paused ? null : frame); resumeSpeed(); },

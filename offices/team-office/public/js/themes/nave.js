@@ -658,6 +658,9 @@ const CAN = { x: -9.0, z: 6.05, yaw: 1.12 }; // the coffee spot: people stand wi
 const BAR = { x: -10.75, z: 5.75 }; // the replicator in the middle of the curved mess bar behind the spot
 const CLOCK = { x: 12.05, z: -1.1 }; // the launch countdown clock standing on the deck, like the one at the press site
 const HOLO = { x: 4.7, z: 6.3 };
+const HOLO_BLOCK = [HOLO.x - 1.2, HOLO.z - 1.15, HOLO.x + 1.2, HOLO.z + 1.15];
+const CART = { x: 7.3, z: 2.5 }; // the propellant cart, right of the dais
+const CART_BLOCK = [CART.x - 0.95, CART.z - 0.8, CART.x + 0.95, CART.z + 0.8];
 const CX = -0.9, centreZ = (rows) => (rows === 1 ? 2.1 : 5.6); // the command dais (desk centre)
 const LIFT = 0.26;
 const EMPTY_FOOT = { x0: -2.35, x1: 2.35, z0: -2.95, z1: 3.1 }; // the command dais's footprint round its desk centre (with or without a captain)
@@ -1310,12 +1313,15 @@ export default {
         P.cyl(0.05, 0.19, 0.17, M.copper, lx, 2.88, BZ + 0.2, 0, 0, 0, 20, true);
         P.sph(0.065, G(0xffc27a, 3.0), lx, 2.81, BZ + 0.2);
       }
-      // the high table beside the spot (behind and to the right, seen from the default camera) with cups and stools
+      // the high table beside the spot (behind and to the right, seen from the default camera) with cups and stools:
+      // its own meshes, as layout hides it with a third row of desks (it would stand in front of the left desk)
+      P.flush(room);
       const tx = 1.55, tz = 0.6;
       P.cyl(0.42, 0.42, 0.045, M.wood, tx, 1.06, tz, 0, 0, 0, 32); P.tor(0.42, 0.012, G(AMBER, 1.6), tx, 1.06, tz, Math.PI / 2, 0, 0, TAU, 6, 40);
       P.cyl(0.04, 0.04, 1.04, M.chrome, tx, 0.52, tz, 0, 0, 0, 10); P.cyl(0.26, 0.28, 0.04, M.dark, tx, 0.02, tz, 0, 0, 0, 24);
       for (const [dx, dz] of [[-0.18, 0.08], [0.16, -0.1], [0.05, 0.2]]) { P.cyl(0.05, 0.042, 0.1, M.white, tx + dx, 1.13, tz + dz, 0, 0, 0, 14); P.tor(0.032, 0.01, M.white, tx + dx + 0.055, 1.13, tz + dz, 0, 0, 0, TAU, 6, 10); P.cyl(0.042, 0.042, 0.005, k.mat(0x3b2412, { roughness: 0.2 }), tx + dx, 1.176, tz + dz, 0, 0, 0, 14); }
       for (const [sx, sz] of [[0.62, 0.0], [0.2, 0.75]]) { P.cyl(0.18, 0.18, 0.06, M.red, tx + sx, 0.78, tz + sz, 0, 0, 0, 20); P.cyl(0.03, 0.03, 0.75, M.chrome, tx + sx, 0.38, tz + sz, 0, 0, 0, 8); P.tor(0.15, 0.012, M.chrome, tx + sx, 0.3, tz + sz, Math.PI / 2, 0, 0, TAU, 6, 20); P.cyl(0.16, 0.18, 0.03, M.dark, tx + sx, 0.015, tz + sz, 0, 0, 0, 16); }
+      my.canTable = P.flush(room);
       // a warm round mat under the spot
       const rt = canvasTex(256, 256), rgc = rt.ctx; rgc.translate(128, 128);
       const rgr = rgc.createRadialGradient(0, 0, 10, 0, 0, 126); rgr.addColorStop(0, 'rgba(120,70,30,.6)'); rgr.addColorStop(0.85, 'rgba(90,50,20,.5)'); rgr.addColorStop(0.9, 'rgba(255,170,80,.75)'); rgr.addColorStop(0.95, 'rgba(90,50,20,.45)'); rgr.addColorStop(1, 'rgba(90,50,20,0)');
@@ -1336,7 +1342,8 @@ export default {
         const xs = [], zs = []; for (const lx of [a, b]) for (const lz of [-2.2, -1.5]) { xs.push(wx(lx, lz)); zs.push(wz(lx, lz)); }
         k.block(Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs));
       }
-      k.block(wx(tx, tz) - 0.45, wz(tx, tz) - 0.45, wx(tx, tz) + 0.45, wz(tx, tz) + 0.45);
+      my.canTableAt = [wx(tx, tz) - 0.45, wz(tx, tz) - 0.45, wx(tx, tz) + 0.45, wz(tx, tz) + 0.45];
+      my.canTableBlock = k.block(...my.canTableAt);
       // planters on the bulkhead and hydroponics in the corner (trays of fan leaves behind glass)
       const hx = -12.35, hz = 8.5;
       Cy(0.42, 0.46, 0.3, M.mid, hx, 0.15, hz, { seg: 20, cast: true });
@@ -1362,9 +1369,10 @@ export default {
       room.add(leaves);
     }
 
-    // ---- holo table: planet hologram, the ship in orbit, a scan ring
+    // ---- holo table: planet hologram, the ship in orbit, a scan ring (all its parts: layout hides them with a third
+    // row of desks, whose aisle it would stand on)
     {
-      const HX = HOLO.x, HZ = HOLO.z;
+      const HX = HOLO.x, HZ = HOLO.z, n0 = room.children.length;
       Cy(0.62, 0.85, 0.95, M.dark, HX, 0.475, HZ, { seg: 6, cast: true });
       Cy(1.18, 1.0, 0.16, M.mid, HX, 1.03, HZ, { seg: 6, cast: true });
       Ring(0.86, 0.02, G(CYAN, 2), HX, 0.06, HZ);
@@ -1395,7 +1403,8 @@ export default {
       g.fillStyle = 'rgba(56,214,255,.6)'; g.font = '700 26px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('HERD PRIME · HABITABLE', 0, -170);
       const decal = Pl(4.2, 4.2, new THREE.MeshBasicMaterial({ map: t.tex, transparent: true, depthWrite: false, toneMapped: false, blending: THREE.AdditiveBlending }), HX, 0.014, HZ, 0, -Math.PI / 2);
       decal.rotation.set(-Math.PI / 2, 0, 0);
-      k.block(HX - 1.2, HZ - 1.15, HX + 1.2, HZ + 1.15);
+      my.holoParts = room.children.slice(n0);
+      my.holoBlock = k.block(...HOLO_BLOCK);
     }
     // ---- transporter pad in the front right corner, with supply crates beside it
     {
@@ -1471,7 +1480,7 @@ export default {
       k.block(x - 0.78, z - 0.78, x + 0.78, z + 0.78);
     }
     {
-      const P = new Parts(), cx = 7.3, cz = 2.5, ry = -0.5;
+      const P = new Parts(), cx = CART.x, cz = CART.z, ry = -0.5;
       P.push(cx, 0, cz, 0, ry, 0);
       P.rbox(1.5, 0.1, 0.85, 0.02, M.gun, 0, 0.3, 0); P.box(1.52, 0.03, 0.87, M.hazardS, 0, 0.36, 0);
       for (const [dx, dz] of [[-0.6, -0.33], [0.6, -0.33], [-0.6, 0.33], [0.6, 0.33]]) { P.box(0.06, 0.2, 0.06, M.dark, dx, 0.16, dz); P.cyl(0.08, 0.08, 0.06, M.black, dx, 0.08, dz, Math.PI / 2, 0, 0, 12); }
@@ -1484,8 +1493,8 @@ export default {
       }
       P.box(1.3, 0.04, 0.02, M.black, 0, 0.78, 0.18); P.box(1.3, 0.04, 0.02, M.black, 0, 0.78, -0.18);
       P.pl(0.7, 0.16, signMat(k, 'PROPELENTE', '#38d6ff'), 0, 0.3, 0.44);
-      P.pop(); P.flush(room);
-      k.block(cx - 0.95, cz - 0.8, cx + 0.95, cz + 0.8);
+      P.pop(); my.cartParts = P.flush(room); // the propellant cart: layout hides it with a third row of desks (it stands on one)
+      my.cartBlock = k.block(...CART_BLOCK);
     }
     {
       const pts = []; // two rows of amber studs, a gentle curve from the dais's side to the cantina's mat
@@ -1753,6 +1762,14 @@ export default {
       if (!my.emptyBlock) my.emptyBlock = k.block();
       if (my.emptyBlock) { if (show) my.emptyBlock.set(CX + f.x0, ez + f.z0, CX + f.x1, ez + f.z1); else my.emptyBlock.set(); }
     }
+    // a third row of desks (a big team without a captain): the propellant cart would stand on one of its desks, the
+    // holo table on its aisle and the cantina's high table in front of its left desk, so they go, with their blocked
+    // areas
+    const three = nRows > 2;
+    for (const o of [...(my.holoParts || []), ...(my.cartParts || []), ...(my.canTable || [])]) o.visible = !three;
+    if (my.canTableBlock) { if (three) my.canTableBlock.set(); else my.canTableBlock.set(...my.canTableAt); }
+    if (my.holoBlock) { if (three) my.holoBlock.set(); else my.holoBlock.set(...HOLO_BLOCK); }
+    if (my.cartBlock) { if (three) my.cartBlock.set(); else my.cartBlock.set(...CART_BLOCK); }
     my.linesKey = ''; my.flAt = -9;
   },
 
