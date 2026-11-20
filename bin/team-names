@@ -15,7 +15,8 @@ __OWNER__'s own work: it says what was done, never who on the team did it.
 How to write instead: say what was done, in the first person or with no subject ("I checked", "the deploy was
 rolled back"), never "Daniel did X", "according to Lucía", "the QA agent".
 
-The check also runs by itself (a hook of Claude Code) before a commit, a pull request, a Jira, Slack, Gmail or Google
+In the team's own sessions (Claude Code started with --agent <persona>; the owner's sessions are not checked) the
+check also runs by itself (a hook of Claude Code) before a commit, a pull request, a Jira, Slack, Gmail or Google
 Docs write, a text typed into a web page, and before a document is written outside the office folders. __OWNER__ turns
 that on once per computer (agents do not run these):
   team-names install                   adds the hook to every Claude Code account on this computer (a backup is kept)
@@ -102,10 +103,30 @@ def outgoing(tool, inp):
         if READS.match(s) and s != "find_and_replace_doc": return None
         return f"what {short} writes", "\n".join(leaves(inp))
     return None
+def agent_slug():
+    """The persona this Claude Code session runs as (`claude ... --agent <slug>` among our parent processes), or ''.
+    The check is for the team's agents; the owner's own sessions (and Zeus's helpers without --agent) are not stopped."""
+    import subprocess
+    slugs = set()
+    for f in glob.glob(f"{HOME}/.omniloy-*/team.json"):
+        try: slugs |= {str(p.get("slug")) for p in json.load(open(f, encoding="utf-8")).get("personas") or []}
+        except Exception: pass
+    pid = os.getppid()
+    for _ in range(12):
+        try: out = subprocess.run(["/bin/ps", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception: return ""
+        if not out: return ""
+        ppid, _, args = out.partition(" "); a = args.split()
+        if "--agent" in a and a.index("--agent") + 1 < len(a) and a[a.index("--agent") + 1] in slugs: return a[a.index("--agent") + 1]
+        try: pid = int(ppid)
+        except ValueError: return ""
+        if pid <= 1: return ""
+    return ""
 def hook():
     try:
         ev = json.load(sys.stdin); got = outgoing(str(ev.get("tool_name") or ""), ev.get("tool_input") or {})
         hits = find(got[1]) if got else []
+        if hits and not agent_slug(): hits = []   # not a team agent's session: the rule is the team's, not the owner's
     except Exception: sys.exit(0)   # a broken check must never stop the work
     if hits:
         sys.stderr.write(f"BLOCKED by team-names: {got[0]} leaves the office and names someone on the team: {', '.join(hits)}. {ADVICE}\n"); sys.exit(2)
@@ -147,7 +168,7 @@ elif cmd == "real":
     words = a[1].strip()
     if not why.strip(): sys.exit('--why is required: who this real person is, e.g. --why "contact at the client"')
     if len(words) < 6 or " " not in words: sys.exit('register the words as they appear in the text, with something that tells the person apart: "Pablo García", "Hola Pablo", "Dr. Elena Ruiz". A bare first name would let the team be named again.')
-    r = [x for x in reals() if x.get("words") != words] + [{"words": words, "why": why.strip(), "by": os.environ.get("HERDR_NAME") or os.environ.get("USER", ""), "at": datetime.datetime.now().isoformat(timespec="minutes")}]
+    r = [x for x in reals() if x.get("words") != words] + [{"words": words, "why": why.strip(), "by": agent_slug() or "owner", "at": datetime.datetime.now().isoformat(timespec="minutes")}]
     os.makedirs(os.path.dirname(REAL), exist_ok=True); json.dump(r, open(REAL, "w", encoding="utf-8"), indent=1, ensure_ascii=False); print(f'ok: "{words}" is a real person and passes the check')
 elif cmd in ("install", "status"):
     for d in accounts():
