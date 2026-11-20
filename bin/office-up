@@ -2,7 +2,8 @@
 """office-up [--dry] [--before <ISO time>] [--wait <seconds>]   bring the office back after a reboot or a crash.
 
   1. Floors: every office server that does not answer is started (office-restart <port>, which keeps page tokens).
-  2. Watchdog: `team-watch run` is started again if it is not running (in the "watchdog" terminal).
+  2. Watchdog: `team-watch run` is started again if it is not running: through its LaunchAgent
+     (com.omniloy.team-watch) when that is installed, else in the "watchdog" terminal.
   3. People: everyone whose Herdr terminal is still there but fell back to a plain shell (what Herdr leaves after a
      reboot or when the agent died) is started again IN THEIR PREVIOUS CONVERSATION (`--resume <session>`), with a
      message that says what happened. They keep everything they knew; background workflows and subagents did not
@@ -16,7 +17,10 @@
   --wait S    wait up to S seconds for Herdr to answer first (default 0; the login job uses 600)
 Safe to run any time: what is already running is not touched. Log of the login job: ~/.omniloy-team/logs/office-up.log"""
 import json, os, sys, glob, re, subprocess, time, datetime
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
 HOME = os.path.expanduser("~"); BIN = f"{HOME}/.local/bin"; HC = f"{BIN}/hc"
+WATCH_AGENT = f"{HOME}/Library/LaunchAgents/com.omniloy.team-watch.plist"
 SHELLS = {"zsh", "bash", "sh", "fish", "login", "-zsh", "-bash"}
 NOTE = ("The Mac restarted (or your terminal stopped) and this conversation was interrupted; it has just been resumed. "
         "Background tasks, workflows, subagents and monitors you had running did not survive. Check what you were "
@@ -72,7 +76,10 @@ def dead(x):
 
 # 2. watchdog
 if os.path.exists(f"{BIN}/team-watch") and not re.search(r"^\S*python\S*\s+\S*team-watch run", sh("ps", "-axo", "command").stdout, re.M):
-    if "watchdog" in R and R["watchdog"].get("state") == "live" and dead(R["watchdog"]):
+    if os.path.exists(WATCH_AGENT):   # launchd keeps it alive; it only needs a nudge
+        log("watchdog is not running: asking launchd to start it")
+        if not DRY: sh("launchctl", "kickstart", f"gui/{os.getuid()}/com.omniloy.team-watch")
+    elif "watchdog" in R and R["watchdog"].get("state") == "live" and dead(R["watchdog"]):
         log("watchdog is not running: starting it in its terminal")
         if not DRY: sh(HC, "send", "watchdog", "--", "team-watch run")
     else:
@@ -80,31 +87,10 @@ if os.path.exists(f"{BIN}/team-watch") and not re.search(r"^\S*python\S*\s+\S*te
         if not DRY: sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", "watchdog", "--cwd", f"{HOME}/.omniloy-team", "--", f"{BIN}/team-watch", "run")
 
 # 3. people
-def cfgdir(cmd):
-    """Where this runtime keeps its conversations: CLAUDE_CONFIG_DIR, also when set by a wrapper script."""
-    p = cmd if os.path.isabs(cmd) else (sh("/usr/bin/which", cmd).stdout.strip() or cmd)
-    try:
-        m = re.search(r'CLAUDE_CONFIG_DIR="?([^"\n]+)"?', open(p, errors="ignore").read(4000))
-        if m: return os.path.expandvars(m.group(1).replace("$HOME", HOME))
-    except Exception: pass
-    return os.environ.get("CLAUDE_CONFIG_DIR") or f"{HOME}/.claude"
-def last_session(cmd, cwd, slug):
-    d = f"{cfgdir(cmd)}/projects/" + re.sub(r"[^A-Za-z0-9]", "-", cwd)
-    best = (0, None)
-    for f in glob.glob(f"{d}/*.jsonl"):
-        m = os.path.getmtime(f)
-        if m >= BEFORE or m <= best[0]: continue
-        try:
-            with open(f, errors="ignore") as h: head = "".join(h.readline() for _ in range(8))
-        except Exception: continue
-        if f'"agentSetting":"{slug}"' in head or f'"agentSetting":"{slug}-' in head: best = (m, os.path.basename(f)[:-6])
-    return best
+def last_session(cmd, cwd, slug): return L.last_session(cmd, cwd, slug, BEFORE)
 spaces = json.loads(sh(f"{BIN}/herdr-app", "ls").stdout or "{}").get("spaces", [])
 n = 0
-for tj in sorted(glob.glob(f"{HOME}/.omniloy-*/team.json")):
-    team = os.path.dirname(tj)
-    try: t = json.load(open(tj))
-    except Exception: continue
+for team, t, _ in L.teams(admin=True):   # the floors and the admin (Business is retired)
     prefix = t.get("tabPrefix", "team-")
     sp = [x["id"] for x in spaces if any(tb["id"].startswith(prefix) for tb in x.get("tabs", []))]
     for p in t.get("personas", []):

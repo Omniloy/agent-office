@@ -25,16 +25,10 @@ The rule: a card is always held by exactly one teammate, the one who has to act 
 hold cards that are not waiting, the watchdog tells your Product lead. So before you stop: pass it, mark it
 waiting, or finish it. Store: ~/.omniloy-team/cards.json"""
 import json, os, sys, fcntl, datetime, subprocess
-HOME = os.path.expanduser("~"); STORE = f"{HOME}/.omniloy-team/cards.json"; LOG = f"{HOME}/.omniloy-team/cards-log.jsonl"
-DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz", f"{HOME}/.omniloy-crm", f"{HOME}/.omniloy-web", f"{HOME}/.omniloy-lab"]
-NAMES = {}
-for d in DIRS:
-    try: tj = json.load(open(f"{d}/team.json"))
-    except Exception: continue
-    ps = list(tj["personas"])
-    try: ps += json.load(open(f"{d}/temps.json"))
-    except Exception: pass
-    for p in ps: NAMES[p["herdrName"]] = {"team": tj.get("name", ""), "name": p["name"]}
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
+HOME = L.HOME; STORE = f"{L.SHARED}/cards.json"; LOG = f"{L.SHARED}/cards-log.jsonl"
+NAMES = {n: {"team": p["team"], "name": p["name"]} for n, p in L.people().items()}   # everyone on the floors, and their temps
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 def opts(args):
     o, pos, i = {}, [], 0
@@ -47,12 +41,10 @@ def opts(args):
 class Box:
     def __enter__(self):
         self.lock = open(STORE + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
-        try: self.d = json.load(open(STORE))
-        except Exception: self.d = {}
+        self.d = L.load(STORE, {})   # unreadable: stop here, never write an empty store over it
         return self.d
     def __exit__(self, et, *_):
-        if et is None:
-            tmp = STORE + ".tmp"; json.dump(self.d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STORE)
+        if et is None: L.save(STORE, self.d)
         fcntl.flock(self.lock, fcntl.LOCK_UN)
 def log(key, ev, **kw): open(LOG, "a").write(json.dumps({"ts": now(), "key": key, "ev": ev, **kw}, ensure_ascii=False) + "\n")
 def who(o, k="as"):
@@ -64,6 +56,9 @@ def line(k, c): return f'{k:10} {c["owner"]:9} {("OWNER APPROVES: " if c["waitin
 a = sys.argv[1:]
 if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit(0)
 cmd = a[0]; o, pos = opts(a[1:])
+USAGE = {"log": "team-card log KEY", "take": 'team-card take KEY --as <you> ["title"]', "wait": 'team-card wait KEY --as <you> "what/who outside the team"',
+         "approval": 'team-card approval KEY --as <you> "PR links"', "resume": "team-card resume KEY --as <you>", "done": "team-card done KEY --as <you>"}
+if cmd in USAGE and not pos: sys.exit("usage: " + USAGE[cmd])
 if cmd == "mine":
     me = pos[0] if pos else who(o)
     with Box() as d: mine = {k: c for k, c in d.items() if c["owner"] == me}
@@ -96,8 +91,8 @@ elif cmd == "pass":
         prev = d.get(key, {})
         d[key] = {"owner": to, "team": NAMES[to]["team"], "since": now(), "title": o.get("title") or prev.get("title", ""), "waiting": None}
     log(key, "pass", by=me, to=to, msg=msg)
-    r = subprocess.run([f"{HOME}/.local/bin/hc", "send", to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} "..." or hand the card back with team-card pass.)'], capture_output=True, text=True)
-    print(f"{key} passed to {to}" + ("; they were told." if r.returncode == 0 else "; they are not running now, they will see it in `team-card mine` when they start."))
+    r = L.deliver(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card")
+    print(f"{key} passed to {to}; " + L.said(r, to) + ("." if r == "delivered" else " (it is also in `team-card mine`)."))
 elif cmd == "wait":
     me = who(o); key = pos[0]; on = " ".join(pos[1:]) or sys.exit("say what or who outside the team you are waiting for")
     if not o.get("req") and on.split()[0].lower().strip(":,.") in NAMES: sys.exit(f"{on.split()[0]} is a teammate: hand the card over instead (team-card pass {key} {on.split()[0].lower()} --from {me} \"...\"), so it is theirs and they know.")

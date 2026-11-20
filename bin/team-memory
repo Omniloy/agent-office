@@ -13,9 +13,11 @@ their own file. Sizes are in tokens, estimated as characters / charsPerToken.
 Config ~/.omniloy-team/memory-config.json (all optional): {"limitTokens": 20000, "targetTokens": 10000,
 "charsPerToken": 4, "repeatAfter": 21600 (seconds between reminders to the same person), "off": false}.
 State ~/.omniloy-team/memory-watch.json. Local reads only."""
-import json, os, sys, subprocess, time, datetime, hashlib, shutil, glob
-HOME = os.path.expanduser("~"); T = f"{HOME}/.omniloy-team"; STATE = f"{T}/memory-watch.json"; HC = f"{HOME}/.local/bin/hc"
-DIRS = sorted(os.path.dirname(f) for f in glob.glob(f"{HOME}/.omniloy-*/team.json"))   # every team folder on this machine
+import json, os, sys, subprocess, time, datetime, hashlib, shutil
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
+HOME = L.HOME; T = L.SHARED; STATE = f"{T}/memory-watch.json"; HC = L.HC
+DIRS = L.team_dirs(admin=True)   # every floor's team folder, and the admin's
 DEF = {"limitTokens": 20000, "targetTokens": 10000, "charsPerToken": 4, "repeatAfter": 6 * 3600, "off": False}
 def rj(p, d):
     try: return json.load(open(p))
@@ -64,15 +66,15 @@ def check(dry=False):
         print(f'{datetime.datetime.now():%H:%M:%S} MEMORY {n}: {kb(p["size"])} (limit {kb(c["limitTokens"])})')
         if dry: continue
         copy = archive(p, st); s["last"] = now; s["pings"] = s.get("pings", 0) + 1
-        msg = (f"Memory check: your notes file {p['file']} is about {kb(p['size'])} and the limit is {kb(c['limit'])}. You read all of it at every start and __OWNER__ reads it on his phone, "
+        msg = (f"Memory check: your notes file {p['file']} is about {kb(p['size'])} and the limit is {kb(c['limitTokens'])}. You read all of it at every start and __OWNER__ reads it on his phone, "
                f"so every extra line costs time and money each time. A full copy was just saved at {copy}: nothing is lost, and you can look things up there later (search it, do not read it whole). "
-               f"Rewrite the file now, in place, under {kb(c['target'])}, with only two sections. "
+               f"Rewrite the file now, in place, under {kb(c['targetTokens'])}, with only two sections. "
                f"1) Open now: one line per thing in progress, with its state and who you are waiting on. Remove the line when it closes. "
                f"2) How things work here: reusable lessons only, at most about 25 short bullets; merge or drop bullets instead of adding. "
                f"Nothing else: no dated entries, no history of finished work, no pasted output, tables or long explanations. A detail you still need stays where it already lives "
                f"(the ticket or pull request, the experiment folder, a report, the saved copy) and the notes keep a one-line pointer to it. No secrets. "
                f"From now on edit lines in place instead of appending. When it is done, carry on with your work; do not answer this message.")
-        subprocess.run([HC, "send", n, msg], capture_output=True)
+        L.deliver(n, msg, "team-memory")
     if not dry: save(st)
     return told
 a = sys.argv[1:] or ["status"]

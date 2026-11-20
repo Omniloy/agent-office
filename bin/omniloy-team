@@ -1,48 +1,81 @@
 #!/usr/bin/env python3
-"""omniloy-team start [herdrName...]   start team agents (each on its runtime from team.json) in a Herdr "Team" space
+"""omniloy-team start [--fresh|--resume] [herdrName...]   start team agents (each on its runtime from team.json) in a Herdr "Team" space
 omniloy-team stop [herdrName...]      end them
 omniloy-team ls                       who's running, where
-omniloy-team runtime <name> <claude|codex>   switch a persona's runtime"""
-import json, os, sys, subprocess, re
-TEAM = os.path.expanduser(os.environ.get("OMNILOY_TEAM_DIR", "~/.omniloy-team")); CFG = f"{TEAM}/team.json"
-t = json.load(open(CFG)); P = {p["herdrName"]: p for p in t["personas"]}
+omniloy-team runtime <name> <claude|codex>   switch a persona's runtime
+
+A lead (and anyone whose team.json entry has "resume": true) is started again IN THEIR LAST CONVERSATION
+(`--resume <session>`), so weeks of context are not lost: the session started here is remembered in
+<team>/sessions.json, else the newest conversation of that persona is found on disk. Everyone else starts a fresh
+shift. --fresh: everyone fresh. --resume: everyone who has a conversation resumes it. Codex people always start fresh."""
+import json, os, sys, subprocess, re, time, uuid, fcntl
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
+TEAM = os.path.expanduser(os.environ.get("OMNILOY_TEAM_DIR", "~/.omniloy-team")); CFG = f"{TEAM}/team.json"; SESS = f"{TEAM}/sessions.json"
+t = L.load(CFG, None) or sys.exit(f"no team here: {CFG}"); P = {p["herdrName"]: p for p in t["personas"]}
 PREFIX = t.get("tabPrefix", "team-"); SPACE = t.get("space", "Team")
 KICKOFF = (f"Start your shift: read {TEAM.replace(os.path.expanduser('~'), '~')}/PROTOCOL.md, team.json and your memory file, run your Jira sweep, "
            "and give __OWNER__ a short status (what's on your plate, what you're waiting on). Don't create or change any "
            "Jira tickets or code until __OWNER__ gives you a task.")
+RESUMED = ("You were started again (omniloy-team start) and this conversation was resumed: you keep everything you knew. Background tasks, "
+           "workflows and subagents did not survive. Check your cards (team-card mine {name}) and what is on disk, carry on, and give __OWNER__ a short status.")
 def sh(*a): return subprocess.run(a, capture_output=True, text=True)
 def running():
-    try: return {x.get("name"): x for x in json.loads(sh("hc","ls","--json").stdout)["terminals"]}
+    try: return {x.get("name"): x for x in json.loads(sh(L.HC, "ls", "--json").stdout)["terminals"]}
     except Exception: return {}
-a = sys.argv[1:] or ["start"]; cmd, names = a[0], a[1:] or list(P)
+class locked:   # the same lock team-person takes for team.json
+    def __enter__(self): self.f = open(f"{TEAM}/.team.lock", "w"); fcntl.flock(self.f, fcntl.LOCK_EX); return self
+    def __exit__(self, *_): self.f.close()
+def resume_id(p, argv):
+    """The conversation to resume for this persona, or None."""
+    s = (L.load(SESS, {}) or {}).get(p["herdrName"]) or {}
+    if s.get("id") and os.path.exists(L.session_file(argv[0], TEAM, s["id"])): return s["id"]
+    return L.last_session(argv[0], TEAM, p["slug"])[1]
+def remember(name, sid, rt):
+    with locked():
+        s = L.load(SESS, {}) or {}; s[name] = {"id": sid, "runtime": rt, "at": L.now()}; L.save(SESS, s)
+a = sys.argv[1:] or ["start"]; cmd = a[0]
+flags = {x for x in a[1:] if x.startswith("--")}; names = [x for x in a[1:] if not x.startswith("--")] or list(P)
+bad = [n for n in names if n not in P]
+if cmd in ("start", "stop") and bad: sys.exit(f"not on this team: {', '.join(bad)} (one of {', '.join(P)})")
 if cmd == "ls":
     r = running()
     for n, p in P.items(): print(f'{n:7} {p["name"]:16} {p["role"]:15} {p["runtime"]:16} {(r[n].get("status") or r[n].get("state") or "running") if n in r else "-"}')
 elif cmd == "stop":
-    for n in names: print(n, "stopped" if sh("hc","kill",n).returncode == 0 else "not running")
+    for n in names: print(n, "stopped" if sh(L.HC, "kill", n).returncode == 0 else "not running")
 elif cmd == "runtime":
-    n, rt = a[1], a[2]; assert rt in t["runtimes"], f"runtime must be one of {list(t['runtimes'])}"
-    P[n]["runtime"] = rt; json.dump(t, open(CFG,"w"), indent=2, ensure_ascii=False); print(f"{n} -> {rt} (restart it to apply)")
+    if len(a) < 3: sys.exit("usage: omniloy-team runtime <name> <runtime>")
+    n, rt = a[1], a[2]
+    with locked():
+        t = L.load(CFG, None); p = next((x for x in t["personas"] if x["herdrName"] == n), None) or sys.exit(f"{n} is not on this team")
+        if rt not in t["runtimes"]: sys.exit(f"runtime must be one of {list(t['runtimes'])}")
+        p["runtime"] = rt; L.save(CFG, t, indent=2)
+    print(f"{n} -> {rt} (restart it to apply)")
 elif cmd == "start":
-    ls = json.loads(sh("herdr-app","ls").stdout or "{}")
+    ls = json.loads(sh(f"{L.BIN}/herdr-app", "ls").stdout or "{}")
     # the team's space: the one that already holds this team's tabs (it may have been renamed), else by name
     sp = [x for x in ls.get("spaces",[]) if any(tb["id"].startswith(PREFIX) for tb in x.get("tabs",[]))] or [x for x in ls.get("spaces",[]) if x.get("name") == SPACE]
-    space = sp[0]["id"] if sp else json.loads(sh("herdr-app","do","space.new","--name",SPACE,"--folder",TEAM).stdout)["space"]
+    space = sp[0]["id"] if sp else json.loads(sh(f"{L.BIN}/herdr-app","do","space.new","--name",SPACE,"--folder",TEAM).stdout or "{}").get("space")
     r = running()
     for n in names:
         p = P[n]
         if n in r and r[n].get("state") == "live": print(f"{n} already running"); continue
         rt = t["runtimes"][p["runtime"]]
         argv = [x.replace("{slug}", p["slug"]).replace("{teamDir}", TEAM) for x in rt["argv"]]
+        how = "fresh"
         if rt.get("promptFromFile"):
             body = open(os.path.expanduser(f'~/.claude/agents/{p["slug"]}.md')).read().split("---", 2)[2]
             argv.append(body.strip() + "\n\n" + p.get("kickoff", KICKOFF))
         else:
-            argv.append(p.get("kickoff", KICKOFF))
-        res = sh("hc","run","--bg","--keep","--no-parent","--name",n,"--cwd",TEAM,
-                 "--label",f"herdr.space={space}","--label",f"herdr.tab={PREFIX}{n}",
+            want = "--fresh" not in flags and ("--resume" in flags or n == t.get("lead") or p.get("resume"))
+            sid = resume_id(p, argv) if want else None
+            if sid: argv += ["--resume", sid, RESUMED.format(name=n)]; how = f"resumed {sid[:8]}"
+            else: sid = str(uuid.uuid4()); argv += ["--session-id", sid, p.get("kickoff", KICKOFF)]
+        res = sh(L.HC,"run","--bg","--keep","--no-parent","--name",n,"--cwd",TEAM,
+                 *(["--label",f"herdr.space={space}"] if space else []),"--label",f"herdr.tab={PREFIX}{n}",
                  "--label",f'team.persona={p["slug"]}',"--label",f'team.runtime={p["runtime"]}',"--",*argv)
-        print(f'{n} ({p["name"]}, {p["runtime"]}):', "started" if res.returncode == 0 else "FAILED " + res.stderr.strip()[:200])
+        print(f'{n} ({p["name"]}, {p["runtime"]}, {how}):', "started" if res.returncode == 0 else "FAILED " + res.stderr.strip()[:200])
+        if res.returncode == 0 and not rt.get("promptFromFile"): remember(n, sid, p["runtime"])
         if res.returncode == 0 and p.get("tabName"):
-            import time; time.sleep(2); sh("herdr-app","do","tab.rename",json.dumps({"id": f"{PREFIX}{n}", "name": p["tabName"]}))
+            time.sleep(2); sh(f"{L.BIN}/herdr-app","do","tab.rename",json.dumps({"id": f"{PREFIX}{n}", "name": p["tabName"]}))
 else: print(__doc__)

@@ -87,6 +87,32 @@ def people(admin=False, temps=True):
                           "tabPrefix": t.get("tabPrefix", "team-")}
     return out
 
+# ---------------------------------------------------------------- conversations
+def cfgdir(cmd):
+    """Where this runtime keeps its conversations: CLAUDE_CONFIG_DIR, also when set by a wrapper script."""
+    p = cmd if os.path.isabs(cmd) else (subprocess.run(["/usr/bin/which", cmd], capture_output=True, text=True).stdout.strip() or cmd)
+    try:
+        m = re.search(r'CLAUDE_CONFIG_DIR="?([^"\n]+)"?', open(p, errors="ignore").read(4000))
+        if m: return os.path.expandvars(m.group(1).replace("$HOME", HOME))
+    except Exception: pass
+    return os.environ.get("CLAUDE_CONFIG_DIR") or f"{HOME}/.claude"
+def last_session(cmd, cwd, slug, before=None):
+    """(mtime, session id) of the newest Claude conversation of persona `slug` started in `cwd`, or (0, None)."""
+    import glob
+    before = before or time.time() + 60
+    d = f"{cfgdir(cmd)}/projects/" + re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    best = (0, None)
+    for f in glob.glob(f"{d}/*.jsonl"):
+        m = os.path.getmtime(f)
+        if m >= before or m <= best[0]: continue
+        try:
+            with open(f, errors="ignore") as h: head = "".join(h.readline() for _ in range(8))
+        except Exception: continue
+        if f'"agentSetting":"{slug}"' in head or f'"agentSetting":"{slug}-' in head: best = (m, os.path.basename(f)[:-6])
+    return best
+def session_file(cmd, cwd, sid):
+    return f"{cfgdir(cmd)}/projects/" + re.sub(r"[^A-Za-z0-9]", "-", cwd) + f"/{sid}.jsonl"
+
 # ---------------------------------------------------------------- delivery
 # `hc send` without --force refuses a program that is blocked on a menu (typing would answer the menu), and fails when
 # the person is not running. Either way the message is kept in ~/.omniloy-team/outbox/<name>.jsonl and typed in, in
@@ -121,18 +147,30 @@ def send_now(name, text, timeout=150):
     for s in (r.stdout, r.stderr):
         try: kind = json.loads(s.strip().splitlines()[-1]).get("error", {}).get("kind", ""); break
         except Exception: pass
-    return False, WHY.get(kind) or (r.stderr or r.stdout).strip()[:120] or f"hc exit {r.returncode}"
+    why = WHY.get(kind) or (r.stderr or r.stdout).strip()[:120] or f"hc exit {r.returncode}"
+    try:   # what failed and why (never the text): outbox/send.log
+        os.makedirs(OUTBOX, exist_ok=True)
+        with open(f"{OUTBOX}/send.log", "a") as f: f.write(json.dumps({"at": now(), "to": name, "rc": r.returncode, "kind": kind or why[:80]}) + "\n")
+    except Exception: pass
+    return False, why
 def _drain(name, items):
-    """Send queued items in order until one cannot go. Returns (left, why)."""
-    left, why, cut = [], "", time.time() - KEEP_DAYS * 86400
-    for i, x in enumerate(items):
-        if x.get("ts", 0) < cut:
-            os.makedirs(OUTBOX, exist_ok=True)
-            with open(f"{OUTBOX}/dropped.jsonl", "a") as f: f.write(json.dumps({"at": now(), "to": name, "queued": x.get("at"), "source": x.get("source", ""), "chars": len(x.get("text", ""))}) + "\n")
-            continue
-        ok, why = send_now(name, x["text"])
-        if not ok: left = items[i:]; break
-    return [x for x in left if x.get("ts", 0) >= cut], why
+    """Send queued items in order until they cannot go. Several waiting ones go as one paste (each `hc send` waits a few
+    seconds of quiet, and one message reads better than six). Returns (left, why)."""
+    cut = time.time() - KEEP_DAYS * 86400; keep = []
+    for x in items:
+        if x.get("ts", 0) >= cut: keep.append(x); continue
+        os.makedirs(OUTBOX, exist_ok=True)
+        with open(f"{OUTBOX}/dropped.jsonl", "a") as f: f.write(json.dumps({"at": now(), "to": name, "queued": x.get("at"), "source": x.get("source", ""), "chars": len(x.get("text", ""))}) + "\n")
+    why = ""
+    while keep:
+        n, size = 0, 0
+        while n < len(keep) and n < 6 and (n == 0 or size + len(keep[n]["text"]) < 8000): size += len(keep[n]["text"]); n += 1
+        group = keep[:n]
+        text = group[0]["text"] if n == 1 else f"{n} messages that waited while you were busy:\n\n" + "\n\n".join(f"{i + 1}. ({x.get('at', '')[11:16]}) {x['text']}" for i, x in enumerate(group))
+        ok, why = send_now(name, text)
+        if not ok: break
+        keep = keep[n:]
+    return keep, why
 def deliver(name, text, source=""):
     """Type `text` into <name>'s terminal, or queue it. Returns 'delivered' or 'queued: <why>'."""
     os.makedirs(OUTBOX, mode=0o700, exist_ok=True)

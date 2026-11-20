@@ -15,21 +15,26 @@ and the person the temp copied is told to read it.
 model and tools as <who>, appears in the team's Herdr space and 3D office, and is gone after release.
 Only the team's lead can hire or release. At most `maxTemps` (team.json, default 2) at once per team."""
 import json, os, sys, subprocess, datetime, time, fcntl
-HOME = os.path.expanduser("~"); HC = f"{HOME}/.local/bin/hc"
-DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz", f"{HOME}/.omniloy-crm", f"{HOME}/.omniloy-web", f"{HOME}/.omniloy-lab"]
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
+HOME = L.HOME; HC = L.HC
 def sh(*a): return subprocess.run(a, capture_output=True, text=True)
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
-def teams():
-    out = []
-    for d in DIRS:
-        try: out.append((d, json.load(open(f"{d}/team.json"))))
-        except Exception: pass
-    return out
+def teams(): return [(d, t) for d, t, _ in L.teams()]   # the floors' teams (Business is retired)
 def temps(d):
-    try: return json.load(open(f"{d}/temps.json"))
-    except Exception: return []
-def save(d, lst):
-    tmp = f"{d}/temps.json.tmp"; json.dump(lst, open(tmp, "w"), indent=2, ensure_ascii=False); os.replace(tmp, f"{d}/temps.json")
+    x = L.load(f"{d}/temps.json", [])   # unreadable: stop, never write a list without the temps it had
+    return x if isinstance(x, list) else []
+def save(d, lst): L.save(f"{d}/temps.json", lst, indent=2)
+def locked(d):
+    """Every read-modify-write of temps.json holds this (hire, done, release)."""
+    f = open(f"{d}/.temps.lock", "w"); fcntl.flock(f, fcntl.LOCK_EX); return f
+def tell(name, msg): return L.deliver(name, msg, "team-temp")
+def jira_key(t, key):
+    """Only a key of a Jira project this floor has gets the handover posted (CRM-1 on a floor without Jira does not)."""
+    return any(p.get("jiraProject") and key.startswith(p["jiraProject"] + "-") for p in t.get("projects", []))
+def still_live(name):
+    try: return json.loads(sh(HC, "get", name, "--json").stdout).get("state") == "live"
+    except Exception: return False
 def log(d, x): open(f"{d}/temps-log.jsonl", "a").write(json.dumps(x, ensure_ascii=False) + "\n")
 def opts(args):
     o, pos, i = {}, [], 0
@@ -104,9 +109,11 @@ elif cmd == "hire":
     if o["as"] != lead: sys.exit(f"only the team lead ({lead}) hires temps on {t.get('name')}")
     if who == lead: sys.exit("the lead is not cloned; hire a copy of the person who would do the task")
     base = next(p for p in t["personas"] if p["herdrName"] == who)
-    lock = open(f"{d}/.temps.lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)
-    cur = temps(d); cap = int(t.get("maxTemps", 2))
-    if len(cur) >= cap: sys.exit(f"{t.get('name')} already has {len(cur)} temps (limit {cap}). Release one first, or ask __OWNER__ to raise maxTemps.")
+    lock = locked(d)
+    cur = temps(d); cap = int(t.get("maxTemps", 2)); busy = [x for x in cur if x.get("state") not in ("done", "leaving")]
+    if len(busy) >= cap: sys.exit(f"{t.get('name')} already has {len(busy)} temps at work (limit {cap}). Release one first, or ask __OWNER__ to raise maxTemps.")
+    idle = [x["herdrName"] for x in cur if x.get("state") == "done"]
+    if idle: print(f"note: {', '.join(idle)} reported done and is still hired: read the handover and release it (team-temp release NAME --as {o['as']})", file=sys.stderr)
     if any(x.get("ticket") == o["ticket"] for x in cur): sys.exit(f"a temp is already on {o['ticket']}")
     taken = {p["herdrName"] for _, tt in teams() for p in tt["personas"]} | {x["herdrName"] for dd, _ in teams() for x in temps(dd)}
     n = 2
@@ -144,22 +151,22 @@ elif cmd == "hire":
     cur.append(x); save(d, cur)
     time.sleep(2); sh("herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": f"{first} {n} · temp"}))
     sh(f"{HOME}/.local/bin/team-card", "take", o["ticket"], "--as", name)   # the card is the temp's to move
-    sh(HC, "send", who, f"FYI from {lead}: {o['ticket']} is being done by a temp copy of you, `{name}`. Leave that card alone unless {lead} says otherwise; if `{name}` asks you something, answer briefly.")
-    print(f"hired {name} (copy of {who}) for {o['ticket']}. Talk to it with: hc send {name} \"...\". Let it go with: team-temp release {name} --as {lead}")
+    tell(who, f"FYI from {lead}: {o['ticket']} is being done by a temp copy of you, `{name}`. Leave that card alone unless {lead} says otherwise; if `{name}` asks you something, answer briefly.")
+    print(f"hired {name} (copy of {who}) for {o['ticket']}. Talk to it with: hc send {name} -- \"...\". Let it go with: team-temp release {name} --as {lead}")
 
 elif cmd == "done":
     if not pos: sys.exit('usage: team-temp done <temp> "one-line result"')
     d, t, x = find_temp(pos[0]); result = " ".join(pos[1:]) or "finished"
     bad = hcheck(d, x)
     if bad: sys.exit(f"not done yet: {bad}. Complete {short(hpath(d, x))} and run this again.")
-    if x.get("ticket"):
+    if x.get("ticket") and jira_key(t, x["ticket"]):
         r = sh(f"{HOME}/.local/bin/team-jira", "comment", x["ticket"], "Handover notes\n\n" + open(hpath(d, x)).read().split("\n", 1)[1].lstrip())
         print("handover posted on " + x["ticket"] if r.returncode == 0 else f"could not post the handover on {x['ticket']} ({(r.stderr or r.stdout).strip()[:120]}); paste it there yourself")
-    cur = temps(d)
+    lock = locked(d); cur = temps(d)
     for y in cur:
         if y["herdrName"] == x["herdrName"]: y["state"] = "done"; y["result"] = result; y["doneAt"] = now()
-    save(d, cur)
-    sh(HC, "send", x["hiredBy"], f'Temp {x["herdrName"]} says {x.get("ticket")} is finished: "{result}". Read the handover at {short(hpath(d, x))} (also posted on the card). Check it says what was created (users, test data, credentials and where they are kept) and what is left; ask the temp for anything missing BEFORE releasing, afterwards nobody can answer. If it is right, let the temp go with: team-temp release {x["herdrName"]} --as {x["hiredBy"]}. If not, tell it what is missing (hc send {x["herdrName"]} "...").')
+    save(d, cur); lock.close()
+    tell(x["hiredBy"], f'Temp {x["herdrName"]} says {x.get("ticket")} is finished: "{result}". Read the handover at {short(hpath(d, x))} (also posted on the card). Check it says what was created (users, test data, credentials and where they are kept) and what is left; ask the temp for anything missing BEFORE releasing, afterwards nobody can answer. If it is right, let the temp go with: team-temp release {x["herdrName"]} --as {x["hiredBy"]}. If not, tell it what is missing (hc send {x["herdrName"]} -- "...").')
     print(f'told {x["hiredBy"]}. Stay available until you are released.')
 
 elif cmd == "release":
@@ -167,16 +174,24 @@ elif cmd == "release":
     d, t, x = find_temp(pos[0])
     if o.get("as") not in (t.get("lead"), "__OWNER_ID__"): sys.exit(f"only the team lead ({t.get('lead')}) or __OWNER__ releases temps")
     bad = hcheck(d, x)
-    if (bad or x.get("state") != "done") and not o.get("no-handover"):
+    if (bad or x.get("state") not in ("done", "leaving")) and not o.get("no-handover"):
         why = bad or "the temp has not reported done"
-        sys.exit(f'not released: {why}. Ask it to finish its handover (hc send {x["herdrName"]} "Complete your handover and run team-temp done"). If the temp is broken and cannot write one, write what you know in {short(hpath(d, x))} yourself and use --no-handover "reason".')
+        sys.exit(f'not released: {why}. Ask it to finish its handover (hc send {x["herdrName"]} -- "Complete your handover and run team-temp done"). If the temp is broken and cannot write one, write what you know in {short(hpath(d, x))} yourself and use --no-handover "reason".')
     if o.get("no-handover"): x["noHandover"] = o["no-handover"] if isinstance(o["no-handover"], str) else "no reason given"
     x["handover"] = short(hpath(d, x))
-    sh(HC, "send", x["of"], f'Your temp {x["herdrName"]} has finished {x.get("ticket")} and is leaving. Its handover is at {x["handover"]}: read it now and copy into your memory file what you will need later (what it created, where credentials are kept, what is left). The card is yours again.')
+    tell(x["of"], f'Your temp {x["herdrName"]} has finished {x.get("ticket")} and is leaving. Its handover is at {x["handover"]}: read it now and copy into your memory file what you will need later (what it created, where credentials are kept, what is left). The card is yours again.')
     held = json.loads(sh(f"{HOME}/.local/bin/team-card", "ls", "--owner", x["herdrName"], "--json").stdout or "{}")
     for k in held: sh(f"{HOME}/.local/bin/team-card", "take", k, "--as", x["of"])   # anything the temp still held goes back to the owner
-    sh(HC, "kill", x["herdrName"]); time.sleep(1); sh(HC, "rm", x["herdrName"])
-    save(d, [y for y in temps(d) if y["herdrName"] != x["herdrName"]])
+    k = sh(HC, "kill", x["herdrName"]); time.sleep(1)
+    if k.returncode != 0 and still_live(x["herdrName"]):   # its session did not end: it stays listed, marked leaving
+        lock = locked(d); cur = temps(d)
+        for y in cur:
+            if y["herdrName"] == x["herdrName"]: y["state"] = "leaving"
+        save(d, cur); lock.close()
+        sys.exit(f'{x["herdrName"]}: its session could not be ended ({(k.stderr or k.stdout).strip()[:120]}); it stays listed as leaving. Run this again in a minute.')
+    sh(HC, "rm", x["herdrName"])
+    lock = locked(d)
+    save(d, [y for y in temps(d) if y["herdrName"] != x["herdrName"]]); lock.close()
     x["releasedAt"] = now(); x["releasedBy"] = o["as"]; log(d, x)
     print(f'{x["herdrName"]} released.')
 else: print(__doc__)
