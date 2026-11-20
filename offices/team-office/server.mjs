@@ -691,6 +691,7 @@ async function refreshAdmin() {
 }
 
 let refreshing = false, dirty = false;
+let lastRefreshError = '';
 async function refresh() {
   if (refreshing) { dirty = true; return; }
   refreshing = true;
@@ -734,6 +735,7 @@ async function refresh() {
       jira: { site: team.jira && team.jira.site, error: jira.error, updatedMs: jira.updatedMs },
       projects: team.projects.map((p) => ({ id: p.id, name: p.name, key: p.jiraProject })),
     };
+    lastRefreshError = '';
     const json = JSON.stringify(next);
     if (json !== stateJson) {
       stateJson = json;
@@ -742,7 +744,8 @@ async function refresh() {
       for (const res of clients) res.write(msg);
     }
   } catch (e) {
-    console.error('refresh failed:', e.message);
+    if (e.message !== lastRefreshError) console.error('refresh failed:', e.message); // once per new reason, not every 2.5 s
+    lastRefreshError = e.message;
   } finally {
     refreshing = false;
     if (dirty) { dirty = false; scheduleRefresh(); }
