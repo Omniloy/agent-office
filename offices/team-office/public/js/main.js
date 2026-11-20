@@ -474,6 +474,15 @@ const menuIsNew = (id) => (menuFresh.get(id) || 0) > Date.now();
 const FREE = /type something|tell (Claude|Codex)|what to do differently|chat about this/i; // the option that takes your own words
 const BOX = /^(\d\.\s+)(\[[ xX✓✔]\]|[☐☑◻◼□▣])\s*/; // a multiple choice question: each number ticks one box, Enter confirms
 const isMulti = (x) => (x.options || []).some((o) => BOX.test(o));
+// An option that gives away more than this one question (always allow, don't ask again, auto mode, bypass) takes a
+// second tap: the first one only says what it does.
+const WIDE = /always allow|don't ask again|do not ask again|auto mode|bypass|dangerously/i;
+function sure(b, label) {
+  if (!WIDE.test(label) || b.dataset.sure === '1') return true;
+  const was = b.innerHTML; b.dataset.sure = '1'; b.classList.add('sure'); b.textContent = `¿Seguro? «${label}» vale también para lo que venga. Toca otra vez`;
+  setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.classList.remove('sure'); b.innerHTML = was; } }, 5000);
+  return false;
+}
 const ticked = (o) => { const b = BOX.exec(o); return !!b && !/\[ \]|[☐◻□]/.test(b[2]); };
 function menuBody(x) {
   const ctx = x.context || [], shown = ctx.slice(0, 6);
@@ -572,7 +581,7 @@ async function answerClick(e, card, list, leave) {
   if (b.hasAttribute('data-read')) { await api('/api/requests/read', { id }); return true; }
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? (card.querySelector('.acts:not(.mfree) input') || {}).value?.trim() : null);
   if (!text) return false;
-  if (card.dataset.menuId) { busy(); try { await answerMenuItem(x, text); } finally { done(); } return true; }
+  if (card.dataset.menuId) { if (!sure(b, text)) return false; busy(); try { await answerMenuItem(x, text); } finally { done(); } return true; }
   busy();
   try { const r = await api('/api/requests/answer', { id, text }); sayDelivered(r, from, text); } finally { done(); }
   return true;

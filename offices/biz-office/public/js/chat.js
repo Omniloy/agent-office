@@ -69,6 +69,7 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .menu-card button { max-width: 100%; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.1); color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 #chat .menu-card .acts button:first-child { background: var(--needs, #fbbf24); border-color: var(--needs, #fbbf24); color: #201600; font-weight: 650; }
 #chat .menu-card.multi .acts button:first-child { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.2); color: inherit; font-weight: 400; }
+#chat .menu-card .acts button.sure { background: #ef4444; border-color: #ef4444; color: #fff; }
 #chat .menu-card .acts button.on { border-color: #4ade80; background: rgba(74, 222, 128, .18); }
 #chat .menu-card .hint { margin-top: 7px; font-size: 12px; color: var(--muted, #aab3c9); line-height: 1.4; }
 #chat .menu-card .mlive { margin-top: 7px; padding: 4px 9px; font-size: 12px; background: transparent; }
@@ -531,7 +532,15 @@ body.embed #chat { display: none !important; }`;
     show(a.herdrName); section('artifacts');
   });
   log.addEventListener('pointerdown', () => menu.classList.remove('on'));
-  log.addEventListener('click', (e) => { const b = e.target.closest('[data-menu-answer]'); if (b) answerMenu(b.dataset.menuAnswer); else if (e.target.closest('[data-live]')) openLive(who || target); });
+  // an option that gives away more than this question (always allow, auto mode...) takes a second tap
+  const WIDE = /always allow|don't ask again|do not ask again|auto mode|bypass|dangerously/i;
+  const sure = (b, label) => {
+    if (!WIDE.test(label) || b.dataset.sure === '1') return true;
+    const was = b.innerHTML; b.dataset.sure = '1'; b.classList.add('sure'); b.textContent = `¿Seguro? «${label}» vale también para lo que venga. Toca otra vez`;
+    setTimeout(() => { if (b.isConnected) { b.dataset.sure = ''; b.classList.remove('sure'); b.innerHTML = was; } }, 5000);
+    return false;
+  };
+  log.addEventListener('click', (e) => { const b = e.target.closest('[data-menu-answer]'); if (b) { if (sure(b, b.dataset.menuAnswer)) answerMenu(b.dataset.menuAnswer); } else if (e.target.closest('[data-live]')) openLive(who || target); });
   err.addEventListener('click', (e) => { if (e.target.closest('[data-live]')) openLive(who || target); });
   if (PHONE) { try { const f = Number(localStorage.getItem('office.chat.h')); if (f > 0.1 && f < 1) root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`); } catch { /* no storage: the usual height */ } } // the height you left it at (drag its top edge)
   if (panel && (!window.__GUEST__ || window.__GUEST__.chats)) { // a visitor reads chats only where that building allows it

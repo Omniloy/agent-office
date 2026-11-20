@@ -79,6 +79,7 @@ style.textContent = `
 .mnew { font-style: normal; font-size: 11px; padding: 1px 7px; border-radius: 99px; background: rgba(124,156,255,.22); color: #b9c8ff; margin-left: 6px; }
 .it.busy, .ask.busy { opacity: .6; pointer-events: none; }
 .mhint { margin-top: 6px; color: var(--muted, #a9b3c9); font-size: 12px; line-height: 1.4; }
+.acts button.sure { background: #ef4444 !important; border-color: #ef4444 !important; color: #fff !important; }
 .acts button.on { border-color: #4ade80 !important; background: rgba(74, 222, 128, .18) !important; }
 .acts button.mlive { font-size: 12px; opacity: .85; }
 .acts[hidden] { display: none !important; } /* the box for your own words shows when you pick that option */
