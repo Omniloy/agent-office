@@ -37,8 +37,11 @@ def restart(port):
         if up(port): print(f'{name} ({port}): back after {(i + 1) / 2:.1f}s'); return True
     print(f'{name} ({port}): DID NOT COME BACK'); return False
 a = sys.argv[1] if len(sys.argv) > 1 else ''
+WATCH = H('~/.local/bin/team-watch')  # the watchdog: started with the floors when it is not running (team-watch start)
+def watchdog(cmd): return subprocess.run([sys.executable, WATCH, cmd], capture_output=True, text=True, timeout=60).stdout.strip() if os.path.exists(WATCH) else 'not installed'
 if a == 'status':
     for p, (n, _, _) in FLOORS.items(): print(f'{n} ({p}): {"up" if up(p) else "DOWN"}')
-elif a == 'all': sys.exit(0 if all([restart(p) for p in FLOORS]) else 1)
+    print(f'Watchdog: {watchdog("alive")}')
+elif a == 'all': ok = all([restart(p) for p in FLOORS]); print(watchdog('start')); sys.exit(0 if ok else 1)
 elif a in FLOORS: sys.exit(0 if restart(a) else 1)
 else: print(__doc__); sys.exit(2)

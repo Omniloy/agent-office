@@ -2,7 +2,7 @@
 """office-up [--dry] [--before <ISO time>] [--wait <seconds>]   bring the office back after a reboot or a crash.
 
   1. Floors: every office server that does not answer is started (office-restart <port>, which keeps page tokens).
-  2. Watchdog: `team-watch run` is started again if it is not running (in the "watchdog" terminal).
+  2. Watchdog: started again if it is not running (`team-watch start`: its login job, else the "watchdog" terminal).
   3. People: everyone whose Herdr terminal is still there but fell back to a plain shell (what Herdr leaves after a
      reboot or when the agent died) is started again IN THEIR PREVIOUS CONVERSATION (`--resume <session>`), with a
      message that says what happened. They keep everything they knew; background workflows and subagents did not
@@ -43,13 +43,19 @@ for name, port in re.findall(r"^(.+?) \((\d+)\): DOWN", st, re.M):
     log(f"floor {name} ({port}) is down: starting it")
     if not DRY: print("  " + sh("/usr/bin/python3", f"{BIN}/office-restart", port).stdout.strip())
 
+# 2. watchdog (it does not need Herdr to start: it waits for it). `team-watch alive` asks its lock, not `ps`
+#    (a script run through its #! line shows up in ps as ".../Python team-watch run", which a match on "python" misses)
+if os.path.exists(f"{BIN}/team-watch") and sh("/usr/bin/python3", f"{BIN}/team-watch", "alive").returncode:
+    log("watchdog is not running: starting it")
+    if not DRY: print("  " + sh("/usr/bin/python3", f"{BIN}/team-watch", "start", timeout=60).stdout.strip())
+
 # Herdr must answer before terminals can be started
 def terminals():
     try: return json.loads(sh(HC, "ls", "--all", "--json").stdout)["terminals"]
     except Exception: return None
 t0 = time.time(); T = terminals()
 while T is None and time.time() - t0 < WAIT: time.sleep(10); T = terminals()
-if T is None: print("Herdr does not answer (is the Herdr app open?): floors done, people and watchdog skipped"); sys.exit(1)
+if T is None: print("Herdr does not answer (is the Herdr app open?): floors and watchdog done, people skipped"); sys.exit(1)
 def fin(x):  # `hc ls` leaves out when a terminal finished; `hc get` has it
     if x.get("state") != "live" and not x.get("finished_ms"):
         try: x["finished_ms"] = json.loads(sh(HC, "get", x["address"], "--json").stdout).get("finished_ms") or 0
@@ -69,15 +75,6 @@ def dead(x):
     if x.get("state") == "live": return (x.get("agent") or "").split("/")[-1] in SHELLS
     if x.get("reason") == "killed" or x.get("exit_code") == 0: return False
     return time.time() * 1000 - (x.get("finished_ms") or 0) < 12 * 3600 * 1000
-
-# 2. watchdog
-if os.path.exists(f"{BIN}/team-watch") and not re.search(r"^\S*python\S*\s+\S*team-watch run", sh("ps", "-axo", "command").stdout, re.M):
-    if "watchdog" in R and R["watchdog"].get("state") == "live" and dead(R["watchdog"]):
-        log("watchdog is not running: starting it in its terminal")
-        if not DRY: sh(HC, "send", "watchdog", "--", "team-watch run")
-    else:
-        log("watchdog is not running: starting it")
-        if not DRY: sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", "watchdog", "--cwd", f"{HOME}/.omniloy-team", "--", f"{BIN}/team-watch", "run")
 
 # 3. people
 def cfgdir(cmd):

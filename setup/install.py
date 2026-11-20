@@ -174,6 +174,9 @@ class Run:
         jobs = [("com.omniloy.artifacts", [nd, f"{APPS}/artifacts/server.mjs"], f"{APPS}/artifacts", f"{TEAMS['dev']}/artifacts/.server.log", True),
                 # after a reboot: floors, watchdog, and the people who were running, each back in their own conversation
                 ("com.omniloy.office-up", ["/usr/bin/python3", f"{BIN}/office-up", "--wait", "600"], HOME, f"{TEAMS['dev']}/logs/office-up.log", False),
+                # the watchdog: catches people stopped while it is their move (the lightning bolt). Started at login and again
+                # by launchd if it dies; a second copy (office-up, office-restart) only stands by, so it never runs twice
+                ("com.omniloy.watchdog", ["/usr/bin/python3", f"{BIN}/team-watch", "run"], TEAMS["dev"], f"{TEAMS['dev']}/logs/watchdog.log", True),
                 # other buildings: one link per computer to the offices on Herdr's other machines (idle when there are none)
                 ("com.omniloy.peer-link", [nd, f"{APPS}/team-office/peer-link.mjs"], f"{APPS}/team-office", f"{TEAMS['dev']}/logs/peer-link.log", True)]
         if self.cfg.get("mailRound"): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{TEAMS['biz']}/mail-round.log", False))
@@ -216,7 +219,7 @@ def check():
     cl, cx = which("claude"), which("codex")
     line(bool(cl or cx), "an agent CLI", ", ".join(x for x in (cl and "claude", cx and "codex") if x) or "install Claude Code or Codex")
     for name in ("team-office", "biz-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
-    for t in ("team-ask", "team-card", "team-person", "team-peer", "omniloy-team", "office-restart", "office-up", "team-artifact", "team-memory", "team-names"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
+    for t in ("team-ask", "team-card", "team-person", "team-peer", "omniloy-team", "office-restart", "office-up", "team-watch", "team-artifact", "team-memory", "team-names"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
     for kind, d in TEAMS.items(): line(os.path.exists(f"{d}/team.json"), f"team folder {d}")
     line(os.path.isdir(f"{HERDR}/mods/team-requests"), "Herdr panels")
     try: on = subprocess.run(["/usr/bin/python3", f"{BIN}/team-names", "status"], capture_output=True, text=True).stdout
@@ -228,6 +231,9 @@ def check():
     line(up(4317), "Dev floor answers on 4317", "" if up(4317) else "office-restart all")
     for port, name in ((4319, "CRM"), (4320, "Web"), (4321, "Lab")): opt(up(port), f"{name} floor answers on {port}")  # Business (4318) is retired
     line(up(4340, "/"), "artifacts server answers on 4340")
+    try: w = subprocess.run(["/usr/bin/python3", f"{BIN}/team-watch", "alive"], capture_output=True, text=True, timeout=20)
+    except Exception: w = None
+    line(bool(w and w.returncode == 0), "watchdog running (team-watch)", (w.stdout.strip() if w and w.returncode == 0 else "team-watch start") + ("" if os.path.exists(f"{LA}/com.omniloy.watchdog.plist") else "; its login job is not installed: run the installer"))
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
     opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
