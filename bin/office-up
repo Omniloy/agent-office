@@ -2,8 +2,8 @@
 """office-up [--dry] [--before <ISO time>] [--wait <seconds>]   bring the office back after a reboot or a crash.
 
   1. Floors: every office server that does not answer is started (office-restart <port>, which keeps page tokens).
-  2. Watchdog: `team-watch run` is started again if it is not running: through its LaunchAgent
-     (com.omniloy.watchdog) when that is installed, else in the "watchdog" terminal.
+  2. Watchdog: started again if it is not running (`team-watch start`: a nudge to its login job com.omniloy.watchdog
+     when that is installed, else the "watchdog" terminal, else a background process).
   3. People: everyone whose Herdr terminal is still there but fell back to a plain shell (what Herdr leaves after a
      reboot or when the agent died) is started again IN THEIR PREVIOUS CONVERSATION (`--resume <session>`), with a
      message that says what happened. They keep everything they knew; background workflows and subagents did not
@@ -20,7 +20,6 @@ import json, os, sys, glob, re, subprocess, time, datetime
 sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import teamlib as L
 HOME = os.path.expanduser("~"); BIN = f"{HOME}/.local/bin"; HC = f"{BIN}/hc"
-WATCH_AGENT = f"{HOME}/Library/LaunchAgents/com.omniloy.watchdog.plist"
 SHELLS = {"zsh", "bash", "sh", "fish", "login", "-zsh", "-bash"}
 NOTE = ("The Mac restarted (or your terminal stopped) and this conversation was interrupted; it has just been resumed. "
         "Background tasks, workflows, subagents and monitors you had running did not survive. Check what you were "
@@ -47,13 +46,19 @@ for name, port in re.findall(r"^(.+?) \((\d+)\): DOWN", st, re.M):
     log(f"floor {name} ({port}) is down: starting it")
     if not DRY: print("  " + sh("/usr/bin/python3", f"{BIN}/office-restart", port).stdout.strip())
 
+# 2. watchdog (it does not need Herdr to start: it waits for it). `team-watch alive` asks its lock, not `ps`
+#    (a script run through its #! line shows up in ps as ".../Python team-watch run", which a match on "python" misses)
+if os.path.exists(f"{BIN}/team-watch") and sh("/usr/bin/python3", f"{BIN}/team-watch", "alive").returncode:
+    log("watchdog is not running: starting it")
+    if not DRY: print("  " + sh("/usr/bin/python3", f"{BIN}/team-watch", "start", timeout=60).stdout.strip())
+
 # Herdr must answer before terminals can be started
 def terminals():
     try: return json.loads(sh(HC, "ls", "--all", "--json").stdout)["terminals"]
     except Exception: return None
 t0 = time.time(); T = terminals()
 while T is None and time.time() - t0 < WAIT: time.sleep(10); T = terminals()
-if T is None: print("Herdr does not answer (is the Herdr app open?): floors done, people and watchdog skipped"); sys.exit(1)
+if T is None: print("Herdr does not answer (is the Herdr app open?): floors and watchdog done, people skipped"); sys.exit(1)
 def fin(x):  # `hc ls` leaves out when a terminal finished; `hc get` has it
     if x.get("state") != "live" and not x.get("finished_ms"):
         try: x["finished_ms"] = json.loads(sh(HC, "get", x["address"], "--json").stdout).get("finished_ms") or 0
@@ -73,23 +78,6 @@ def dead(x):
     if x.get("state") == "live": return (x.get("agent") or "").split("/")[-1] in SHELLS
     if x.get("reason") == "killed" or x.get("exit_code") == 0: return False
     return time.time() * 1000 - (x.get("finished_ms") or 0) < 12 * 3600 * 1000
-
-# 2. watchdog: running when a `team-watch run` process exists (macOS shows /usr/bin/python3 as ".../Python") or it
-# checked in the last 3 minutes (watch.json, what the office and office-restart status read)
-def watching():
-    if re.search(r"^\S*python[\d.]*\s+\S*team-watch run\b", sh("ps", "-axo", "command").stdout, re.M | re.I): return True
-    st = L.read_quiet(f"{L.SHARED}/watch.json", {}) or {}
-    return time.time() - (st.get("checkedAt") or 0) / 1000 < 180
-if os.path.exists(f"{BIN}/team-watch") and not watching():
-    if os.path.exists(WATCH_AGENT):   # launchd keeps it alive; it only needs a nudge
-        log("watchdog is not running: asking launchd to start it")
-        if not DRY: sh("launchctl", "kickstart", f"gui/{os.getuid()}/com.omniloy.watchdog")
-    elif "watchdog" in R and R["watchdog"].get("state") == "live" and dead(R["watchdog"]):
-        log("watchdog is not running: starting it in its terminal")
-        if not DRY: sh(HC, "send", "watchdog", "--", "team-watch run")
-    else:
-        log("watchdog is not running: starting it")
-        if not DRY: sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", "watchdog", "--cwd", f"{HOME}/.omniloy-team", "--", f"{BIN}/team-watch", "run")
 
 # 3. people
 def last_session(cmd, cwd, slug): return L.last_session(cmd, cwd, slug, BEFORE)

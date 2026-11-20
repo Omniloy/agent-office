@@ -291,7 +291,8 @@ class Run:
                 # other buildings: one link per computer to the offices on Herdr's other machines (idle when there are none)
                 ("com.omniloy.peer-link", [nd, f"{APPS}/team-office/peer-link.mjs"], f"{APPS}/team-office", f"{TEAMS['dev']}/logs/peer-link.log", True),
                 # the watchdog (team-watch run): nudges, the outbox of messages held for busy people, the memory check.
-                # Kept alive; a second copy (an old "watchdog" terminal) just waits for this one's lock.
+                # Started at login and again by launchd if it dies; a second copy (office-up, office-restart, an old
+                # "watchdog" terminal) only stands by on its lock, so it never runs twice.
                 ("com.omniloy.watchdog", ["/usr/bin/python3", f"{BIN}/team-watch", "run"], TEAMS["dev"], f"{TEAMS['dev']}/logs/watchdog.log", True)]
         # the retired Business floor's email rounds: no new job (an existing one is left as it is)
         old = f"{LA}/com.omniloy.offices.plist"   # replaced by com.omniloy.office-up: backed up, then unloaded
@@ -360,10 +361,16 @@ def check():
     for i, f in enumerate(fl):
         has = os.path.exists(f"{f['path']}/team.json")
         (line if i == 0 else opt)(up(f["port"]), f"{f['name']} floor answers on {f['port']}", "" if up(f["port"]) else ("office-restart all" if has else f"no team folder {f['path']}"))
-    try: w = json.load(open(f"{TEAMS['dev']}/watch.json")); ago = __import__("time").time() - w.get("checkedAt", 0) / 1000
-    except Exception: ago = 1e9
-    line(ago < 300, "watchdog runs (team-watch: nudges, held messages, memory check)", "" if ago < 300 else f"launchctl kickstart gui/{os.getuid()}/com.omniloy.watchdog (log: ~/.omniloy-team/logs/watchdog.log)")
     line(up(4340, "/"), "artifacts server answers on 4340")
+    # the watchdog: its lock (team-watch alive) says whether `team-watch run` is running; watch.json whether it checked lately
+    try: w = subprocess.run(["/usr/bin/python3", f"{BIN}/team-watch", "alive"], capture_output=True, text=True, timeout=20)
+    except Exception: w = None
+    try: ago = __import__("time").time() - json.load(open(f"{TEAMS['dev']}/watch.json")).get("checkedAt", 0) / 1000
+    except Exception: ago = 1e9
+    alive = bool(w and w.returncode == 0)
+    line(alive and ago < 300, "watchdog runs (team-watch: nudges, held messages, memory check)",
+         "" if alive and ago < 300 else (f"{w.stdout.strip()}, but its last check was {int(ago // 60)} min ago (log: ~/.omniloy-team/logs/watchdog.log)" if alive else "team-watch start")
+         + ("" if os.path.exists(f"{LA}/com.omniloy.watchdog.plist") else "; its login job is not installed: run the installer with --only-services"))
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
     opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")

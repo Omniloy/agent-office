@@ -1,167 +1,304 @@
 #!/usr/bin/env python3
 """team-watch: catches teammates who stopped while it is their move. Local only: it reads `hc ls`,
 ~/.omniloy-team/cards.json (team-card) and requests.json (team-ask). No Jira, no network, no tokens
-unless it catches someone; then it sends ONE message to the Product lead (or to the lead herself).
+unless it catches someone; then it sends ONE message to the floor's lead (or to the lead herself).
 
-  team-watch run            loop forever (interval from watch-config.json). Only one runs: a second one waits
-                            until the first stops. Started at login by the LaunchAgent com.omniloy.watchdog
-                            (kept alive) that setup/install.py writes.
+  team-watch run            loop forever (interval from watch-config.json). Only one runs at a time: a second
+                            copy stands by and takes over when the first one stops (the login job and office-up
+                            may both start one).
   team-watch once [--dry]   one check; --dry prints what it would do and sends nothing
   team-watch status         last check, current stalls, and messages waiting in the outbox
+  team-watch alive          exit 0 (and print its pid) when a `team-watch run` is running
+  team-watch start          start one unless one is running: a nudge to its login job (com.omniloy.watchdog) when
+                            it is loaded, else in the Herdr terminal "watchdog", else in the background. office-up and
+                            office-restart call this.
 
-Every 10 s it also types in the messages the outbox holds for people who were busy with a question in their
-terminal or not running (team-deliver), and every 10 minutes it runs `team-memory check`.
-Someone is caught when they have not been working for `idleAfter` seconds (a question on their screen is
-__OWNER__'s move, and a terminal that reports no status cannot be judged: neither is caught) AND
+Every floor is watched: Dev, CRM, Web and Lab (~/.omniloy-team/floors.json when it exists), Claude and Codex
+people alike. Someone is caught when they have not been working for `idleAfter` seconds AND
   - they hold cards that are not marked waiting, or
   - a teammate's request addressed to them is still open.
-The lead is also caught when the whole team is stopped, every card the team holds is marked waiting
-and no request to __OWNER__ is open: nothing would move otherwise. Cards marked with `team-card approval`
-(only __OWNER__'s approval or merge is missing) do not count: the office shows those to him.
-Config ~/.omniloy-team/watch-config.json: interval, idleAfter, repeatAfter (seconds), maxPings,
-paused (team names the watchdog leaves alone; switched from each 3D office: More > Watchdog).
+The lead is also caught when
+  - the whole floor is stopped, every card it holds is marked waiting and no request to __OWNER__ is open, or
+  - the whole floor has been stopped for `quietAfter` seconds with nothing pending anywhere: no card, no open
+    request, no question on anyone's screen. That is what a lost hand-over looks like (a message that never
+    arrived, someone who was on a menu when it was typed). Once per stop: not again until the floor works again.
+Never caught: someone with a question on their screen (a menu: that waits for __OWNER__, the office shows it),
+someone with an open request to __OWNER__, cards marked with `team-card approval` (only __OWNER__'s approval or
+merge is missing; the office shows those to him), people who are not running, teams in `paused`.
+A terminal that reports no status (Herdr's status hook is missing) counts as working while its screen changes.
+Config ~/.omniloy-team/watch-config.json: interval, idleAfter, repeatAfter, quietAfter, quietWithin (seconds),
+maxPings, quiet (false: no quiet-floor check), hours ([8, 22]: send nothing outside those hours; the bolts and
+the state still show), paused (team names the watchdog leaves alone; switched from each 3D office: More > Watchdog).
+Messages go through the outbox (team-deliver): typed in at once, or kept until a person who is on a menu or not
+running can take them. Every 10 s the watchdog types in what the outbox holds; a message still waiting after 2 days
+is reported to __OWNER__ once. Every 10 minutes it also runs `team-memory check`.
 State and events (the 3D offices draw a lightning bolt from these): ~/.omniloy-team/watch.json"""
-import json, os, sys, subprocess, time, datetime, fcntl
+import json, os, sys, subprocess, time, datetime, fcntl, hashlib
 sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import teamlib as L
-HOME = L.HOME; T = L.SHARED; STATE = f"{T}/watch.json"; HC = L.HC
+HOME = L.HOME; T = L.SHARED; STATE = f"{T}/watch.json"; LOCK = f"{T}/watch.lock"; BIN = L.BIN; HC = L.HC
+OWNER = "__OWNER_ID__"
 RUN = {}   # what `run` adds to the state file: its pid, when it started, the last memory check and outbox flush
-DEF = {"interval": 60, "idleAfter": 120, "repeatAfter": 1800, "maxPings": 2}
+DEF = {"interval": 60, "idleAfter": 120, "repeatAfter": 1800, "maxPings": 2,
+       "quiet": True, "quietAfter": 1200, "quietWithin": 6 * 3600, "hours": None}
 def rj(p, d):
     try: return json.load(open(p))
     except Exception: return d
 def cfg(): return {**DEF, **rj(f"{T}/watch-config.json", {})}
-def people(): return {n: {"name": p["name"].split(" ")[0], "lead": p["lead"], "team": p["team"]} for n, p in L.people().items()}
-def mins(s): return f"{int(s // 60)} min"
+def floors(): return [(d, tj) for d, tj, _ in L.teams()]   # every floor of floors.json (Business is retired)
+def people(fl): return {n: {"name": p["name"].split(" ")[0], "lead": p["lead"], "team": p["team"]} for n, p in L.people().items()}
+def mins(s): return f"{int(s // 60)} min" if s >= 60 else f"{int(s)} s"
+def in_hours(c):
+    h = c.get("hours")
+    if not h or len(h) != 2: return True
+    a, b, now = int(h[0]), int(h[1]), datetime.datetime.now().hour
+    return a <= now < b if a <= b else (now >= a or now < b)
+def hc(*args, timeout=20): return subprocess.run([HC, *args], capture_output=True, text=True, timeout=timeout)
+def status_ms(n):
+    """When its status last changed (Herdr's hc get): the moment someone stopped, also across watchdog restarts."""
+    try: return (json.loads(hc("get", n, "--json").stdout).get("status_ms") or 0) / 1000
+    except Exception: return 0
+def screen(n):
+    try: return hashlib.sha1(hc("read", n).stdout.encode()).hexdigest()
+    except Exception: return ""
+def send(to, msg):
+    """'delivered', 'queued: why' (the outbox keeps it until they can take it) or 'failed: why'."""
+    try: return L.deliver(to, msg, "team-watch")
+    except Exception as e: return f"failed: {type(e).__name__}"
+def activity(n, t, a, now):
+    """working | blocked | stopped, keeping a['idleSince'] = when they last stopped."""
+    s = t.get("status")
+    if s == "working": a["lastWork"] = now; a.pop("idleSince", None); a["turn"], a["was"] = t.get("turn"), s; return "working"
+    if s == "blocked": a["was"] = s; a.setdefault("idleSince", now); return "blocked"
+    if not s:   # no status from Herdr (its hook is missing): a screen that changes is someone working
+        h = screen(n); a["nostatus"] = True; a["was"] = None
+        if h and a.get("screen") and h != a["screen"]: a["screen"] = h; a["lastWork"] = now; a.pop("idleSince", None); a.pop("stall", None); return "working"
+        if h: a["screen"] = h
+        a.setdefault("idleSince", now); return "stopped"
+    a.pop("nostatus", None)
+    # done and idle are the same here (idle only means someone looked at the terminal): the clock restarts on the
+    # first look, after a turn (the turn counter moved), or when they come out of working, a menu or no status
+    if "idleSince" not in a or a.get("turn") != t.get("turn") or a.get("was") not in ("done", "idle"):
+        if "turn" in a and a.get("turn") != t.get("turn"): a["lastWork"] = now
+        a["turn"] = t.get("turn"); a["idleSince"] = min(now, status_ms(n) or now)
+    a["was"] = s
+    return "stopped"
+
 def check(dry=False):
-    c = cfg(); now = time.time(); P = people()
-    st = rj(STATE, {}); ag = st.get("agents", {}); events = st.get("events", [])
-    try: terms = {t["name"]: t for t in json.loads(subprocess.run([HC, "ls", "--json"], capture_output=True, text=True, timeout=20).stdout)["terminals"] if t.get("name") and t.get("state") == "live"}
-    except Exception as e:   # it runs but cannot see the terminals: the office shows this instead of "on"
-        print("hc ls failed:", e)
-        if not dry: L.save(STATE, {**st, "checkedAt": int(now * 1000), "error": f"cannot see the terminals (hc ls: {str(e)[:80]})", **RUN})
-        return []
+    c = cfg(); now = time.time(); FL = floors(); P = people(FL)
+    st = rj(STATE, {}); ag = st.get("agents", {}); events = st.get("events", []); teams = st.get("teams", {})
+    def save(**extra):
+        if dry: return
+        L.save(STATE, {"checkedAt": int(now * 1000), "config": c, "stalled": stalls, "parked": parked, "quiet": quiet,
+                       "agents": ag, "teams": teams, "events": events[-60:], **RUN, **extra})
+    stalls, parked, quiet = [], [], []
+    try: terms = {t["name"]: t for t in json.loads(hc("ls", "--json").stdout)["terminals"] if t.get("name") and t.get("state") == "live"}
+    except Exception as e:
+        print("hc ls failed:", e, flush=True); save(error=f"cannot see the terminals (hc ls: {str(e)[:80]})"); return []
     cards = rj(f"{T}/cards.json", {}); reqs = rj(f"{T}/requests.json", {}).get("items", [])
-    stalls = []
+    paused = set(c.get("paused", [])); speak = in_hours(c) and not dry
+    def asks_owner(n): return any(x.get("status") == "open" and x.get("kind") == "request" and x.get("from") == n and x.get("to", OWNER) in (None, OWNER) for x in reqs)
+    def catch(n, idle, what, ev, msg, to):
+        ev.update({"id": f"zap:{ev['agent']}:{int(now)}", "ts": int(now * 1000), "idleMin": int(idle // 60), "to": to})
+        print(f'{datetime.datetime.now():%H:%M:%S} CAUGHT {what} (idle {mins(idle)}), ping {ev["ping"]} -> {to}', flush=True)
+        if dry: return
+        ev["sent"] = send(to, msg) if speak else "not sent (outside watch hours)"
+        events.append(ev)
     for n, p in P.items():
-        if p["team"] in c.get("paused", []): ag[n] = {"paused": True}; continue   # switched off for this team from its 3D office
-        a = ag.setdefault(n, {})
-        if n not in terms: ag[n] = {}; continue                       # not running: nothing to catch
-        if terms[n].get("status") == "working": ag[n] = {"status": "working"}; continue
-        if terms[n].get("status") in (None, "blocked"): ag[n] = {"status": terms[n].get("status") or "unknown"}; continue   # a menu is __OWNER__'s move; no status: cannot tell
-        a["status"] = terms[n].get("status") or "idle"; a.setdefault("idleSince", now)
-        mine = sorted(k for k, x in cards.items() if x["owner"] == n and not x.get("waiting"))
+        if p["team"] in paused: ag[n] = {"paused": True}; continue   # switched off for this team from its 3D office
+        if n not in terms: ag[n] = {"status": "not running"}; continue
+        a = ag.setdefault(n, {}); a.pop("paused", None)
+        a["status"] = act = activity(n, terms[n], a, now)
+        if act == "working": continue   # the stall record stays: a one-turn reply to the reminder is not moving the work
+        if act == "blocked": a.pop("stall", None); continue        # a question on their screen: it waits for __OWNER__
+        if asks_owner(n): a["waitingOn"] = OWNER; a.pop("stall", None); continue
+        a.pop("waitingOn", None)
+        mine = sorted(k for k, x in cards.items() if x.get("owner") == n and not x.get("waiting"))
         asked = sorted(f'#{x["id"]}' for x in reqs if x.get("status") == "open" and x.get("kind") == "request" and x.get("to") == n)
         if not mine and not asked: a.pop("stall", None); continue
         idle = now - a["idleSince"]
         if idle < c["idleAfter"]: continue
-        s = a.setdefault("stall", {"since": now, "pings": 0, "last": 0})
+        s = a.get("stall")
+        if s and (a.get("turn") or 0) - (s.get("turn") or 0) >= 2: a.pop("stall")   # real work since the last reminder: a new stop
+        s = a.setdefault("stall", {"since": now, "pings": 0, "last": 0, "turn": a.get("turn")})
         s["cards"], s["requests"] = mine, asked
         stalls.append(n)
         if s["pings"] >= c["maxPings"] or (s["pings"] and now - s["last"] < c["repeatAfter"]): continue
-        s["pings"] += 1; s["last"] = now
+        if not speak and not dry: continue   # at night: caught (the office shows it) but nobody is woken; pinged in the morning
+        s["pings"] += 1; s["last"] = now; s["turn"] = a.get("turn")
         what = " and ".join(x for x in [f'holding {", ".join(mine[:6])}{" and more" if len(mine) > 6 else ""}' if mine else "", f'with open request(s) {", ".join(asked)} from teammates' if asked else ""] if x)
-        lead = p["lead"]; is_lead = n == lead
-        ev = {"id": f"zap:{n}:{int(now)}", "ts": int(now * 1000), "agent": n, "name": p["name"], "team": p["team"], "cards": mine, "requests": asked, "idleMin": int(idle // 60), "ping": s["pings"], "to": n if is_lead else lead}
+        lead = p["lead"]; is_lead = n == lead or lead not in terms
         if is_lead:
             msg = (f"Watchdog: you have been stopped for {mins(idle)} {what}. Those are yours to move. For each one: act on it now, hand it over (team-card pass), "
                    f"mark it waiting if someone outside the team must act (team-card wait), or close it (team-card done). If you are stuck or need a decision, ask __OWNER__ now: "
-                   f'team-ask request --from {n} --to __OWNER_ID__ "one clear question" --ticket KEY. Do not just reply to this message.')
-            to = n
+                   f'team-ask request --from {n} --to {OWNER} "one clear question" --ticket KEY. Do not just reply to this message.')
         else:
             msg = (f"Watchdog: {p['name']} ({n}) has been stopped for {mins(idle)} {what}, and nothing says they are waiting for anyone. Write to them now (hc send {n} \"...\") to get it moving. "
-                   f"If the card is really someone else's move, fix it with team-card pass; if nobody can move it, ask __OWNER__ with team-ask request --to __OWNER_ID__.")
-            to = lead
-        print(f'{datetime.datetime.now():%H:%M:%S} CAUGHT {n}: {what} (idle {mins(idle)}), ping {s["pings"]} -> {to}')
-        if dry: continue
-        ev["text"] = f"stopped {mins(idle)} {what}"[:160]; events.append(ev)
-        L.deliver(to, msg, "team-watch")
-        if s["pings"] >= 2 and lead in P:   # a reminder did not work: __OWNER__ sees it in "Messages for you"
-            subprocess.run([f"{HOME}/.local/bin/team-ask", "note", "--from", lead, f"Watchdog: {p['name']} still stopped after a reminder, {what}"[:140],
+                   f"If the card is really someone else's move, fix it with team-card pass; if nobody can move it, ask __OWNER__ with team-ask request --to {OWNER}.")
+        to = n if is_lead else lead
+        catch(n, idle, f"{n}: {what}", {"agent": n, "name": p["name"], "team": p["team"], "cards": mine, "requests": asked, "ping": s["pings"],
+                                        "text": f"stopped {mins(idle)} {what}"}, msg, to)
+        if not dry and s["pings"] >= 2 and lead in P:   # a reminder did not work: __OWNER__ sees it in "Messages for you"
+            subprocess.run([f"{BIN}/team-ask", "note", "--from", lead, f"Watchdog: {p['name']} still stopped after a reminder, {what}"[:140],
                             "--body", f"{p['name']} has not worked for {mins(idle)} and nothing marks those cards as waiting. A reminder was sent {mins(c['repeatAfter'])} ago with no effect. A person should look at why."], capture_output=True)
-    # A whole team parked: everyone stopped, every held card marked waiting, and nobody has asked __OWNER__.
-    # Nobody is caught above, yet nothing will move, so it is the lead's move. Pinged at most maxPings
-    # times for the same set of waiting cards.
-    teams = st.get("teams", {}); parked = []
-    for d, tj, _ in L.teams():
+    for d, tj in FL:
         tn, lead = tj.get("name", ""), tj.get("lead")
-        if tn in c.get("paused", []): teams.pop(tn, None); continue
+        if tn in paused: teams.pop(tn, None); continue
+        t = teams.setdefault(tn, {})
         members = [n for n, p in P.items() if p["team"] == tn]; live = [n for n in members if n in terms]
+        held = [k for k, x in cards.items() if x.get("owner") in members]
         # cards that only wait for __OWNER__'s approval (team-card approval) are a known human bottleneck, shown in the office: not a stall
-        waiting = sorted(k for k, x in cards.items() if x["owner"] in members and x.get("waiting") and x["waiting"].get("kind") != "approval")
-        asked_me = any(x.get("status") == "open" and x.get("kind") == "request" and x.get("to") in (None, "__OWNER_ID__") and x.get("from") in members for x in reqs)
-        if not waiting or asked_me: teams.pop(tn, None); continue
-        sig = ",".join(waiting); t = teams.get(tn)
-        if not t or not set(waiting) <= set(t.get("sig", "").split(",")): t = teams[tn] = {"sig": sig, "pings": 0, "last": 0}   # a new card joined: start over
-        else: t["sig"] = sig                                                                                                    # same cards or fewer: no fresh reminder
-        if lead not in live or any(n in stalls for n in members) or any(terms[n].get("status") == "working" for n in live): continue
+        waiting = sorted(k for k in held if cards[k].get("waiting") and (cards[k]["waiting"] or {}).get("kind") != "approval")
+        asked_me = any(asks_owner(n) for n in members)   # waiting on __OWNER__'s answer: not a stall
+        # A whole team parked: everyone stopped, every held card marked waiting, and nobody has asked __OWNER__. Pinged at
+        # most maxPings times for the same set of waiting cards; work in between (the lead answering) does not start over.
+        if waiting and not asked_me:
+            sig = ",".join(waiting); pk = t.get("parked")
+            if not pk or not set(waiting) <= set(pk.get("sig", "").split(",")): pk = t["parked"] = {"sig": sig, "pings": 0, "last": 0}   # a new card joined: start over
+            else: pk["sig"] = sig                                                                                                          # same cards or fewer: no fresh reminder
+        else: t.pop("parked", None)
+        if not live or lead not in live or asked_me: continue
+        if any(ag.get(n, {}).get("status") in ("working", "blocked") for n in live) or any(n in stalls for n in members): continue
         idle = min(now - ag.get(n, {}).get("idleSince", now) for n in live)
-        if idle < c["idleAfter"]: continue
-        parked.append(tn)
-        if t["pings"] >= c["maxPings"] or (t["pings"] and now - t["last"] < c["repeatAfter"]): continue
-        t["pings"] += 1; t["last"] = now
-        lst = "; ".join(f'{k} ({P[cards[k]["owner"]]["name"]}: {str((cards[k]["waiting"] or {}).get("on", "") if isinstance(cards[k]["waiting"], dict) else "")[:90]})' for k in waiting[:8])
-        msg = (f"Watchdog: the whole team has been stopped for {mins(idle)}. Every card the team holds is marked waiting and there is no open request to __OWNER__, so nobody outside knows they are being waited on: {lst}. "
-               f"This is your move. For each card: if a teammate can move it, write to them now (hc send NAME \"...\"); if it needs __OWNER__ (an approval, a merge, a decision), ask him now: "
-               f'team-ask request --from {lead} --to __OWNER_ID__ "one clear question" --ticket KEY; if your side is finished and the only thing left is __OWNER__ approving or merging pull requests, its holder marks it: team-card approval KEY --as HOLDER "PR links" (he sees it in the office and you are not chased for it); only if it truly waits on something outside with nothing to ask, leave it. Do not just reply to this message.')
-        print(f'{datetime.datetime.now():%H:%M:%S} CAUGHT team {tn}: all cards waiting ({sig}), nobody asked __OWNER__ (idle {mins(idle)}), ping {t["pings"]} -> {lead}')
-        if dry: continue
-        events.append({"id": f"zap:{lead}:{int(now)}", "ts": int(now * 1000), "agent": lead, "name": P[lead]["name"], "team": tn, "cards": waiting, "requests": [], "idleMin": int(idle // 60), "ping": t["pings"], "to": lead, "kind": "team", "text": f"the whole team stopped {mins(idle)}, every card waiting"})
-        L.deliver(lead, msg, "team-watch")
-        if t["pings"] >= 2:
-            subprocess.run([f"{HOME}/.local/bin/team-ask", "note", "--from", lead, f"Watchdog: {tn} is stopped with every card waiting ({sig})"[:140],
-                            "--body", f"Everyone has been stopped for {mins(idle)}, all held cards are marked waiting and nobody has asked you anything. {P[lead]['name']} was reminded {mins(c['repeatAfter'])} ago with no effect. A person should look at why."], capture_output=True)
+        if waiting:
+            if idle < c["idleAfter"]: continue
+            parked.append(tn)
+            if pk["pings"] >= c["maxPings"] or (pk["pings"] and now - pk["last"] < c["repeatAfter"]) or (not speak and not dry): continue
+            pk["pings"] += 1; pk["last"] = now
+            lst = "; ".join(f'{k} ({P.get(cards[k]["owner"], {}).get("name", cards[k]["owner"])}: {str((cards[k]["waiting"] or {}).get("on", "") if isinstance(cards[k]["waiting"], dict) else "")[:90]})' for k in waiting[:8])
+            msg = (f"Watchdog: the whole team has been stopped for {mins(idle)}. Every card the team holds is marked waiting and there is no open request to __OWNER__, so nobody outside knows they are being waited on: {lst}. "
+                   f"This is your move. For each card: if a teammate can move it, write to them now (hc send NAME \"...\"); if it needs __OWNER__ (an approval, a merge, a decision), ask him now: "
+                   f'team-ask request --from {lead} --to {OWNER} "one clear question" --ticket KEY; if your side is finished and the only thing left is __OWNER__ approving or merging pull requests, its holder marks it: team-card approval KEY --as HOLDER "PR links" (he sees it in the office and you are not chased for it); only if it truly waits on something outside with nothing to ask, leave it. Do not just reply to this message.')
+            catch(lead, idle, f"team {tn}: all cards waiting ({sig}), nobody asked __OWNER__", {"agent": lead, "name": P[lead]["name"], "team": tn, "cards": waiting, "requests": [],
+                  "ping": pk["pings"], "kind": "team", "text": f"whole floor stopped {mins(idle)}, every card waiting and nobody asked __OWNER__"}, msg, lead)
+            if not dry and pk["pings"] >= 2:
+                subprocess.run([f"{BIN}/team-ask", "note", "--from", lead, f"Watchdog: {tn} is stopped with every card waiting ({sig})"[:140],
+                                "--body", f"Everyone has been stopped for {mins(idle)}, all held cards are marked waiting and nobody has asked you anything. {P[lead]['name']} was reminded {mins(c['repeatAfter'])} ago with no effect. A person should look at why."], capture_output=True)
+            continue
+        if held or not c.get("quiet"): continue   # approval cards only: the floor waits for __OWNER__
+        # A quiet floor: everyone stopped, nothing pending anywhere. Fine when the work is finished, but it is also what
+        # a lost hand-over looks like. One message per stop (stopAt: when the last person stopped), only for a fresh stop.
+        stop_at = max(ag.get(n, {}).get("idleSince", now) for n in live); since = now - stop_at
+        if since < c["quietAfter"] or since > c["quietWithin"] or abs(t.get("quietAt", 0) - stop_at) < 1: continue
+        # the lead's answer to the last such message is a turn too: only real work since then (a teammate's turn, or
+        # the lead working more than that one answer) makes a new stop
+        snap = t.get("quietTurns") or {}
+        if snap and not any((ag.get(n, {}).get("turn") != snap.get(n) or ag.get(n, {}).get("lastWork", 0) > t.get("quietPing", 0)) if n != lead
+                            else (ag.get(n, {}).get("turn") or 0) - (snap.get(n) or 0) >= 2 for n in live): continue
+        if not speak and not dry: continue
+        quiet.append(tn)
+        if not dry: t.update(quietAt=stop_at, quietPing=now, quietTurns={n: ag.get(n, {}).get("turn") for n in live})
+        q = L.pending(); q = {n: q[n] for n in members if q.get(n)}
+        undelivered = (" Messages still waiting to be typed in: " + ", ".join(f"{P[n]['name']} {k}" for n, k in q.items()) + ".") if q else ""
+        names = ", ".join(P[n]["name"] for n in live if n != lead) or "nobody else"
+        msg = (f"Watchdog: everyone on {tn} ({names} and you) has been stopped for {mins(since)}, and nothing says anyone is waiting: no card held, no open request, no question on anyone's screen.{undelivered} "
+               f"If a hand-over, a review or an answer was in flight, it may never have arrived (a message typed while someone was on a menu is lost): ask the person now (hc send NAME \"...\") and track it with team-card take/pass so it is not lost again. "
+               f"If you are waiting for __OWNER__, ask him: team-ask request --from {lead} --to {OWNER} \"one clear question\". If the floor's work is really finished, do nothing and do not reply: you will not be reminded until the floor works again.")
+        catch(lead, since, f"floor {tn}: everyone stopped, nothing pending", {"agent": lead, "name": P[lead]["name"], "team": tn, "cards": [], "requests": [], "ping": 1,
+              "kind": "quiet", "text": f"whole floor stopped {mins(since)} with nothing pending: a hand-over may have been lost"}, msg, lead)
     for n in list(ag):
         if n not in P: ag.pop(n)
-    if not dry:
-        st = {"checkedAt": int(now * 1000), "config": c, "stalled": stalls, "parked": parked, "agents": ag, "teams": teams, "events": events[-60:], **RUN}
-        L.save(STATE, st)
-    return stalls + [f"{t} (all waiting, lead told)" for t in parked]
+    for tn in list(teams):
+        if tn not in {tj.get("name", "") for _, tj in FL}: teams.pop(tn)
+    save()
+    return stalls + [f"{t} (all waiting, lead told)" for t in parked] + [f"{t} (quiet floor, lead told)" for t in quiet]
+
+def holder():
+    """pid of the running `team-watch run`, or 0."""
+    try:
+        f = open(LOCK, "a+")
+        try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB); fcntl.flock(f, fcntl.LOCK_UN); return 0
+        except BlockingIOError: f.seek(0); return int(f.read().strip() or 1)
+        finally: f.close()
+    except Exception: return 0
+def flush_outbox():
+    """Type in what the outbox holds for people who were on a menu or not running; report once what waited 2 days."""
+    try:
+        for n, r in L.flush().items(): print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {r}", flush=True)
+        RUN["flushedAt"] = int(time.time() * 1000)
+        for n, (k, since) in L.overdue().items():   # held for days (the person is not running): __OWNER__ hears it once
+            lead = (L.people(admin=True).get(n) or {}).get("lead") or n
+            print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {k} message(s) waiting since {since[:16]}; owner told", flush=True)
+            subprocess.run([f"{BIN}/team-ask", "note", "--from", lead, f"Watchdog: {k} message(s) for {n} have waited since {since[:16].replace('T', ' ')}"[:140],
+                            "--body", f"{n} has not been able to take them (not running, or on a question in the terminal) for {L.KEEP_DAYS} days. They are still kept and will be typed in when {n} is back; `team-deliver ls` lists them. Start {n} or tell the team."], capture_output=True)
+    except Exception as e: print("outbox flush failed:", e, flush=True)
+
+SHELLS = {"zsh", "bash", "sh", "fish", "login", "-zsh", "-bash"}
+JOB = "com.omniloy.watchdog"; PLIST = f"{HOME}/Library/LaunchAgents/{JOB}.plist"
+TERM = os.environ.get("TEAM_WATCH_TERMINAL", "watchdog")   # empty: never in Herdr (tests: a Herdr terminal gets the real HOME)
+def start():
+    """Start `team-watch run` unless one is running: its login job (setup/install.py, kept alive by launchd) when
+    installed, else in the Herdr terminal "watchdog", else as a background process. Returns how."""
+    if holder(): return f"already running (pid {holder()})"
+    def up():
+        for _ in range(20):
+            if holder(): return True
+            time.sleep(0.25)
+        return False
+    if os.path.exists(PLIST):
+        uid = os.getuid()
+        # a nudge only: a job that is not loaded (unloaded on purpose) is never loaded from here
+        r = subprocess.run(["launchctl", "kickstart", f"gui/{uid}/{JOB}"], capture_output=True, text=True)
+        if r.returncode == 0 and up(): return f"started by its login job {JOB}"
+    try:
+        ts = [t for t in json.loads(hc("ls", "--json").stdout)["terminals"] if t.get("name") == TERM and t.get("state") == "live"] if TERM else [{"agent": "busy"}]
+        if ts and (ts[0].get("agent") or "").split("/")[-1] in SHELLS: hc("send", TERM, "--", f"{BIN}/team-watch run")
+        elif not ts: hc("run", "--bg", "--keep", "--no-parent", "--name", TERM, "--cwd", T, "--", f"{BIN}/team-watch", "run")
+        if TERM and up(): return f'started in the Herdr terminal "{TERM}"'
+    except Exception: pass
+    os.makedirs(f"{T}/logs", exist_ok=True)
+    subprocess.Popen([sys.executable, os.path.realpath(__file__), "run"], cwd=T, stdin=subprocess.DEVNULL, stdout=open(f"{T}/logs/watchdog.log", "ab"),
+                     stderr=subprocess.STDOUT, start_new_session=True)
+    return "started in the background (log ~/.omniloy-team/logs/watchdog.log)" if up() else "COULD NOT START: run `team-watch run` in a terminal to see why"
+
 a = sys.argv[1:] or ["status"]
-if a[0] == "run":
+if a[0] == "start": print("watchdog:", start())
+elif a[0] == "run":
     os.makedirs(T, exist_ok=True)
-    one = open(f"{T}/watch.lock", "w")   # one watchdog at a time: a second one waits here until the first stops
-    try: fcntl.flock(one, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError: print("another team-watch is running; waiting until it stops", flush=True); fcntl.flock(one, fcntl.LOCK_EX)
+    lock = open(LOCK, "a+")
+    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(f"team-watch: another watchdog is running (pid {holder()}); standing by until it stops.", flush=True)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    lock.seek(0); lock.truncate(); lock.write(str(os.getpid())); lock.flush()
     RUN.update({"pid": os.getpid(), "since": int(time.time() * 1000)})
-    print(f"team-watch: checking every {cfg()['interval']}s, catching after {cfg()['idleAfter']}s stopped. Local reads only.", flush=True)
-    last_mem = last_check = 0
+    print(f"team-watch: checking every {cfg()['interval']}s, catching after {cfg()['idleAfter']}s stopped. Local reads only. pid {os.getpid()}", flush=True)
+    last_mem, mem_ok = 0, True
     while True:
         t0 = time.time()
-        try:   # messages held for people who were on a menu or not running
-            for n, r in L.flush().items(): print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {r}", flush=True)
-            RUN["flushedAt"] = int(time.time() * 1000)
-            for n, (k, since) in L.overdue().items():   # held for days (the person is not running): __OWNER__ hears it once
-                lead = (L.people(admin=True).get(n) or {}).get("lead") or n
-                print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {k} message(s) waiting since {since[:16]}; owner told", flush=True)
-                subprocess.run([f"{L.BIN}/team-ask", "note", "--from", lead, f"Watchdog: {k} message(s) for {n} have waited since {since[:16].replace('T', ' ')}"[:140],
-                                "--body", f"{n} has not been able to take them (not running, or on a question in the terminal) for {L.KEEP_DAYS} days. They are still kept and will be typed in when {n} is back; `team-deliver ls` lists them. Start {n} or tell the team."], capture_output=True)
-        except Exception as e: print("outbox flush failed:", e, flush=True)
-        if t0 - last_check >= cfg()["interval"]:
-            last_check = t0
-            if t0 - last_mem > 600:   # notes files over the limit (team-memory): not affected by `paused`
-                last_mem = t0
-                try:
-                    out = subprocess.run([f"{L.BIN}/team-memory", "check"], capture_output=True, text=True, timeout=120)
-                    RUN["memoryAt"], RUN["memoryOk"] = int(time.time() * 1000), out.returncode == 0
-                    if out.returncode: print("memory check failed:", (out.stderr or out.stdout).strip()[-300:], flush=True)
-                    elif out.stdout.strip() not in ("", "told: nobody"): print(out.stdout.strip(), flush=True)
-                except Exception as e: RUN["memoryOk"] = False; print("memory check failed:", e, flush=True)
+        flush_outbox()
+        try:
+            s = check()
+            print(f"{datetime.datetime.now():%H:%M:%S} checked in {int((time.time() - t0) * 1000)} ms, stalled: {', '.join(s) if s else 'nobody'}", flush=True)
+        except Exception as e: print("check failed:", repr(e), flush=True)
+        if mem_ok and time.time() - last_mem > 600 and os.access(f"{BIN}/team-memory", os.X_OK):   # notes files over the limit: not affected by `paused`
+            last_mem = time.time()
             try:
-                s = check()
-                print(f"{datetime.datetime.now():%H:%M:%S} checked in {int((time.time() - t0) * 1000)} ms, stalled: {', '.join(s) if s else 'nobody'}", flush=True)
-            except Exception as e: print("check failed:", e, flush=True)
-        time.sleep(10)
+                r = subprocess.run([f"{BIN}/team-memory", "check"], capture_output=True, text=True, timeout=120)
+                RUN["memoryAt"], RUN["memoryOk"] = int(time.time() * 1000), r.returncode == 0
+                out = r.stdout.strip()
+                if out and out != "told: nobody": print(out, flush=True)
+                if r.returncode:   # a broken team-memory would archive the same files again every 10 minutes: stop calling it
+                    mem_ok = False; print("memory check failed, not run again until the watchdog restarts:", (r.stderr.strip().splitlines() or ["?"])[-1][:200], flush=True)
+            except Exception as e: RUN["memoryOk"] = False; print("memory check failed:", e, flush=True)
+        while True:   # wait for the next check; meanwhile retry messages queued for people who were on a menu
+            left = cfg()["interval"] - (time.time() - t0)
+            if left <= 0: break
+            time.sleep(min(10, max(1, left))); flush_outbox()
 elif a[0] == "once": print("stalled:", check(dry="--dry" in a))
+elif a[0] == "alive":
+    pid = holder(); print(f"running (pid {pid})" if pid else "not running"); sys.exit(0 if pid else 1)
 elif a[0] == "status":
     st = rj(STATE, {})
     q = L.pending()
     if q: print("outbox:", ", ".join(f"{n} {k}" for n, k in sorted(q.items())), "message(s) waiting")
     if not st: print("never ran"); sys.exit()
-    ago = int(time.time() - st["checkedAt"] / 1000)
-    print("last check:", datetime.datetime.fromtimestamp(st["checkedAt"] / 1000).strftime("%H:%M:%S"), f"({ago} s ago{', NOT RUNNING' if ago > 300 else ''})", "| config:", st["config"])
+    pid = holder()
+    print("last check:", datetime.datetime.fromtimestamp(st["checkedAt"] / 1000).strftime("%d %b %H:%M:%S"), "|", f"running (pid {pid})" if pid else "NOT RUNNING",
+          "|", st.get("error") or "", "| config:", st["config"])
     if st.get("memoryAt"): print("memory check:", datetime.datetime.fromtimestamp(st["memoryAt"] / 1000).strftime("%H:%M:%S"), "ok" if st.get("memoryOk") else "FAILED")
-    for n in st["stalled"]: s = st["agents"][n]["stall"]; print(f'  {n:9} {", ".join(s["cards"] + s["requests"])}  pings {s["pings"]}')
-    for t in st.get("parked", []): x = st["teams"][t]; print(f'  {t}: everyone stopped, all cards waiting ({x["sig"]}), lead pinged {x["pings"]}')
-    if not st["stalled"] and not st.get("parked"): print("  nobody stalled")
+    for n in st.get("stalled", []): s = st["agents"][n]["stall"]; print(f'  {n:9} {", ".join(s["cards"] + s["requests"])}  pings {s["pings"]}')
+    for t in st.get("parked", []): x = st["teams"][t]["parked"]; print(f'  {t}: everyone stopped, all cards waiting ({x["sig"]}), lead pinged {x["pings"]}')
+    for t in st.get("quiet", []): print(f'  {t}: everyone stopped with nothing pending, lead told')
+    if not st.get("stalled") and not st.get("parked") and not st.get("quiet"): print("  nobody stalled")
 else: print(__doc__)

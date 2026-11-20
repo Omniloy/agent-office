@@ -101,6 +101,12 @@ def watchdog():
     q = sum(L.pending().values())
     return ('Watchdog: ' + (f'running (last check {int(ago)} s ago)' if ago < 300 else 'NOT RUNNING' + (f' (last check {int(ago // 60)} min ago)' if st.get('checkedAt') else ''))
             + (f'; outbox: {q} message(s) waiting' if q else ''))
+WATCH = f'{L.BIN}/team-watch'
+def start_watchdog():
+    """`team-watch start`: does nothing when one runs (its lock), else nudges its login job or starts it."""
+    if not os.path.exists(WATCH): return 'Watchdog: not installed'
+    try: return 'Watchdog: ' + (subprocess.run([sys.executable, WATCH, 'start'], capture_output=True, text=True, timeout=60).stdout.strip().removeprefix('watchdog: ') or '?')
+    except Exception as e: return f'Watchdog: could not start it ({type(e).__name__})'
 a = sys.argv[1] if len(sys.argv) > 1 else ''
 ports = list(FLOORS) if a == 'all' else [a] if a in FLOORS else []
 if a == 'status':
@@ -118,5 +124,7 @@ elif ports:
             names = ', '.join(f'{FLOORS[p][0]} ({p})' for p in h)
             print(f'{names} runs this terminal: the restart goes on in the background and this terminal closes with the floor. '
                   f'Reload the page in a few seconds; the result is in {L.short(LOGS)}/office-restart.log'); sys.exit(0)
-    sys.exit(0 if all([restart(p) for p in ports]) else 1)
+    ok = all([restart(p) for p in ports])
+    if a == 'all': print(start_watchdog())   # the floors are back: the watchdog too, unless it already runs
+    sys.exit(0 if ok else 1)
 else: print(__doc__); sys.exit(2)
