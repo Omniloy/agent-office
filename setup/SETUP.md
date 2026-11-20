@@ -95,6 +95,7 @@ no `tailscale` key (you add it in step 9). `runtimes` lists only the CLIs that a
 
     python3 setup/install.py --config office.config.json --dry-run    # read what it would do
     python3 setup/install.py --config office.config.json
+    python3 setup/install.py --config office.config.json --only-services   # the background services, with the user's yes
     python3 setup/install.py --check
 
 Read the `NOTE:` lines the installer prints and act on them. The check will still say NO for the floors answering
@@ -260,8 +261,9 @@ first and, if one differs like that, stops before writing anything (exit code 1)
 that backups folder. Bring the edits worth keeping into the repo, then rerun; `--force` replaces them anyway (after
 the backup), and `--keep <file>` leaves one file as it is. The first update with this check counts every differing
 file as edited. It never writes through a symbolic link (a skill folder linked to another repo is listed and left
-alone). The background services are a separate step: run the update with `--no-services`, and only with the user's
-yes `--only-services` (a LaunchAgent is reloaded only if its file changed; `office-up` is never started from here).
+alone). The background services are a separate step: a normal run never touches them, and only with the user's
+yes `--only-services` installs or updates them (a LaunchAgent is reloaded only if its file changed; `office-up` is
+never started from here).
 npm dependencies are installed again when an app's `package.json` or `package-lock.json` changed.
 People who are running keep their old instructions until their next session.
 

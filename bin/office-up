@@ -2,8 +2,8 @@
 """office-up [--dry] [--before <ISO time>] [--wait <seconds>]   bring the office back after a reboot or a crash.
 
   1. Floors: every office server that does not answer is started (office-restart <port>, which keeps page tokens).
-  2. Watchdog: started again if it is not running (`team-watch start`: a nudge to its login job com.omniloy.watchdog
-     when that is installed, else the "watchdog" terminal, else a background process).
+  2. Watchdog: started again if it is not running and its login job com.omniloy.watchdog is installed (the owner's
+     yes: install.py --only-services); without that job it is left off (`team-watch start` starts it by hand).
   3. People: everyone whose Herdr terminal is still there but fell back to a plain shell (what Herdr leaves after a
      reboot or when the agent died) is started again IN THEIR PREVIOUS CONVERSATION (`--resume <session>`), with a
      message that says what happened. They keep everything they knew; background workflows and subagents did not
@@ -48,7 +48,9 @@ for name, port in re.findall(r"^(.+?) \((\d+)\): DOWN", st, re.M):
 
 # 2. watchdog (it does not need Herdr to start: it waits for it). `team-watch alive` asks its lock, not `ps`
 #    (a script run through its #! line shows up in ps as ".../Python team-watch run", which a match on "python" misses)
-if os.path.exists(f"{BIN}/team-watch") and sh("/usr/bin/python3", f"{BIN}/team-watch", "alive").returncode:
+if not os.path.exists(os.path.expanduser("~/Library/LaunchAgents/com.omniloy.watchdog.plist")):
+    log("watchdog: its login job is not installed (owner's yes: install.py --only-services); left off")
+elif os.path.exists(f"{BIN}/team-watch") and sh("/usr/bin/python3", f"{BIN}/team-watch", "alive").returncode:
     log("watchdog is not running: starting it")
     if not DRY: print("  " + sh("/usr/bin/python3", f"{BIN}/team-watch", "start", timeout=60).stdout.strip())
 
@@ -81,7 +83,11 @@ def dead(x):
 
 # 3. people
 def last_session(cmd, cwd, slug): return L.last_session(cmd, cwd, slug, BEFORE)
-spaces = json.loads(sh(f"{BIN}/herdr-app", "ls").stdout or "{}").get("spaces", [])
+def app_spaces():
+    """The Herdr app's spaces (tab names), or none when herdr-app is missing or does not answer: people still start."""
+    try: return json.loads(sh(f"{BIN}/herdr-app", "ls", timeout=20).stdout or "{}").get("spaces", [])
+    except (OSError, ValueError, subprocess.TimeoutExpired): return []
+spaces = app_spaces()
 n = 0
 for team, t, _ in L.teams(admin=True):   # the floors and the admin (Business is retired)
     prefix = t.get("tabPrefix", "team-")
@@ -117,5 +123,7 @@ for team, t, _ in L.teams(admin=True):   # the floors and the admin (Business is
         r = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", team, *labels, "--", *argv)
         if r.returncode: print(f"  FAILED: {r.stderr.strip()[:200]}"); continue
         if p.get("tabName"):
-            time.sleep(1.5); sh(f"{BIN}/herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": p["tabName"]}))
+            time.sleep(1.5)
+            try: sh(f"{BIN}/herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": p["tabName"]}), timeout=20)
+            except (OSError, subprocess.TimeoutExpired): pass   # no herdr-app: the tab keeps its default name
 print(f"office-up: {n} {'would be ' if DRY else ''}restarted; everything else was already running")

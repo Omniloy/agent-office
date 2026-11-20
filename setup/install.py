@@ -7,8 +7,9 @@
   ... --force              also replace live files that were edited by hand since the last install (see below)
   ... --protocol-sections  apply the protocol sections that follow the repo without asking (you approved them)
   ... --keep PATH          leave this live file as it is even with --force (repeatable; e.g. a role file with a live-only rule)
-  ... --no-services        do not touch the background services (LaunchAgents)
-  ... --only-services      install or update only the background services (a separate step, with the owner's yes)
+  ... --only-services      install or update only the background services (LaunchAgents): a separate step, run
+                           only with the owner's yes. A normal run never touches them.
+  ... --no-services        accepted for older instructions; a normal run already leaves the services alone
 
 It copies the apps, tools, Herdr panels, skills and role instructions to their places, filling in the owner's
 name. It never overwrites a team folder that already exists (people, protocols, memory, requests): those are yours.
@@ -111,13 +112,30 @@ class Run:
         if not ok and sys.stdin.isatty():
             print(f"\n{dst}: {what} differs from the repo. The change:\n{diff}")
             ok = input("Apply it? [y/N] ").strip().lower() in ("y", "yes", "s", "si", "sí")
+        if self.link_in(dst):
+            if (dst, self.link_in(dst)) not in self.linked: self.linked.append((dst, self.link_in(dst)))
+            return
         if not ok:
-            open(f"{dst}.proposed", "w", encoding="utf-8").write(out)
+            if not self.side_write(f"{dst}.proposed", out.encode("utf-8")): return
             self.warn.append(f"{dst}: {what} differs from the repo and was NOT changed. The proposal is {os.path.basename(dst)}.proposed: "
                              f"show the user `diff {dst} {dst}.proposed`, and with their yes copy it over (or rerun with --protocol-sections)")
             return
-        self.backup(dst); open(dst, "w", encoding="utf-8").write(out)
+        if not self.side_write(dst, out.encode("utf-8")): return
         self.say(f"{dst}: {what} brought up to date with your yes (the file as it was is in {BACKUPS})")
+    def side_write(self, dst, data):
+        """Write a file the install does not track (a .proposed or .new next to the user's file, or a protocol change
+        approved with a yes): never through a symbolic link, the file it replaces backed up first, written atomically.
+        Returns False when it was left alone."""
+        ln = self.link_in(dst)
+        if ln:
+            if (dst, ln) not in self.linked: self.linked.append((dst, ln))
+            return False
+        if self.dry: return True
+        if os.path.exists(dst):
+            if open(dst, "rb").read() == data: return True
+            self.backup(dst)
+        tmp = f"{dst}.installing"; open(tmp, "wb").write(data); os.replace(tmp, dst)
+        return True
     def backup(self, dst):
         """A copy of a file about to be replaced, under ~/.omniloy-office/backups/<date>/ (never next to it: a .bak in an
         app's public/ folder would be served, and one in ~/.local/bin is on the PATH)."""
@@ -155,7 +173,7 @@ class Run:
                 if mode and not self.dry and (os.stat(dst).st_mode & 0o777) != mode: os.chmod(dst, mode)
                 return False
             if keep_existing:
-                if not self.dry: open(dst + ".new", "wb").write(data)
+                self.side_write(dst + ".new", data)
                 self.warn.append(f"{dst} already exists and differs from the repo; yours was kept and the repo's version is next to it as {os.path.basename(dst)}.new")
                 return False
             if os.path.abspath(dst) in self.keep:
@@ -390,8 +408,8 @@ def check():
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config"); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--check", action="store_true")
-    ap.add_argument("--no-services", action="store_true", help="do not touch the background services (LaunchAgents)")
-    ap.add_argument("--only-services", action="store_true", help="install or update only the background services")
+    ap.add_argument("--no-services", action="store_true", help="kept for older instructions: a normal run never touches the background services")
+    ap.add_argument("--only-services", action="store_true", help="install or update only the background services (LaunchAgents), with the owner's yes")
     ap.add_argument("--force", action="store_true", help="also replace live files edited since the last install (backed up first)")
     ap.add_argument("--keep", action="append", default=[], metavar="PATH", help="never replace this live file, even with --force (repeatable)")
     ap.add_argument("--protocol-sections", action="store_true", help="apply the protocol sections that follow the repo without asking")
@@ -406,8 +424,8 @@ def main():
     bad = [r for r in cfg.get("runtimes") or [] if r not in ("claude", "codex")]
     if bad or not cfg.get("runtimes"): sys.exit('config: runtimes must list what is installed: ["claude"], ["codex"] or ["claude", "codex"]')
     def steps(r):
-        if not a.only_services: r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
-        if not a.no_services: r.services()
+        if a.only_services: r.services()   # the background services only ever change in their own step, with the owner's yes
+        else: r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
     # 1. look: every destination is compared first, nothing is written
     look = Run(cfg, True, force=a.force, sections=a.protocol_sections, keep=a.keep, quiet=True)
     steps(look)
@@ -422,6 +440,9 @@ def main():
     for w in r.warn: print("NOTE: " + w)
     r.report_links()
     drift = r.report_drift()
+    if not a.only_services:
+        print("\nThe background services (LaunchAgents: floors at login, watchdog, artifacts, phone link) were not touched."
+              "\nThey are a separate step, only with the owner's yes: the same command with --only-services.")
     print("\nNext: python3 setup/install.py --check   (then continue with setup/SETUP.md)")
     sys.exit(drift)
 

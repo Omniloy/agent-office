@@ -9,7 +9,8 @@ The floors are those of ~/.omniloy-team/floors.json (else Dev 4317, CRM 4319, We
   caller's terminal or agent session variables, and it counts as back only when the NEW process answers.
 - Run from a floor's own room terminal (a Run button), it restarts itself detached from that terminal first:
   the terminal closes with the floor, the restart carries on. Log: ~/.omniloy-team/logs/office-restart.log
-`status` also says whether the watchdog runs and what the outbox holds."""
+`all` also starts the watchdog when it is not running, but only once its login job is installed (the owner's yes:
+install.py --only-services). `status` also says whether the watchdog runs and what the outbox holds."""
 import sys, os, re, subprocess, time, urllib.request, signal, json
 sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import teamlib as L
@@ -102,9 +103,12 @@ def watchdog():
     return ('Watchdog: ' + (f'running (last check {int(ago)} s ago)' if ago < 300 else 'NOT RUNNING' + (f' (last check {int(ago // 60)} min ago)' if st.get('checkedAt') else ''))
             + (f'; outbox: {q} message(s) waiting' if q else ''))
 WATCH = f'{L.BIN}/team-watch'
+WATCH_JOB = H('~/Library/LaunchAgents/com.omniloy.watchdog.plist')
 def start_watchdog():
-    """`team-watch start`: does nothing when one runs (its lock), else nudges its login job or starts it."""
+    """`team-watch start`, only once the owner set up its login job (install.py --only-services): the watchdog nudges
+    people (paid turns), so a restart never starts it on its own before that yes. Does nothing when one runs."""
     if not os.path.exists(WATCH): return 'Watchdog: not installed'
+    if not os.path.exists(WATCH_JOB): return 'Watchdog: not set up (its login job is installed with the owner\'s yes; `team-watch start` starts it by hand)'
     try: return 'Watchdog: ' + (subprocess.run([sys.executable, WATCH, 'start'], capture_output=True, text=True, timeout=60).stdout.strip().removeprefix('watchdog: ') or '?')
     except Exception as e: return f'Watchdog: could not start it ({type(e).__name__})'
 a = sys.argv[1] if len(sys.argv) > 1 else ''

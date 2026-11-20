@@ -47,6 +47,7 @@ about 15 minutes. Everything else is installed during setup.
 `git pull`, then ask your agent to "update the agent office", or run:
 
     python3 setup/install.py --config ~/.omniloy-office/install.json
+    python3 setup/install.py --config ~/.omniloy-office/install.json --only-services   # background services, only when they changed
 
 Apps, tools, panels and skills are replaced. Your team folders (people, protocols, memory, requests) are never
 overwritten; when the repo has a newer protocol it is left next to yours as `PROTOCOL.md.new`.

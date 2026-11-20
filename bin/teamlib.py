@@ -120,21 +120,27 @@ def session_file(cmd, cwd, sid):
 # order, as soon as the person can take it (each new message and the watchdog try again). Never --force.
 def _q(name): return f"{OUTBOX}/{re.sub(r'[^A-Za-z0-9._-]', '_', name)}.jsonl"
 def _read_q(path):
+    """The queue's records. A line that cannot be read is kept as {"_raw": line}: never sent, never dropped."""
     out = []
     try:
-        for l in open(path, encoding="utf-8"):
-            try: out.append(json.loads(l))
-            except Exception: pass
+        for l in open(path, encoding="utf-8", errors="surrogateescape"):
+            if not l.strip(): continue
+            try:
+                x = json.loads(l)
+                out.append(x if isinstance(x, dict) and isinstance(x.get("text"), str) else {"_raw": l.rstrip("\n")})
+            except Exception: out.append({"_raw": l.rstrip("\n")})
     except FileNotFoundError: pass
     return out
+def _good(items): return [x for x in items if "_raw" not in x]
 def _write_q(path, items):
     if not items:
         try: os.remove(path)
         except FileNotFoundError: pass
         return
     tmp = f"{path}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        for x in items: f.write(json.dumps(x, ensure_ascii=False) + "\n")
+    with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as f:
+        for x in items: f.write((x["_raw"] if "_raw" in x else json.dumps(x, ensure_ascii=False)) + "\n")
+        f.flush(); os.fsync(f.fileno())
     os.chmod(tmp, 0o600); os.replace(tmp, path)
 WHY = {"blocked": "busy with a question in their terminal", "not_found": "not running", "finished": "not running",
        "unavailable": "not reachable right now"}
@@ -154,10 +160,12 @@ def send_now(name, text, timeout=150):
         with open(f"{OUTBOX}/send.log", "a") as f: f.write(json.dumps({"at": now(), "to": name, "rc": r.returncode, "kind": kind or why[:80]}) + "\n")
     except Exception: pass
     return False, why
-def _drain(name, items):
+def _drain(name, items, path=None):
     """Send queued items in order until they cannot go. Several waiting ones go as one paste (each `hc send` waits a few
-    seconds of quiet, and one message reads better than six). Returns (left, why)."""
-    keep = list(items); why = ""
+    seconds of quiet, and one message reads better than six). Unreadable records stay where they are. With `path`, the
+    queue file is rewritten after every send, so a crash can repeat at most one message, never lose one.
+    Returns (left, why)."""
+    bad = [x for x in items if "_raw" in x]; keep = _good(items); why = ""
     while keep:
         n, size = 0, 0
         while n < len(keep) and n < 6 and (n == 0 or size + len(keep[n]["text"]) < 8000): size += len(keep[n]["text"]); n += 1
@@ -166,15 +174,18 @@ def _drain(name, items):
         ok, why = send_now(name, text)
         if not ok: break
         keep = keep[n:]
-    return keep, why
+        if path: _write_q(path, keep + bad)
+    return keep + bad, why
 def deliver(name, text, source=""):
     """Type `text` into <name>'s terminal, or queue it. Returns 'delivered' or 'queued: <why>'."""
     os.makedirs(OUTBOX, mode=0o700, exist_ok=True)
     q = _q(name); me = {"ts": time.time(), "at": now(), "to": name, "text": text, "source": source}
     with Locked(q):
-        left, why = _drain(name, _read_q(q) + [me])
+        items = _read_q(q) + [me]
+        _write_q(q, items)   # on disk before the first `hc send`: a crash mid-send leaves it queued, not lost
+        left, why = _drain(name, items, q)
         _write_q(q, left)
-    return "delivered" if not any(x["ts"] == me["ts"] and x["text"] == text for x in left) else f"queued: {why}"
+    return "delivered" if not any(x.get("ts") == me["ts"] and x.get("text") == text for x in left) else f"queued: {why}"
 def said(result, name):
     """A short sentence for a tool's output."""
     if result == "delivered": return f"{name} was told"
@@ -187,7 +198,7 @@ def pending():
     except FileNotFoundError: return out
     for f in files:
         if f.endswith(".jsonl") and f != "dropped.jsonl":
-            n = len(_read_q(f"{OUTBOX}/{f}"))
+            n = len(_good(_read_q(f"{OUTBOX}/{f}")))
             if n: out[f[:-6]] = n
     return out
 def overdue():
@@ -198,7 +209,7 @@ def overdue():
         q = _q(name)
         try:
             with Locked(q, wait=False):
-                items = _read_q(q); old = [x for x in items if x.get("ts", 0) < cut and not x.get("reported")]
+                items = _read_q(q); old = [x for x in _good(items) if x.get("ts", 0) < cut and not x.get("reported")]
                 if not old: continue
                 for x in old: x["reported"] = now()
                 _write_q(q, items); out[name] = (len(old), old[0].get("at", ""))
@@ -218,7 +229,7 @@ def flush(terms=None):
         q = _q(name)
         try:
             with Locked(q, wait=False):
-                items = _read_q(q); left, why = _drain(name, items); _write_q(q, left)
-                done[name] = f"delivered {len(items) - len(left)}" + (f", {len(left)} left ({why})" if left else "")
+                items = _read_q(q); left, why = _drain(name, items, q); _write_q(q, left)
+                done[name] = f"delivered {len(items) - len(left)}" + (f", {len(left)} left ({why or 'unreadable'})" if left else "")
         except BlockingIOError: continue
     return done

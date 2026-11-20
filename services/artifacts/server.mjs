@@ -119,13 +119,16 @@ const server = http.createServer(async (req, res) => {
     }
     const parts = p.split('/').filter(Boolean);
     if (parts.length < 2 || !SAFE.test(parts[0]) || !SAFE.test(parts[1]) || parts.some((x) => x === '..' || x.startsWith('.'))) return send(404, 'text/plain', 'not found');
-    const dir = path.join(ROOT, parts[0], parts[1]), meta = await readJson(path.join(dir, 'meta.json'), null);
+    const dir = path.join(ROOT, parts[0], parts[1]);
+    if (!(await inside(dir, ROOT))) return send(404, 'text/plain', 'not found');
+    const meta = await readJson(path.join(dir, 'meta.json'), null);
     if (!meta) return send(404, TYPES.html, SHELL('Not found', '<h1>Not found</h1><p>This artifact does not exist (it may have been deleted). <a href="/">See all</a></p>'));
     if (parts.length === 2) {
       if (!p.endsWith('/')) return send(302, 'text/plain', '', { location: `${p}/` }); // so relative links inside the page work
       for (const n of ['index.html', 'index.mdx', 'index.md']) {
         const f = path.join(dir, n);
         if (!(await fs.stat(f).catch(() => null))) continue;
+        if (!(await inside(f, dir))) return send(404, 'text/plain', 'not found'); // a link that leads out of the page's folder
         return send(200, TYPES.html, n === 'index.html' ? await fs.readFile(f) : await mdx(f, meta, parts[0]));
       }
       return send(404, 'text/plain', 'this artifact has no index.html, index.mdx or index.md');
@@ -133,9 +136,13 @@ const server = http.createServer(async (req, res) => {
     const f = path.join(dir, ...parts.slice(2));
     if (!f.startsWith(dir + path.sep) || path.basename(f) === 'meta.json') return send(404, 'text/plain', 'not found');
     const st = await fs.stat(f).catch(() => null);
-    if (!st || !st.isFile()) return send(404, 'text/plain', 'not found');
+    if (!st || !st.isFile() || !(await inside(f, dir))) return send(404, 'text/plain', 'not found');
     if (/\.mdx?$/.test(f) && !url.searchParams.has('raw')) return send(200, TYPES.html, await mdx(f, meta, parts[0])); // further pages of the same document
     send(200, TYPES[path.extname(f).slice(1).toLowerCase()] || 'application/octet-stream', await fs.readFile(f));
   } catch (e) { send(500, 'text/plain', `error: ${e.message}`); }
 });
+// A symbolic link inside a published folder must not serve a file from elsewhere: compare the real paths.
+async function inside(f, dir) {
+  try { const [rf, rd] = await Promise.all([fs.realpath(f), fs.realpath(dir)]); return rf.startsWith(rd + path.sep); } catch { return false; }
+}
 server.listen(PORT, '127.0.0.1', () => console.log(`artifacts on http://127.0.0.1:${PORT}/ serving ${ROOT}`));

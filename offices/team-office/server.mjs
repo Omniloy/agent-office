@@ -937,6 +937,9 @@ async function answerMenu(body) {
     const next = after.menu || null;
     const message = String(body.message || '').trim(), sent = !!message && freeMenu(label) && !next;
     if (sent) {
+      // look once more right before typing with --force: if a new question came up meanwhile, the text would answer it
+      const now = await liveMenu(name);
+      if (!now.ok || now.menu) return { code: 409, body: { error: `Pressed ${digit}, but ${now.ok ? 'a new question is on the screen' : 'the screen could not be read'}: your text was not sent. Check it on Live screen.`, pressed: true } };
       const r = await run(HC, ['send', '--json', '--force', name, '--', message], { timeout: 120000 }); // --force: after the free option they sit in its text box, which hc counts as blocked
       if (!r.ok) return { code: 502, body: { error: clip(oneLine(r.stderr || r.stdout), 240) || 'The follow-up text was not sent.', pressed: true } };
     }
@@ -968,6 +971,9 @@ async function deliver(name, text) {
   const started = Date.now();
   const p = run(HC, ['send', '--json', name, '--', text], { timeout: 120_000 });
   const first = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), 12_000))]);
+  if (!first) { // still typing after 12 s: the page hears "queued" now, so a late failure must not lose the text
+    p.then((late) => { if (!late.ok) run(bin('team-deliver'), [name, text, '--source', 'office'], { timeout: 30_000 }).catch(() => {}); }).catch(() => {});
+  }
   if (first && !first.ok) {
     const a = state.agents.find((x) => x.herdrName === name);
     if (a && a.status === 'blocked') { // on a menu: kept in the outbox and typed in once it is answered (team-deliver), like a request answer
