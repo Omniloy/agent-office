@@ -489,13 +489,21 @@ const readJsonOr = async (f, d) => { try { return await readJson(f); } catch { r
 // The look of the rooms (public/js/themes), one setting for the whole building: { mode: 'fixed' | 'daily', theme }.
 // It lives with the other building-wide settings in ~/.omniloy-team, so every floor reads the same file on each
 // refresh and every open page follows within a few seconds. OFFICE_THEME_FILE points elsewhere (tests).
-// 'daily' picks by the Europe/Madrid date, cycling every theme in order (Oficina first, then by file name).
+// 'daily' picks by the Europe/Madrid date, cycling every theme in order (Oficina first, then the registry's order).
+// The themes are the page's own registry (public/js/themes/index.js: THEMES, and the file each name is imported
+// from; a theme's id is its file name), so the server and the picker always know the same ones and a helper file in
+// that folder is never taken for a theme.
 const THEME_FILE = process.env.OFFICE_THEME_FILE || path.join(SHARED, 'office-theme.json');
 let themeList = { at: 0, ids: ['oficina'] };
+function themeRegistry(src) {
+  const files = {}, list = /export\s+const\s+THEMES\s*=\s*\[([^\]]*)\]/.exec(src);
+  for (const m of src.matchAll(/^import\s+([A-Za-z_$][\w$]*)\s+from\s+['"]\.\/([a-z][a-z0-9-]*)\.js['"]/gm)) files[m[1]] = m[2];
+  return list ? list[1].split(',').map((x) => files[x.trim()]).filter(Boolean) : [];
+}
 async function themeIds() {
   if (Date.now() - themeList.at < 60_000) return themeList.ids;
   let ids = [];
-  try { ids = (await fs.readdir(path.join(ROOT, 'public', 'js', 'themes'))).filter((f) => /^[a-z][a-z0-9-]*\.js$/.test(f) && f !== 'index.js').map((f) => f.slice(0, -3)).sort(); } catch { /* none */ }
+  try { ids = themeRegistry(await fs.readFile(path.join(ROOT, 'public', 'js', 'themes', 'index.js'), 'utf8')); } catch { /* none */ }
   ids = ['oficina', ...ids.filter((x) => x !== 'oficina')];
   themeList = { at: Date.now(), ids };
   return ids;
@@ -509,9 +517,11 @@ async function themeSetting() {
   return { mode, theme, effective, day };
 }
 async function saveTheme(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'a JSON object is expected' };
   const ids = await themeIds(), mode = body.mode === 'daily' ? 'daily' : body.mode === 'fixed' ? 'fixed' : '';
   if (!mode) return { error: 'mode is fixed or daily' };
-  const old = await themeSetting(), theme = body.theme == null || body.theme === '' ? old.theme : String(body.theme);
+  if (body.theme != null && typeof body.theme !== 'string') return { error: 'theme is a name' };
+  const old = await themeSetting(), theme = body.theme == null || body.theme === '' ? old.theme : body.theme;
   if (!ids.includes(theme)) return { error: 'unknown theme' };
   const tmp = `${THEME_FILE}.${process.pid}.tmp`;
   await fs.mkdir(path.dirname(THEME_FILE), { recursive: true });
@@ -909,7 +919,9 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/theme') { // the building's theme: anyone with this page reads it, the owner (this token) changes it
       if (req.method !== 'POST') return json(res, 200, await themeSetting());
       if (!String(req.headers['content-type'] || '').includes('application/json')) return json(res, 415, { error: 'json only' });
-      const r = await saveTheme(await readBody(req));
+      let body;
+      try { body = await readBody(req); } catch { return json(res, 400, { error: 'the body is not JSON, or too large' }); }
+      const r = await saveTheme(body);
       if (r.error) return json(res, 400, r);
       scheduleRefresh();
       return json(res, 200, r);
