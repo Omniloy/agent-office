@@ -44,12 +44,9 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
     const me = (await peersFile()).me || {};
     return { id: me.id, name: me.name, owner: me.owner, floors: (await Promise.all(OFFICES.map(floorCard))).filter(Boolean) };
   }
-  // the name card other computers read over ssh to know there is a building here (peer-link.mjs)
-  (async () => {
-    await tool('team-peer', ['me']);
-    const me = (await peersFile()).me || {};
-    await fs.writeFile(path.join(SHARED, 'building.json'), JSON.stringify({ id: me.id, name: me.name, owner: me.owner, floors: OFFICES.map((o) => ({ port: o.port, name: o.name, dir: o.dir })) }, null, 1)).catch(() => {});
-  })();
+  // the name card other computers read over ssh to know there is a building here (peer-link.mjs): `team-peer me`
+  // writes building.json, always from the floors list, so a test floor started from a checkout cannot replace it
+  tool('team-peer', ['me']);
 
   // ---- what the owner's own pages ask (main listener, office token already checked)
   const cache = new Map(); // peer id -> { at, info }

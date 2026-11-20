@@ -15,7 +15,8 @@ STATES = ["lead","pilot","onboarding","active","at-risk","paused","churned"]
 CHANNELS = ["email","whatsapp","phone","slack","teams","meeting"]   # how we talk to a person; list only what a source shows
 def load():
     try: return json.load(open(F))
-    except Exception: return {"updated": "", "clients": []}
+    except FileNotFoundError: return {"updated": "", "clients": []}
+    except Exception as e: sys.exit(f"{F} cannot be read ({type(e).__name__}); nothing was changed")   # never write an empty register over it
 def save(d):
     d["updated"] = datetime.datetime.now().isoformat(timespec="seconds"); tmp = F + ".tmp"
     json.dump(d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, F)
