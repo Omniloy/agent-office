@@ -281,6 +281,8 @@ elif a[0] == "run":
                 if r.returncode:   # a broken team-memory would archive the same files again every 10 minutes: stop calling it
                     mem_ok = False; print("memory check failed, not run again until the watchdog restarts:", (r.stderr.strip().splitlines() or ["?"])[-1][:200], flush=True)
             except Exception as e: RUN["memoryOk"] = False; print("memory check failed:", e, flush=True)
+            st = rj(STATE, {})   # shown at once (status, the office), not only after the next check
+            if st: L.save(STATE, {**st, **RUN})
         while True:   # wait for the next check; meanwhile retry messages queued for people who were on a menu
             left = cfg()["interval"] - (time.time() - t0)
             if left <= 0: break
