@@ -4,20 +4,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { CopyShader } from 'three/addons/shaders/CopyShader.js';
+import { themeById, DEFAULT_THEME } from './themes/index.js';
 
 const BACK_Z = -9, LEFT_X = -13, DESK_Z = -5.4, SEAT_Z = -6.55, AISLE_Z = -3.3, WALL_H = 7.2, ROW_D = 4.4;
-// Each floor served by this app has its own look, picked by port (the guest listener is port + 1000).
-const THEMES = {
-  dev: { floor: 'wood', wall: 0xf0e9dd, trim: 0x3a3f52, shelf: 0xcaa778, rug: 0x35406e, rugRing: 0xe9d9b8, sofa: [0x5b6ee1, 0x4f61cf],
-    pillows: [0xfbbf24, 0xfb7185], bags: [0xfb7185, 0x34d399, 0xfbbf24], shade: 0xffe2a8, light: 0xffd9a0, sign: ['DEV', 'MarIA', '#7c9cff'] },
-  crm: { floor: 'concrete', wall: 0xe2eeeb, trim: 0x1f3b3a, shelf: 0x7d8f8c, rug: 0x134e4a, rugRing: 0x5eead4, sofa: [0x0f766e, 0x115e59],
-    pillows: [0xfda4af, 0xfcd34d], bags: [0x14b8a6, 0xf59e0b, 0x0ea5e9], shade: 0xe3fbf6, light: 0xdff4ff, sign: ['CRM', 'Omniloy CRM', '#2dd4bf'], prop: 'crm' },
-  web: { floor: 'terrazzo', wall: 0xfaefe2, trim: 0x4a2c1d, shelf: 0x3f3f46, rug: 0x4c1d95, rugRing: 0xfb923c, sofa: [0xf97316, 0xea580c],
-    pillows: [0xa78bfa, 0xfde047], bags: [0xec4899, 0xf97316, 0x8b5cf6], shade: 0xffd6a8, light: 0xffc48a, sign: ['WEB', 'omniloy.com', '#fb923c'], prop: 'web' },
-  lab: { floor: 'epoxy', wall: 0xe9ecf7, trim: 0x1e1b4b, shelf: 0x334155, rug: 0x1e1b4b, rugRing: 0x818cf8, sofa: [0x4338ca, 0x3730a3],
-    pillows: [0x22d3ee, 0xf0abfc], bags: [0x6366f1, 0x22d3ee, 0xa3e635], shade: 0xe0e7ff, light: 0xe6ecff, sign: ['LAB', 'I+D', '#818cf8'], prop: 'lab' },
-};
-const THEME = THEMES[{ 319: 'crm', 320: 'web', 321: 'lab' }[Number(globalThis.location?.port) % 1000]] || THEMES.dev;
 const STAND_Y = 0.53, SEAT_Y = 0.72;
 const STATUS_COLOR = { working: 0x34d399, idle: 0xa3aec4, blocked: 0xfbbf24, offline: 0x3a4256 };
 const STATUS_TEXT = { working: 'working', idle: 'idle', blocked: 'needs you', offline: 'offline' };
@@ -96,7 +90,9 @@ const ago = (ms) => { const m = Math.max(0, Math.round((Date.now() - ms) / 60000
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const hex = (c) => `#${new THREE.Color(c).getHexString()}`;
 
-export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
+export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, theme: th }) {
+  const theme = th && th.base ? th : themeById(th || DEFAULT_THEME); // the look of the room: themes/index.js
+  const title = theme.title, texts = theme.texts;
   const escText = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const fmt = format || escText;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -104,7 +100,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = theme.exposure != null ? theme.exposure : 1.08;
   sceneEl.appendChild(renderer.domElement);
   const labels = new CSS2DRenderer({ element: labelsEl });
 
@@ -154,14 +150,6 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   sun.shadow.bias = -0.0004;
   sun.shadow.radius = 4;
   scene.add(hemi, sun);
-  const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
-  {
-    const sky = surface(256, 128), c = sky.ctx, gr = c.createLinearGradient(0, 0, 0, 128);
-    gr.addColorStop(0, '#8fc7ff'); gr.addColorStop(1, '#e6f4ff'); c.fillStyle = gr; c.fillRect(0, 0, 256, 128);
-    c.fillStyle = 'rgba(255,255,255,.9)';
-    for (const [x, y, r] of [[46, 52, 15], [66, 46, 21], [92, 54, 14], [176, 80, 13], [196, 73, 19], [220, 82, 12]]) { c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); }
-    windowMat.map = sky.tex;
-  }
   let lightMode = 'auto', dayNow = -1;
   const C = (a, b, f) => new THREE.Color(a).lerp(new THREE.Color(b), f);
   function dayFactor() {
@@ -174,19 +162,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     if (Math.abs(f - dayNow) < 0.002) return;
     dayNow = f;
     const gold = lightMode === 'auto' ? Math.max(0, 1 - Math.abs(f - 0.45) / 0.45) : 0; // sunrise and sunset
-    scene.background = C(0x0b1022, 0xc5dcf2, f).lerp(new THREE.Color(0xf2b98a), gold * 0.4);
-    scene.fog.color.copy(scene.background);
-    hemi.intensity = 1.3 + f * 0.35;
-    hemi.color = C(0xaab4f5, 0xffffff, f);
-    hemi.groundColor = C(0x2a2740, 0x6b5648, f);
-    sun.intensity = 1.0 + f * 2.1;
-    sun.color = C(0x9db0ff, 0xfff1d6, f).lerp(new THREE.Color(0xff9d5c), gold * 0.6);
-    sun.position.set(-9 - gold * 5, 16 - gold * 7, 11); // lower sun, longer shadows
-    for (const m of sunPatches) { m.material.opacity = f * 0.2; m.material.color.copy(C(0xfff0c8, 0xffc78a, gold)); }
-    windowMat.color = C(0x2b3b80, 0xffffff, f);
-    scene.environmentIntensity = 0.14 + f * 0.22;
+    hook('daylight', f, gold); // sky, fog, sun, ambient and the room's own lamps (themes/oficina.js)
     for (const s of stations.values()) s.lamp.intensity = s.online ? 10 - f * 7 : 0;
-    for (const l of roomLamps) l.intensity = 24 - f * 20;
   }
 
   // wall clock: shows the real time
@@ -197,6 +174,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     if (d.getMinutes() === clockMinute) return;
     clockMinute = d.getMinutes();
     const c = wallClock.ctx;
+    if (theme.clockFace) { try { theme.clockFace(c, d); wallClock.tex.needsUpdate = true; return; } catch (e) { console.warn('theme clockFace', e); } }
     c.fillStyle = '#fbfaf6'; c.fillRect(0, 0, 256, 256);
     c.strokeStyle = '#23283a'; c.lineCap = 'round';
     for (let i = 0; i < 12; i++) {
@@ -213,256 +191,87 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   drawClock();
 
   // ---------------------------------------------------------------- room
+  // The room itself comes from the theme (themes/index.js has the contract; themes/oficina.js is the default look).
   const room = new THREE.Group();
   scene.add(room);
-  const roomLamps = [], sunPatches = [];
-  {
-    const f = surface(1024, 1024), g = f.ctx;
-    if (THEME.floor === 'concrete') { // polished concrete tiles
-      g.fillStyle = '#9fa9a7'; g.fillRect(0, 0, 1024, 1024);
-      for (let ty = 0; ty < 4; ty++) for (let tx = 0; tx < 4; tx++) {
-        const s = 168 + ((tx * 31 + ty * 17) % 14);
-        g.fillStyle = `rgb(${s - 6},${s + 4},${s + 2})`; g.fillRect(tx * 256 + 2, ty * 256 + 2, 252, 252);
-      }
-      for (let i = 0; i < 2600; i++) {
-        const x = (i * 431) % 1024, y = (i * 769) % 1024, r = 1 + (i % 4);
-        g.fillStyle = i % 3 ? 'rgba(0,0,0,.035)' : 'rgba(255,255,255,.06)'; g.fillRect(x, y, r * 3, r);
-      }
-    } else if (THEME.floor === 'epoxy') { // a lab's slate epoxy floor with a faint measuring grid
-      g.fillStyle = '#3b4256'; g.fillRect(0, 0, 1024, 1024);
-      let seed = 3; const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
-      for (let i = 0; i < 4000; i++) { g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.08)'; g.fillRect(rnd() * 1024, rnd() * 1024, 2, 2); }
-      g.strokeStyle = 'rgba(129,140,248,.28)'; g.lineWidth = 2;
-      for (let k = 0; k <= 1024; k += 128) { g.beginPath(); g.moveTo(k, 0); g.lineTo(k, 1024); g.moveTo(0, k); g.lineTo(1024, k); g.stroke(); }
-    } else if (THEME.floor === 'terrazzo') { // cream terrazzo with coloured chips
-      g.fillStyle = '#efe3d2'; g.fillRect(0, 0, 1024, 1024);
-      const chips = ['#f97316', '#fb923c', '#a78bfa', '#f472b6', '#9ca3af', '#fde68a', '#57534e'];
-      let seed = 7; const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648); // same chips every load
-      for (let i = 0; i < 1400; i++) {
-        const x = rnd() * 1024, y = rnd() * 1024, r = 2 + rnd() * rnd() * 14;
-        g.fillStyle = chips[Math.floor(rnd() * chips.length)]; g.beginPath();
-        g.ellipse(x, y, r, r * (0.45 + rnd() * 0.5), rnd() * 3.2, 0, 7); g.fill();
-      }
-    } else {
-    g.fillStyle = '#c59d74'; g.fillRect(0, 0, 1024, 1024);
-    for (let row = 0; row < 16; row++) {
-      let x = (row % 2) * -90;
-      while (x < 1024) {
-        const w = 150 + ((row * 37 + x) % 90);
-        const shade = 190 + ((row * 53 + x * 7) % 26);
-        g.fillStyle = `rgb(${shade + 8},${shade - 34},${shade - 76})`;
-        g.fillRect(x + 1, row * 64 + 1, w - 2, 62);
-        x += w;
-      }
-    }
-    for (let i = 0; i < 520; i++) { // grain
-      const gx = (i * 197) % 1024, gy = (i * 89) % 1024;
-      g.fillStyle = i % 2 ? 'rgba(0,0,0,.05)' : 'rgba(255,255,255,.05)';
-      g.fillRect(gx, gy, 40 + ((i * 13) % 90), 1.5);
-    }
-    }
-    f.tex.wrapS = f.tex.wrapT = THREE.RepeatWrapping;
-    f.tex.repeat.set(4, 3);
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(26, 18), mat(0xffffff, { map: f.tex, roughness: 0.55 }));
-    floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
-    room.add(floor, box(26.6, 0.6, 18.6, 0x1b1f2e, { y: -0.31, cast: false }));
-    const ground = new THREE.Mesh(new THREE.CircleGeometry(70, 48), mat(0x141827, { roughness: 1 }));
-    ground.rotation.x = -Math.PI / 2; ground.position.y = -0.62;
-    room.add(ground);
-
-    const wall = mat(THEME.wall);
-    room.add(box(26.6, WALL_H, 0.3, 0, { m: wall, y: WALL_H / 2, z: BACK_Z - 0.15 }));
-    room.add(box(0.3, WALL_H, 18.3, 0, { m: wall, x: LEFT_X - 0.15, y: WALL_H / 2, z: 0.15 }));
-    room.add(box(26, 0.22, 0.08, THEME.trim, { y: 0.11, z: BACK_Z + 0.04, cast: false }), box(0.08, 0.22, 18, THEME.trim, { x: LEFT_X + 0.04, y: 0.11, cast: false }));
-    // clerestory windows along the back wall, one big window on the left wall
-    for (let i = 0; i < 5; i++) {
-      const x = -10.4 + i * 5.2;
-      room.add(box(4.4, 1.25, 0.1, 0x2d3246, { x, y: 6.25, z: BACK_Z + 0.03, cast: false }));
-      const pane = new THREE.Mesh(new THREE.PlaneGeometry(4.15, 1.0), windowMat);
-      pane.position.set(x, 6.25, BACK_Z + 0.09);
-      room.add(pane, box(0.06, 1.0, 0.04, 0x2d3246, { x, y: 6.25, z: BACK_Z + 0.11, cast: false }));
-    }
-    room.add(box(0.1, 3.9, 5.6, 0x2d3246, { x: LEFT_X + 0.03, y: 3.5, z: 5.3, cast: false }));
-    for (let i = 0; i < 2; i++) {
-      const pane = new THREE.Mesh(new THREE.PlaneGeometry(2.55, 3.6), windowMat);
-      pane.rotation.y = Math.PI / 2;
-      pane.position.set(LEFT_X + 0.09, 3.5, 3.95 + i * 2.7);
-      room.add(pane);
-    }
-
-    // bookshelf and a wall clock in the back corner
-    {
-      const sx = -11.75, sz = BACK_Z + 0.3, shelfM = mat(THEME.shelf, { roughness: 0.6 });
-      room.add(box(1.8, 3.4, 0.05, 0, { m: shelfM, x: sx, y: 1.7, z: sz - 0.2 }), box(0.06, 3.4, 0.46, 0, { m: shelfM, x: sx - 0.9, y: 1.7, z: sz }), box(0.06, 3.4, 0.46, 0, { m: shelfM, x: sx + 0.9, y: 1.7, z: sz }));
-      const bookM = [0x7c9cff, 0xfbbf24, 0xfb7185, 0x34d399, 0xf3ead9, 0x6b7489, 0xc084fc].map((c) => mat(c, { roughness: 0.8 }));
-      for (let r = 0; r < 5; r++) {
-        const y = 0.06 + r * 0.82;
-        room.add(box(1.8, 0.05, 0.46, 0, { m: shelfM, x: sx, y, z: sz, cast: false }));
-        if (r === 4) break;
-        let x = sx - 0.82;
-        for (let k = 0; x < sx + 0.66; k++) {
-          const w = 0.075 + ((r * 7 + k * 3) % 5) * 0.02, h = 0.42 + ((r * 5 + k * 11) % 6) * 0.045;
-          if ((r + k) % 7 !== 5) room.add(box(w, h, 0.3, 0, { m: bookM[(r * 3 + k) % bookM.length], x: x + w / 2, y: y + 0.025 + h / 2, z: sz + 0.02, cast: false }));
-          x += w + 0.014;
-        }
-      }
-      const faceMesh = new THREE.Mesh(new THREE.CircleGeometry(0.56, 40), new THREE.MeshBasicMaterial({ map: wallClock.tex, toneMapped: false }));
-      faceMesh.position.set(sx, 4.55, BACK_Z + 0.075);
-      const rim = cyl(0.62, 0.62, 0.07, 0x23283a, { x: sx, y: 4.55, z: BACK_Z + 0.035, seg: 40 });
-      rim.rotation.x = Math.PI / 2;
-      room.add(rim, faceMesh);
-    }
-
-    // sunlight falling on the floor through the side window
-    {
-      const sp = surface(64, 128), c = sp.ctx, grad = c.createLinearGradient(0, 0, 0, 128);
-      grad.addColorStop(0, 'rgba(255,255,255,0)'); grad.addColorStop(0.25, 'rgba(255,255,255,1)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
-      c.fillStyle = grad; c.fillRect(6, 0, 52, 128);
-      for (let i = 0; i < 2; i++) {
-        const geo = new THREE.PlaneGeometry(2.3, 6.2);
-        geo.rotateX(-Math.PI / 2); geo.rotateY(Math.PI / 2 - 0.38);
-        const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: sp.tex, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-        m.position.set(LEFT_X + 3.6, 0.03, 3.6 + i * 2.7);
-        room.add(m); sunPatches.push(m);
-      }
-    }
-
-    // lounge
-    const rug = new THREE.Mesh(new THREE.CircleGeometry(3.3, 48), mat(THEME.rug, { roughness: 1 }));
-    rug.rotation.x = -Math.PI / 2; rug.position.set(-1, 0.012, 3.2); rug.receiveShadow = true;
-    const rug2 = new THREE.Mesh(new THREE.RingGeometry(2.7, 2.85, 48), mat(THEME.rugRing, { roughness: 1 }));
-    rug2.rotation.x = -Math.PI / 2; rug2.position.set(-1, 0.016, 3.2);
-    room.add(rug, rug2);
-    const sofa = new THREE.Group();
-    const [sofaA, sofaB] = THEME.sofa, [pilA, pilB] = THEME.pillows;
-    sofa.add(box(3.4, 0.5, 1.2, sofaA, { y: 0.45, r: 0.12 }), box(3.4, 0.9, 0.35, sofaB, { y: 0.85, z: -0.5, r: 0.12 }),
-      box(0.35, 0.75, 1.2, sofaB, { x: -1.6, y: 0.6, r: 0.1 }), box(0.35, 0.75, 1.2, sofaB, { x: 1.6, y: 0.6, r: 0.1 }),
-      box(0.7, 0.3, 0.5, pilA, { x: -0.9, y: 0.85, z: -0.2, r: 0.1 }), box(0.7, 0.3, 0.5, pilB, { x: 0.95, y: 0.85, z: -0.2, r: 0.1 }));
-    sofa.position.set(-10.6, 0, 3.6); sofa.rotation.y = Math.PI / 2;
-    room.add(sofa, cyl(0.8, 0.8, 0.08, 0xf3ead9, { x: -8, y: 0.5, z: 3.6, seg: 32 }), cyl(0.08, 0.3, 0.5, 0x2d3246, { x: -8, y: 0.25, z: 3.6 }));
-    for (const [x, z, c] of [[-2.6, 4.6, THEME.bags[0]], [0.7, 4.9, THEME.bags[1]], [-0.9, 1.6, THEME.bags[2]]]) {
-      const bag = new THREE.Mesh(new THREE.SphereGeometry(0.62, 20, 14), mat(c));
-      bag.scale.y = 0.62; bag.position.set(x, 0.36, z); bag.castShadow = true;
-      room.add(bag);
-    }
-    // coffee bar
-    room.add(box(1.3, 1.05, 3.6, 0xf3ead9, { x: 10.6, y: 0.525, z: 0.6, r: 0.06 }), box(1.4, 0.08, 3.7, 0x6b4a33, { x: 10.6, y: 1.09, z: 0.6 }),
-      box(0.62, 0.8, 0.6, 0x23283a, { x: 10.7, y: 1.53, z: -0.3, r: 0.06 }), box(0.3, 0.06, 0.3, 0xd1d5db, { x: 10.45, y: 1.2, z: -0.3 }),
-      cyl(0.09, 0.07, 0.16, 0xffffff, { x: 10.4, y: 1.21, z: 0.7 }), cyl(0.09, 0.07, 0.16, 0xfbbf24, { x: 10.5, y: 1.21, z: 1.0 }),
-      cyl(0.28, 0.28, 0.9, 0x9bd3ff, { x: 10.7, y: 1.6, z: 1.9, m: mat(0x9bd3ff, { transparent: true, opacity: 0.7, roughness: 0.2 }) }));
-    const led = new THREE.Mesh(new THREE.SphereGeometry(0.04), new THREE.MeshBasicMaterial({ color: 0x34d399 }));
-    led.position.set(10.38, 1.75, -0.2);
-    room.add(led);
-    // plants + floor lamps
-    for (const [x, z, s] of [[12, -8, 1.25], [-12.1, 8, 1.1], [12, 7.6, 1], [7.9, 7.9, 0.8]]) {
-      const p = new THREE.Group();
-      p.add(cyl(0.36, 0.27, 0.6, 0xe7dccb, { y: 0.3 }));
-      for (let i = 0; i < 6; i++) {
-        const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.38, 10, 8), mat([0x2f9e62, 0x3bb273, 0x268752][i % 3]));
-        leaf.scale.set(0.55, 1.5, 0.55);
-        leaf.position.set(Math.cos(i * 1.05) * 0.26, 1.05 + (i % 2) * 0.25, Math.sin(i * 1.05) * 0.26);
-        leaf.rotation.set(Math.sin(i) * 0.5, 0, Math.cos(i * 1.05) * -0.45);
-        leaf.castShadow = true;
-        p.add(leaf);
-      }
-      p.position.set(x, 0, z); p.scale.setScalar(s);
-      room.add(p);
-    }
-    for (const [x, z] of [[-11.6, 0.9], [11.8, 3.6], [-4.9, 6.9]]) {
-      room.add(cyl(0.3, 0.34, 0.06, 0x23283a, { x, y: 0.03, z }), cyl(0.03, 0.03, 3.1, 0x23283a, { x, y: 1.55, z }));
-      const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.42, 0.5, 20, 1, true), new THREE.MeshBasicMaterial({ color: THEME.shade, side: THREE.DoubleSide, toneMapped: false }));
-      shade.position.set(x, 3.2, z);
-      const l = new THREE.PointLight(THEME.light, 8, 13, 1.7);
-      l.position.set(x, 3.0, z);
-      room.add(shade, l);
-      roomLamps.push(l);
-    }
-
-    // the floor's name: a neon sign high on the left wall, above the team board
-    {
-      const [word, sub, col] = THEME.sign, s = surface(1024, 160), c = s.ctx;
-      c.clearRect(0, 0, 1024, 160);
-      c.font = '800 112px system-ui, sans-serif'; c.textBaseline = 'middle';
-      c.shadowColor = col; c.shadowBlur = 26; c.fillStyle = col; c.fillText(word, 24, 84);
-      const w = c.measureText(word).width;
-      c.shadowBlur = 10; c.font = '600 54px system-ui, sans-serif'; c.fillStyle = '#ffffff'; c.globalAlpha = 0.9; c.fillText(sub, 64 + w, 90);
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(6.4, 1.0), new THREE.MeshBasicMaterial({ map: s.tex, transparent: true, toneMapped: false }));
-      sign.rotation.y = Math.PI / 2; sign.position.set(LEFT_X + 0.13, 6.35, -3.2);
-      room.add(box(0.06, 1.2, 6.8, THEME.trim, { x: LEFT_X + 0.06, y: 6.35, z: -3.2, cast: false }), sign);
-    }
-
-    // each floor's own centrepiece, front right, out of the walkways
-    if (THEME.prop === 'crm') { // the sales funnel and the bell rung when a deal closes
-      const g = new THREE.Group(), brass = mat(0xd4a017, { roughness: 0.25, metalness: 0.85 });
-      g.add(box(1.6, 0.5, 1.6, 0x1f3b3a, { y: 0.25, r: 0.05 }));
-      [[0.24, 0x0d9488], [0.4, 0x14b8a6], [0.56, 0x2dd4bf], [0.72, 0x5eead4]].forEach(([r, c], i) => // narrow at the bottom: a funnel
-        g.add(cyl(r, r * 0.72, 0.36, c, { y: 0.72 + i * 0.4, seg: 32 })));
-      g.add(cyl(0.05, 0.05, 2.1, 0x1f3b3a, { x: 0.68, y: 1.55, z: 0.62 }), box(0.05, 0.05, 0.5, 0x1f3b3a, { x: 0.68, y: 2.58, z: 0.85 }));
-      const bell = new THREE.Mesh(new THREE.SphereGeometry(0.2, 20, 12, 0, Math.PI * 2, 0, Math.PI / 1.7), brass);
-      bell.position.set(0.68, 2.42, 1.05); bell.castShadow = true;
-      g.add(bell);
-      g.position.set(4.9, 0, 6.6); g.rotation.y = -0.5;
-      room.add(g);
-    } else if (THEME.prop === 'lab') { // a glowing molecule model on a plinth: ideas being taken apart
-      const g = new THREE.Group();
-      g.add(box(1.4, 0.7, 1.4, 0x1e1b4b, { y: 0.35, r: 0.05 }));
-      const atoms = [[0, 1.75, 0, 0.26, 0x818cf8], [0.62, 2.2, 0.2, 0.18, 0x22d3ee], [-0.55, 2.25, -0.25, 0.18, 0x22d3ee],
-        [0.15, 2.65, -0.45, 0.15, 0xf0abfc], [-0.2, 1.3, 0.5, 0.16, 0xa3e635], [0.5, 1.35, -0.4, 0.14, 0xf0abfc]];
-      const glow = (c) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.55, roughness: 0.3 });
-      for (const [x, y, z, r, c] of atoms) { const a = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), glow(c)); a.position.set(x, y, z); a.castShadow = true; g.add(a); }
-      const bondM = mat(0xc7d2fe, { roughness: 0.4 });
-      for (let i = 1; i < atoms.length; i++) {
-        const a = new THREE.Vector3(...atoms[0].slice(0, 3)), b = new THREE.Vector3(...atoms[i].slice(0, 3)), len = a.distanceTo(b);
-        const bond = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, len, 8), bondM);
-        bond.position.copy(a).lerp(b, 0.5); bond.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-        g.add(bond);
-      }
-      g.add(cyl(0.05, 0.05, 0.6, 0x1e1b4b, { y: 0.98 }));
-      g.position.set(4.9, 0, 6.6); g.rotation.y = -0.5;
-      room.add(g);
-    } else if (THEME.prop === 'web') { // an easel with a page being designed
-      const s = surface(512, 384), c = s.ctx;
-      c.fillStyle = '#ffffff'; c.fillRect(0, 0, 512, 384);
-      c.fillStyle = '#e7e5e4'; c.fillRect(0, 0, 512, 34);
-      ['#f87171', '#fbbf24', '#34d399'].forEach((k, i) => { c.fillStyle = k; c.beginPath(); c.arc(20 + i * 22, 17, 7, 0, 7); c.fill(); });
-      c.fillStyle = '#f5f5f4'; c.fillRect(90, 9, 330, 16);
-      const grad = c.createLinearGradient(0, 40, 512, 220); grad.addColorStop(0, '#f97316'); grad.addColorStop(1, '#8b5cf6');
-      c.fillStyle = grad; c.fillRect(20, 50, 472, 170);
-      c.fillStyle = '#ffffff'; c.font = '800 40px system-ui, sans-serif'; c.fillText('omniloy', 46, 120);
-      c.fillStyle = 'rgba(255,255,255,.8)'; c.fillRect(46, 140, 220, 12); c.fillRect(46, 162, 170, 12);
-      c.fillStyle = '#fde047'; c.fillRect(46, 186, 110, 24);
-      ['#fed7aa', '#ddd6fe', '#fbcfe8'].forEach((k, i) => { c.fillStyle = k; c.fillRect(20 + i * 160, 236, 150, 128); });
-      const g = new THREE.Group(), wood = mat(0x8b5a2b, { roughness: 0.6 });
-      const leg = (x, rz, rx, z = 0) => { const l = cyl(0.05, 0.05, 3.2, 0, { m: wood, x, y: 1.55, z }); l.rotation.z = rz; l.rotation.x = rx; return l; };
-      g.add(leg(-0.65, -0.12, 0), leg(0.65, 0.12, 0), leg(0, 0, 0.32, -0.5));
-      const canvas = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.42), new THREE.MeshBasicMaterial({ map: s.tex, toneMapped: false }));
-      canvas.position.set(0, 2.2, 0.09); canvas.rotation.x = -0.1;
-      g.add(box(2.0, 1.52, 0.06, 0xfaf7f2, { y: 2.2, z: 0.04 }), canvas, box(1.9, 0.08, 0.3, 0, { m: wood, y: 1.42, z: 0.1 }));
-      for (const [x, k] of [[-0.55, 0xf97316], [-0.3, 0x8b5cf6], [-0.05, 0xec4899]]) g.add(cyl(0.04, 0.04, 0.12, k, { x, y: 1.52, z: 0.12 }));
-      g.position.set(4.9, 0, 6.6); g.rotation.y = -0.5;
-      room.add(g);
-    }
+  const myTheme = {};
+  // The centre desk (theme.centre): one person, by role, sits in the open floor in the middle of the room instead of
+  // in the rows. Its place can follow the number of rows: x, z and yaw may be numbers or functions of `rows`.
+  const CENTRE = theme.centre ? { roles: ['Product', 'Lead'], side: 1.9, lift: 0, foot: { x0: -1.55, x1: 1.55, z0: -1.85, z1: 0.85 }, ...theme.centre } : null;
+  if (CENTRE) CENTRE.side = Math.max(CENTRE.side, CENTRE.foot.x1 + 0.4); // the step beside the desk is outside its footprint
+  // The coffee spot: idle people walk there, stand with a mug for a while and go back (theme.spots.coffee may move it).
+  const tc = theme.spots && theme.spots.coffee;
+  const COFFEE = tc ? { x: 9.3, z: 0.7, yaw: Math.PI / 2, ...tc } : { x: 9.3, z: 0.7, yaw: Math.PI / 2 };
+  // Areas of the open floor nobody walks through: the centre desk and whatever the theme blocks (k.block). Each is a
+  // rectangle in world x/z; people walk around it with a body's width to spare.
+  const BODY = 0.3, blocks = [];
+  let obs = [], centreFoot = null;
+  const rect = (x0, z0, x1, z1) => {
+    const r = { x0: Math.min(x0, x1), z0: Math.min(z0, z1), x1: Math.max(x0, x1), z1: Math.max(z0, z1) };
+    r.ex = { x0: r.x0 - BODY, z0: r.z0 - BODY, x1: r.x1 + BODY, z1: r.z1 + BODY };
+    return r;
+  };
+  const rebuildObs = () => { obs = centreFoot ? [...blocks, centreFoot] : blocks.slice(); };
+  const k = {
+    THREE, scene, room, renderer, camera, hemi, sun, PHONE, TOUCH, texts, title, base: theme.base, my: myTheme,
+    C: { BACK_Z, LEFT_X, RIGHT_X: 13, FRONT_Z: 9, WALL_H, DESK_Z, SEAT_Z, AISLE_Z, ROW_D },
+    mat, box, cyl, rod: (a, b, r, m) => rod(a, b, r, m), surface, wrap, hex, smooth, hashOf, mix: C,
+    glow: (color, n = 1) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(n), toneMapped: false }),
+    dayFactor,
+    desks: () => { try { return [...stations.values()].map((s) => (s.centre ? { slug: s.slug, agent: s.agent, ...xz(deskAt(s)), row: -1, centre: true, yaw: s.yaw, lift: s.lift } : { slug: s.slug, agent: s.agent, x: s.x, z: DESK_Z + s.z, row: s.row })); } catch { return []; } },
+    frontZ: () => { try { return zA(lastAisle()); } catch { return AISLE_Z; } },
+    centre: () => { try { const s = [...stations.values()].find((x) => x.centre); return s ? { slug: s.slug, agent: s.agent, ...xz(deskAt(s)), yaw: s.yaw, lift: s.lift } : null; } catch { return null; } },
+    // k.block(x0, z0, x1, z1) returns a handle: h.set(x0, z0, x1, z1) moves the area, h.set() takes it away
+    block: (x0, z0, x1, z1) => {
+      const h = { r: null, set(a, b, c, d) {
+        const i = blocks.indexOf(h.r); if (i >= 0) blocks.splice(i, 1);
+        h.r = [a, b, c, d].every(Number.isFinite) ? rect(a, b, c, d) : null; if (h.r) blocks.push(h.r);
+        rebuildObs(); return h;
+      } };
+      return h.set(x0, z0, x1, z1);
+    },
+    spots: { board: { x: LEFT_X + 1.5, z: -2.1 }, white: { x: 8.54, z: 6.58 }, coffee: { x: COFFEE.x, z: COFFEE.z, yaw: COFFEE.yaw } },
+  };
+  const xz = (v) => ({ x: v.x, z: v.z });
+  const hookFail = new Set();
+  function hook(name, ...args) { // a theme part that throws is skipped (and said once), the room keeps working
+    const fn = theme[name];
+    if (typeof fn !== 'function') return undefined;
+    try { return fn.call(theme, k, ...args); } catch (e) { if (!hookFail.has(name)) { hookFail.add(name); console.warn(`theme ${theme.id}: ${name}`, e); } return undefined; }
   }
+  hook('shell');
+  hook('decor');
+  // the wall clock in the back corner: shows the real time
+  const clockFace = new THREE.Mesh(new THREE.CircleGeometry(0.56, 40), new THREE.MeshBasicMaterial({ map: wallClock.tex, toneMapped: false }));
+  clockFace.position.set(-11.75, 4.55, BACK_Z + 0.075);
+  const clockRim = cyl(0.62, 0.62, 0.07, 0x23283a, { x: -11.75, y: 4.55, z: BACK_Z + 0.035, seg: 40 });
+  clockRim.rotation.x = Math.PI / 2;
+  room.add(clockRim, clockFace);
 
   // team board (left wall) + traceability whiteboard (free standing)
   let boardMesh = null, traceMesh = null;
+  const fx = {}; // the frames a theme may restyle (hook 'fixtures')
   const board = surface(1600, 800);
   {
     const m = boardMesh = new THREE.Mesh(new THREE.PlaneGeometry(8.2, 4.1), new THREE.MeshBasicMaterial({ map: board.tex, toneMapped: false }));
     m.rotation.y = Math.PI / 2; m.position.set(LEFT_X + 0.1, 3.55, -3.2);
-    room.add(m, box(0.1, 4.3, 8.4, 0x23283a, { x: LEFT_X + 0.04, y: 3.55, z: -3.2, cast: false }));
+    fx.board = { mesh: m, frame: box(0.1, 4.3, 8.4, 0x23283a, { x: LEFT_X + 0.04, y: 3.55, z: -3.2, cast: false }) };
+    room.add(m, fx.board.frame);
   }
   const traceBoard = surface(1000, 640);
   {
     const g = new THREE.Group();
     const m = traceMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.9, 2.5), new THREE.MeshBasicMaterial({ map: traceBoard.tex, toneMapped: false }));
     m.position.set(0, 2.35, 0.06);
-    g.add(m, box(4.1, 2.7, 0.1, 0xd9dde6, { y: 2.35 }), cyl(0.05, 0.05, 2.2, 0x8891a5, { x: -1.8, y: 1.1 }), cyl(0.05, 0.05, 2.2, 0x8891a5, { x: 1.8, y: 1.1 }),
-      box(0.12, 0.08, 1.1, 0x8891a5, { x: -1.8, y: 0.04 }), box(0.12, 0.08, 1.1, 0x8891a5, { x: 1.8, y: 0.04 }));
+    const frame = box(4.1, 2.7, 0.1, 0xd9dde6, { y: 2.35 }), legs = [cyl(0.05, 0.05, 2.2, 0x8891a5, { x: -1.8, y: 1.1 }), cyl(0.05, 0.05, 2.2, 0x8891a5, { x: 1.8, y: 1.1 }),
+      box(0.12, 0.08, 1.1, 0x8891a5, { x: -1.8, y: 0.04 }), box(0.12, 0.08, 1.1, 0x8891a5, { x: 1.8, y: 0.04 })];
+    g.add(m, frame, ...legs);
     g.position.set(9.4, 0, 5.6); g.rotation.y = -0.72;
     room.add(g);
+    fx.trace = { group: g, mesh: m, frame, legs };
   }
+  fx.clock = { face: clockFace, rim: clockRim };
+  hook('fixtures', fx);
   // The wall board. Cards and filter chips are clickable: every rectangle drawn is kept in boardHits
   // (canvas coordinates) and a click on the wall is matched against them.
   let boardHits = [], boardModel = null, boardLast = null;
@@ -487,9 +296,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     boardLast = [agents, jira];
     const g = board.ctx, W = 1600, H = 800, M = boardModel || {};
     boardHits = [];
-    g.fillStyle = '#10131f'; g.fillRect(0, 0, W, H);
-    g.fillStyle = '#eceff7'; g.font = '600 40px system-ui'; g.textBaseline = 'middle'; g.textAlign = 'left';
-    g.fillText('Team board', 44, 56);
+    const bs = theme.boardStyle || {};
+    g.fillStyle = bs.bg || '#10131f'; g.fillRect(0, 0, W, H);
+    g.fillStyle = bs.ink || '#eceff7'; g.font = '600 40px system-ui'; g.textBaseline = 'middle'; g.textAlign = 'left';
+    g.fillText(texts.board, 44, 56);
     // text cut to a width, with an ellipsis
     const fit = (text, maxW) => {
       text = String(text || '');
@@ -497,8 +307,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       while (text.length > 1 && g.measureText(text + '…').width > maxW) text = text.slice(0, -1);
       return text.trimEnd() + '…';
     };
-    // filter chips, right of the title
-    let cx = 276;
+    // filter chips, right of the title (a theme's longer title pushes them right)
+    let cx = Math.max(276, Math.ceil(44 + g.measureText(texts.board).width + 20)); const cx0 = cx;
     g.font = '600 21px system-ui';
     for (const c of M.chips || []) {
       const label = `${c.label} ${c.n}`, w = g.measureText(label).width + 30;
@@ -508,7 +318,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       boardHits.push({ x: cx, y: 30, w, h: 52, id: `filter:${c.id}` });
       cx += w + 10;
     }
-    if (!(M.chips || []).length) { g.fillStyle = '#7f8aa3'; g.font = '26px system-ui'; g.fillText('open cards by who has to move them', 270, 59); }
+    if (!(M.chips || []).length) { g.fillStyle = '#7f8aa3'; g.font = '26px system-ui'; g.fillText(texts.boardSub || 'open cards by who has to move them', cx0 - 6, 59); }
     const TONE = { approval: ['#ddd6fe', '#5b21b6'], waiting: ['#fde68a', '#8a6a12'], caught: ['#fecaca', '#991b1b'], working: ['#d9f99d', '#3f6212'], idle: ['#fff3c4', '#7a6a2c'], done: ['#dcfce7', '#166534'] };
     const card = (t, x, y, w, tone) => {
       const [bg, fg] = TONE[tone] || TONE.idle;
@@ -546,10 +356,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       g.textAlign = 'right'; g.fillText(count, x + cw - 16, y0 + 24); g.textAlign = 'left';
       g.fillText(fit(a.name.replace(/\s*\(temp\)/i, '').split(' ').slice(0, a.temp ? 2 : 1).join(' '), cw - 44 - cwid), x + 16, y0 + 24);
       g.font = '500 19px system-ui'; g.globalAlpha = 0.85;
-      g.fillText(fit(a.role, cw - 32), x + 16, y0 + 49); g.globalAlpha = 1;
+      g.fillText(fit(title(a.role), cw - 32), x + 16, y0 + 49); g.globalAlpha = 1;
       if (!tickets.length) {
         g.fillStyle = '#5d6780'; g.font = '22px system-ui';
-        g.fillText(fit(jira && jira.error ? 'Jira not reachable' : M.show ? 'None' : 'No open cards', cw - 32), x + 16, y0 + 102);
+        g.fillText(fit(jira && jira.error ? 'Jira not reachable' : M.show ? 'None' : texts.noCards || 'No open cards', cw - 32), x + 16, y0 + 102);
       }
       const off = scrollOf(a.slug, tickets.length, shown); boardCols.push({ id: a.slug, x, y: y0, w: cw, h: bh, len: tickets.length, shown });
       const o0 = Math.floor(off), fr = off - o0;
@@ -566,37 +376,27 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const th = JSON.stringify(trace || null);
     if (th === traceHash) return;
     traceHash = th;
-    const g = traceBoard.ctx, W = 1000, H = 640;
-    g.fillStyle = '#fbfbf8'; g.fillRect(0, 0, W, H);
+    const g = traceBoard.ctx, W = 1000, H = 640, ts = theme.traceStyle || {};
+    g.fillStyle = ts.bg || '#fbfbf8'; g.fillRect(0, 0, W, H);
     g.textBaseline = 'middle'; g.textAlign = 'left';
-    g.fillStyle = '#1f2433'; g.font = '600 38px system-ui';
+    g.fillStyle = ts.ink || '#1f2433'; g.font = '600 38px system-ui';
     const t = trace && trace[0];
-    g.fillText(t ? `Traceability · ${t.project}` : 'Traceability matrix', 40, 58);
-    if (!t) { g.fillStyle = '#8891a5'; g.font = '28px system-ui'; g.fillText('This team has no matrix yet.', 40, 130); g.fillText('Click the board to show another team\'s.', 40, 172); traceBoard.tex.needsUpdate = true; return; }
+    g.fillText(t ? `${texts.trace} · ${t.project}` : texts.traceEmpty, 40, 58);
+    if (!t) { g.fillStyle = '#8891a5'; g.font = '28px system-ui'; const th = texts.traceHint || ['This team has no matrix yet.', 'Click the board to show another team\'s.']; g.fillText(th[0] || '', 40, 130); g.fillText(th[1] || '', 40, 172); traceBoard.tex.needsUpdate = true; return; }
     g.fillStyle = '#6b7489'; g.font = '26px system-ui';
     g.fillText(`${t.total} active requirements · ${t.noVerif} without a verification ticket`, 40, 108);
     const rows = [['To develop', t.counts.todo, '#94a3b8'], ['In development', t.counts.doing, '#2563eb'], ['Implemented', t.counts.built, '#d97706'], ['Verified', t.counts.verified, '#16a34a'], ['Other', t.counts.other, '#c4c9d6']];
     rows.forEach(([name, v, c], i) => {
       const y = 180 + i * 84;
-      g.fillStyle = '#1f2433'; g.font = '28px system-ui'; g.fillText(name, 40, y);
+      g.fillStyle = ts.ink || '#1f2433'; g.font = '28px system-ui'; g.fillText(name, 40, y);
       g.fillStyle = '#eceef3'; g.beginPath(); g.roundRect(300, y - 20, 560, 40, 10); g.fill();
       if (v) { g.fillStyle = c; g.beginPath(); g.roundRect(300, y - 20, Math.max(14, 560 * v / Math.max(1, t.total)), 40, 10); g.fill(); }
-      g.fillStyle = '#1f2433'; g.font = '600 30px system-ui'; g.fillText(String(v), 884, y);
+      g.fillStyle = ts.ink || '#1f2433'; g.font = '600 30px system-ui'; g.fillText(String(v), 884, y);
     });
     g.fillStyle = '#8891a5'; g.font = '22px system-ui';
     g.fillText(`local copy built ${String(t.built || '').replace('T', ' ')}`, 40, H - 36);
     traceBoard.tex.needsUpdate = true;
   }
-
-  // a little cleaning robot that wanders the open floor
-  const robot = new THREE.Group();
-  robot.add(cyl(0.34, 0.36, 0.14, 0x23283a, { y: 0.09, seg: 28 }));
-  const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05), new THREE.MeshBasicMaterial({ color: 0x7c9cff }));
-  eye.position.set(0, 0.17, 0.22);
-  robot.add(eye);
-  robot.position.set(3, 0, 2);
-  let robotDir = 0.7;
-  scene.add(robot);
 
   // ---------------------------------------------------------------- stations + characters
   // a thin bar between two points (lamp arms, pens)
@@ -630,6 +430,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const add = (parent, mesh) => { mesh.castShadow = true; mesh.userData.slug = agent.slug; parent.add(mesh); pickables.push(mesh); return mesh; };
     const at = (mesh, x, y, z) => { mesh.position.set(x, y, z); return mesh; };
     // torso: rounded, wider at the shoulders, with a collar and a neck
+    const hairs = [], hairy = (m) => { hairs.push(m); return m; };
     const torso = add(upper, new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.26, 6, 18), shirt));
     torso.position.y = 0.37; torso.scale.set(1.2, 1, 0.84);
     at(add(upper, new THREE.Mesh(new THREE.CylinderGeometry(0.29, 0.3, 0.12, 20), pants)), 0, 0.05, 0).scale.z = 0.82;
@@ -656,18 +457,18 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     mouth.position.set(0, -0.145, 0.282);
     head.add(mouth);
     // hair
-    const cap = add(head, new THREE.Mesh(new THREE.SphereGeometry(0.335, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.56), hair));
+    const cap = hairy(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.335, 28, 16, 0, Math.PI * 2, 0, Math.PI * 0.56), hair)));
     cap.rotation.x = -0.3; cap.scale.set(1, 1.04, 1);
     if (look.style === 'long') {
-      at(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.66, 0.24, 3, 0.11), hair)), 0, -0.24, -0.2);
-      for (const sx of [-1, 1]) at(add(head, new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.34, 4, 10), hair)), sx * 0.285, -0.2, 0.0);
+      at(hairy(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.66, 0.24, 3, 0.11), hair))), 0, -0.24, -0.2);
+      for (const sx of [-1, 1]) at(hairy(add(head, new THREE.Mesh(new THREE.CapsuleGeometry(0.075, 0.34, 4, 10), hair))), sx * 0.285, -0.2, 0.0);
     } else if (look.style === 'bun') {
-      at(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), hair)), 0, 0.33, -0.18);
-      at(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.1, 0.12, 2, 0.045), hair)), 0, 0.22, 0.25).rotation.z = 0.1;
+      at(hairy(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), hair))), 0, 0.33, -0.18);
+      at(hairy(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.44, 0.1, 0.12, 2, 0.045), hair))), 0, 0.22, 0.25).rotation.z = 0.1;
     } else if (look.style === 'fringe') {
-      at(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.52, 0.13, 0.15, 2, 0.055), hair)), 0, 0.2, 0.24).rotation.z = -0.1;
+      at(hairy(add(head, new THREE.Mesh(new RoundedBoxGeometry(0.52, 0.13, 0.15, 2, 0.055), hair))), 0, 0.2, 0.24).rotation.z = -0.1;
     } else {
-      at(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 10), hair)), 0.03, 0.27, 0.13).scale.set(1.5, 0.55, 0.9);
+      at(hairy(add(head, new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 10), hair))), 0.03, 0.27, 0.13).scale.set(1.5, 0.55, 0.9);
     }
     if (look.glasses) {
       for (const sx of [-1, 1]) at(add(head, new THREE.Mesh(new THREE.TorusGeometry(0.078, 0.013, 8, 22), dark)), sx * 0.118, 0.025, 0.3);
@@ -702,7 +503,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     phone.visible = false; armR.add(phone);
     const card = box(0.3, 0.02, 0.22, 0xfff3c4, { y: -0.52, z: 0.16, cast: false });
     card.visible = false; armL.add(card);
-    return { root, body, hips, upper, head, eyes, mouth, armL, armR, legL, legR, mug, phone, card };
+    const ch = { root, body, hips, upper, head, eyes, mouth, armL, armR, legL, legR, mug, phone, card, torso, collar, look, hair: hairs,
+      mats: { shirt, shirtDark, pants, skin, skinDark, hair, dark, white }, wear: add };
+    hook('outfit', ch, agent); // the theme dresses them: caps, coats, uniforms, badges
+    return ch;
   }
 
   function glyphSprite(text, color) {
@@ -714,26 +518,36 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     return sp;
   }
 
-  function createStation(agent, idx) {
+  function createStation(agent, idx, centre = false) {
     const g = new THREE.Group();
+    // the working information, in groups a theme may move onto its own desk surface (st.info): front (status strip
+    // and nameplate), orb (status light), tray (in-tray, sheets and count), flags (pull request flags and count)
+    const info = { front: new THREE.Group(), orb: new THREE.Group(), tray: new THREE.Group(), flags: new THREE.Group() };
     const color = new THREE.Color(agent.color);
     const reg = (m) => { m.userData.slug = agent.slug; pickables.push(m); return m; };
     // desk: wooden top on a white frame with steel feet
     const wood = mat(0xd8b88a, { roughness: 0.5 }), frame = mat(0xf7f4ee, { roughness: 0.6 }), steel = mat(0x8b93a6, { roughness: 0.35, metalness: 0.7 });
-    g.add(reg(box(3.0, 0.08, 1.5, 0, { m: wood, y: 1.0, z: DESK_Z, r: 0.035 })), reg(box(2.74, 0.56, 0.05, 0, { m: frame, y: 0.68, z: DESK_Z + 0.63 })),
+    const props = { mats: { wood, frame, steel } }; // the default desk props by name, for the theme's station hook
+    props.desk = [reg(box(3.0, 0.08, 1.5, 0, { m: wood, y: 1.0, z: DESK_Z, r: 0.035 })), reg(box(2.74, 0.56, 0.05, 0, { m: frame, y: 0.68, z: DESK_Z + 0.63 })),
       box(0.06, 0.92, 1.26, 0, { m: frame, x: -1.37, y: 0.5, z: DESK_Z }), box(0.06, 0.92, 1.26, 0, { m: frame, x: 1.37, y: 0.5, z: DESK_Z }),
-      box(0.1, 0.05, 1.42, 0, { m: steel, x: -1.37, y: 0.025, z: DESK_Z }), box(0.1, 0.05, 1.42, 0, { m: steel, x: 1.37, y: 0.025, z: DESK_Z }));
+      box(0.1, 0.05, 1.42, 0, { m: steel, x: -1.37, y: 0.025, z: DESK_Z }), box(0.1, 0.05, 1.42, 0, { m: steel, x: 1.37, y: 0.025, z: DESK_Z })];
+    g.add(...props.desk);
     const strip = box(2.74, 0.06, 0.03, 0, { y: 0.93, z: DESK_Z + 0.67, cast: false, m: new THREE.MeshBasicMaterial({ color: STATUS_COLOR.idle, toneMapped: false }) });
     const plate = surface(512, 128);
-    plate.ctx.fillStyle = hex(color); plate.ctx.beginPath(); plate.ctx.roundRect(0, 0, 512, 128, 22); plate.ctx.fill();
-    plate.ctx.fillStyle = '#fff'; plate.ctx.textAlign = 'center'; plate.ctx.textBaseline = 'middle';
-    plate.ctx.font = '700 46px system-ui'; plate.ctx.fillText(agent.name, 256, 48);
-    plate.ctx.font = '500 30px system-ui'; plate.ctx.globalAlpha = 0.85; plate.ctx.fillText(agent.role, 256, 96);
+    let painted = false;
+    if (theme.plate) { try { theme.plate(plate.ctx, { name: agent.name, title: title(agent.role), color: hex(color) }); painted = true; } catch (e) { console.warn('theme plate', e); plate.ctx.reset && plate.ctx.reset(); } }
+    if (!painted) {
+      plate.ctx.fillStyle = hex(color); plate.ctx.beginPath(); plate.ctx.roundRect(0, 0, 512, 128, 22); plate.ctx.fill();
+      plate.ctx.fillStyle = '#fff'; plate.ctx.textAlign = 'center'; plate.ctx.textBaseline = 'middle';
+      plate.ctx.font = '700 46px system-ui'; plate.ctx.fillText(agent.name, 256, 48);
+      plate.ctx.font = '500 30px system-ui'; plate.ctx.globalAlpha = 0.85; plate.ctx.fillText(title(agent.role), 256, 96);
+    }
     const plateMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.42), new THREE.MeshBasicMaterial({ map: plate.tex, toneMapped: false, transparent: true }));
     plateMesh.position.set(0, 0.64, DESK_Z + 0.66);
-    g.add(strip, reg(plateMesh));
+    info.front.add(strip, reg(plateMesh));
+    g.add(info.front);
     // on the desk: mat, laptop, mug, books, pen cup, a small plant, an arm lamp
-    g.add(box(1.5, 0.012, 0.72, 0, { m: mat(0x2f3447, { roughness: 0.95 }), y: 1.047, z: DESK_Z - 0.3, cast: false }));
+    g.add(props.mat = box(1.5, 0.012, 0.72, 0, { m: mat(0x2f3447, { roughness: 0.95 }), y: 1.047, z: DESK_Z - 0.3, cast: false }));
     const lap = new THREE.Group(), alu = mat(0xc9ced9, { roughness: 0.35, metalness: 0.5 });
     lap.add(box(0.76, 0.03, 0.5, 0, { m: alu, y: 0.015, r: 0.012 }));
     const lid = box(0.76, 0.5, 0.025, 0, { m: alu, y: 0.26, z: 0.26, r: 0.012 });
@@ -746,33 +560,38 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     lap.position.set(0, 1.053, DESK_Z - 0.42);
     const handle = new THREE.Mesh(new THREE.TorusGeometry(0.05, 0.014, 6, 14), mat(0xffffff));
     handle.position.set(0.84, 1.12, DESK_Z - 0.2);
-    g.add(lap, cyl(0.09, 0.075, 0.15, 0xffffff, { x: 0.75, y: 1.12, z: DESK_Z - 0.2 }), handle,
-      box(0.42, 0.07, 0.3, [0x7c9cff, 0xfbbf24, 0xfb7185, 0x34d399][idx % 4], { x: -0.95, y: 1.08, z: DESK_Z + 0.2, r: 0.012 }),
+    props.laptop = lap; props.mug = [cyl(0.09, 0.075, 0.15, 0xffffff, { x: 0.75, y: 1.12, z: DESK_Z - 0.2 }), handle];
+    props.books = [box(0.42, 0.07, 0.3, [0x7c9cff, 0xfbbf24, 0xfb7185, 0x34d399][idx % 4], { x: -0.95, y: 1.08, z: DESK_Z + 0.2, r: 0.012 }),
       box(0.38, 0.06, 0.27, 0xf3ead9, { x: -0.93, y: 1.145, z: DESK_Z + 0.2, r: 0.012 }),
-      box(0.34, 0.05, 0.24, [0x34d399, 0xfb7185, 0x7c9cff, 0xfbbf24][idx % 4], { x: -0.96, y: 1.2, z: DESK_Z + 0.21, r: 0.012 }),
-      cyl(0.065, 0.055, 0.14, 0x2b3142, { x: -0.5, y: 1.115, z: DESK_Z - 0.5 }));
-    for (let i = 0; i < 3; i++) g.add(rod(new THREE.Vector3(-0.5 + (i - 1) * 0.025, 1.15, DESK_Z - 0.5), new THREE.Vector3(-0.5 + (i - 1) * 0.07, 1.33, DESK_Z - 0.5 + (i - 1) * 0.02), 0.011, mat([0xfbbf24, 0xfb7185, 0x7c9cff][i])));
-    g.add(cyl(0.1, 0.075, 0.14, 0xe7dccb, { x: 1.08, y: 1.115, z: DESK_Z - 0.5 }));
+      box(0.34, 0.05, 0.24, [0x34d399, 0xfb7185, 0x7c9cff, 0xfbbf24][idx % 4], { x: -0.96, y: 1.2, z: DESK_Z + 0.21, r: 0.012 })];
+    props.pens = [cyl(0.065, 0.055, 0.14, 0x2b3142, { x: -0.5, y: 1.115, z: DESK_Z - 0.5 })];
+    g.add(lap, ...props.mug, ...props.books, props.pens[0]);
+    for (let i = 0; i < 3; i++) g.add(props.pens[i + 1] = rod(new THREE.Vector3(-0.5 + (i - 1) * 0.025, 1.15, DESK_Z - 0.5), new THREE.Vector3(-0.5 + (i - 1) * 0.07, 1.33, DESK_Z - 0.5 + (i - 1) * 0.02), 0.011, mat([0xfbbf24, 0xfb7185, 0x7c9cff][i])));
+    props.plant = [cyl(0.1, 0.075, 0.14, 0xe7dccb, { x: 1.08, y: 1.115, z: DESK_Z - 0.5 })];
+    g.add(props.plant[0]);
     for (let i = 0; i < 5; i++) {
       const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), mat([0x2f9e62, 0x3bb273, 0x268752][i % 3]));
       leaf.scale.set(0.5, 1.5, 0.5);
       leaf.position.set(1.08 + Math.cos(i * 1.26) * 0.07, 1.3 + (i % 2) * 0.05, DESK_Z - 0.5 + Math.sin(i * 1.26) * 0.07);
       leaf.rotation.set(Math.sin(i * 1.26) * 0.5, 0, Math.cos(i * 1.26) * -0.5);
-      g.add(leaf);
+      g.add(leaf); props.plant.push(leaf);
     }
     const lampM = mat(0x23283a, { roughness: 0.4, metalness: 0.4 }), elbow = new THREE.Vector3(1.2, 1.5, DESK_Z + 0.3), tip = new THREE.Vector3(0.98, 1.68, DESK_Z + 0.22);
-    g.add(cyl(0.13, 0.15, 0.04, 0, { m: lampM, x: 1.12, y: 1.065, z: DESK_Z + 0.25 }), rod(new THREE.Vector3(1.12, 1.08, DESK_Z + 0.25), elbow, 0.018, lampM), rod(elbow, tip, 0.018, lampM));
+    const lampG = props.lamp = new THREE.Group(); // the desk lamp: base, arm, shade, bulb and its light
+    g.add(lampG);
+    lampG.add(cyl(0.13, 0.15, 0.04, 0, { m: lampM, x: 1.12, y: 1.065, z: DESK_Z + 0.25 }), rod(new THREE.Vector3(1.12, 1.08, DESK_Z + 0.25), elbow, 0.018, lampM), rod(elbow, tip, 0.018, lampM));
     const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.16, 0.17, 18, 1, true), mat(color.clone().lerp(new THREE.Color(0x1b1f2e), 0.25), { side: THREE.DoubleSide, roughness: 0.5 }));
     shade.position.copy(tip).add(new THREE.Vector3(-0.03, -0.04, 0)); shade.rotation.z = -0.45; shade.castShadow = true;
     const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffe2a8, toneMapped: false }));
     bulb.position.set(0.93, 1.6, DESK_Z + 0.22);
     const lamp = new THREE.PointLight(0xffd9a0, 0, 7, 1.8);
     lamp.position.set(0.8, 2.1, DESK_Z + 0.1);
-    g.add(shade, bulb, lamp);
+    lampG.add(shade, bulb, lamp);
     // status orb on the desk corner
     const orb = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), new THREE.MeshBasicMaterial({ color: STATUS_COLOR.idle, toneMapped: false }));
     orb.position.set(-1.15, 1.2, DESK_Z + 0.5);
-    g.add(orb, cyl(0.07, 0.09, 0.1, 0x23283a, { x: -1.15, y: 1.09, z: DESK_Z + 0.5 }));
+    info.orb.add(orb, cyl(0.07, 0.09, 0.1, 0x23283a, { x: -1.15, y: 1.09, z: DESK_Z + 0.5 }));
+    g.add(info.orb);
     // chair: cushions in the owner's colour, arms, a five-star base on wheels
     const chair = new THREE.Group();
     const cushion = mat(color.clone().lerp(new THREE.Color(0x1b1f2e), 0.5), { roughness: 0.95 }), shell = mat(0x23283a, { roughness: 0.5 });
@@ -787,13 +606,14 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       chair.add(leg, wheel);
     }
     chair.position.set(0, 0, SEAT_Z - 0.04);
-    g.add(chair);
+    g.add(chair); props.chair = chair;
     // wall screen
     const scr = surface(960, 560);
     const screen = reg(new THREE.Mesh(new THREE.PlaneGeometry(3.9, 2.275), new THREE.MeshBasicMaterial({ map: scr.tex, toneMapped: false })));
     screen.position.set(0, 0, BACK_Z + 0.16);
     const wall = new THREE.Group();
-    wall.add(screen, box(4.1, 2.47, 0.12, 0x151926, { y: 0, z: BACK_Z + 0.08 }), box(4.1, 0.07, 0.14, 0, { y: -1.25, z: BACK_Z + 0.08, m: new THREE.MeshBasicMaterial({ color, toneMapped: false }), cast: false }));
+    props.bezel = box(4.1, 2.47, 0.12, 0x151926, { y: 0, z: BACK_Z + 0.08 });
+    wall.add(screen, props.bezel, box(4.1, 0.07, 0.14, 0, { y: -1.25, z: BACK_Z + 0.08, m: new THREE.MeshBasicMaterial({ color, toneMapped: false }), cast: false }));
     wall.position.y = 3.75;
     scene.add(wall);
     // selection pad
@@ -803,11 +623,12 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     // workload: a dark in-tray with one sheet per open ticket (up to ten) and the number above it;
     // the top sheet turns red when a ticket is blocked
     const stack = [], TRAY_X = 0.42, TRAY_Z = DESK_Z + 0.38;
-    g.add(box(0.56, 0.035, 0.42, 0x2b3142, { x: TRAY_X, y: 1.058, z: TRAY_Z, r: 0.015, cast: false }));
+    g.add(info.tray, info.flags);
+    info.tray.add(box(0.56, 0.035, 0.42, 0x2b3142, { x: TRAY_X, y: 1.058, z: TRAY_Z, r: 0.015, cast: false }));
     for (let i = 0; i < 10; i++) {
       const c = box(0.46, 0.05, 0.33, 0xffffff, { x: TRAY_X + Math.sin(i * 2.1) * 0.03, y: 1.1 + i * 0.054, z: TRAY_Z + Math.cos(i * 1.7) * 0.025 });
       c.rotation.y = Math.sin(i * 1.3 + idx) * 0.2; c.visible = false;
-      g.add(c); stack.push(c);
+      info.tray.add(c); stack.push(c);
     }
     // pull requests: a little flag per open one on the left of the desk (green approved, amber waiting
     // for review, red changes requested or checks failing, grey draft)
@@ -816,15 +637,15 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       const f = new THREE.Group(), cloth = box(0.2, 0.13, 0.014, 0xfbbf24, { x: 0.11, y: 0.3, cast: false, m: new THREE.MeshBasicMaterial({ color: 0xfbbf24, toneMapped: false }) });
       f.add(cyl(0.012, 0.012, 0.4, 0x2b3142, { y: 0.2 }), cyl(0.05, 0.06, 0.03, 0x2b3142, { y: 0.015 }), cloth);
       f.position.set(-1.3 + i * 0.26, 1.04, DESK_Z + 0.56); f.visible = false; f.userData.cloth = cloth;
-      g.add(f); flags.push(f);
+      info.flags.add(f); flags.push(f);
     }
     const load = glyphSprite('', '#fff');
     load.scale.setScalar(0.5); load.userData.n = -1;
-    g.add(load);
+    info.tray.add(load);
     // the count over the pull request flags, like the one over the pile: "2 PR", coloured by the worst state
     const prLoad = glyphSprite('', '#fff');
     prLoad.scale.setScalar(0.62); prLoad.userData.n = '';
-    g.add(prLoad);
+    info.flags.add(prLoad);
     // a soft ring on the floor while this person is waiting for you
     const halo = new THREE.Mesh(new THREE.RingGeometry(1.8, 2.12, 64), new THREE.MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
     halo.rotation.x = -Math.PI / 2; halo.position.set(0, 0.026, DESK_Z - 0.35);
@@ -840,7 +661,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     tag.innerHTML = '<div class="bubble"></div><div class="doing"></div><div class="chip"><i class="dot"></i><b></b><span></span></div>';
     tag.querySelector('b').textContent = agent.temp ? agent.name.replace(/\s*\(temp\)/, '') : agent.name.split(' ')[0];
     if (agent.temp) { const c = tag.querySelector('.chip'); c.style.borderStyle = 'dashed'; c.style.borderColor = '#fbbf24'; }
-    tag.querySelector('span').textContent = agent.role;
+    tag.querySelector('span').textContent = title(agent.role);
     tag.querySelector('.chip').addEventListener('click', () => onSelect(agent.slug));
     const label = new CSS2DObject(tag);
     label.center.set(0.5, 1);
@@ -873,9 +694,11 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       seed: (hashOf(agent.slug) % 1000) / 100, steps: [], pending: [], mode: 'seat', pose: '', phase: 0, hurry: false,
       listenUntil: 0, talkingUntil: 0, nextBreak: 40 + Math.random() * 90, bubbleTimer: 0, cur: {},
       idx, stack, load, prLoad, flags, halo, ask, note, draft, askReq: 0, askNote: 0, askDraft: 0, at: 'desk', kind: 'code', kindWant: 'code', kindSince: 0, placeSince: -99, carry: false, sip: false,
+      props, screen, info, centre: !!centre, title: title(agent.role), yaw: 0, lift: centre ? CENTRE.lift : 0,
     };
     ch.root.position.set(0, 0, SEAT_Z);
     stations.set(agent.slug, st);
+    hook('station', st); // the theme's desk props and look
     return st;
   }
 
@@ -888,9 +711,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     g.textBaseline = 'middle'; g.textAlign = 'left';
     g.fillStyle = a.online ? a.color : '#1c2030'; g.fillRect(0, 0, W, 52);
     g.fillStyle = '#fff'; g.font = '600 25px system-ui';
-    g.fillText(`${a.name}  ·  ${a.role}`, 20, 27);
+    g.fillText(`${a.name}  ·  ${title(a.role)}`, 20, 27);
     g.textAlign = 'right'; g.font = '600 22px system-ui';
-    g.fillText(a.online ? `${STATUS_TEXT[a.status]} · ${ago(a.statusSince)}` : 'offline', W - 20, 27);
+    const sw = texts.status || {}; // a theme may translate the status words (texts.status { working, idle, blocked, offline, now })
+    g.fillText(a.online ? `${sw[a.status] || STATUS_TEXT[a.status]} · ${ago(a.statusSince).replace(/^now$/, sw.now || 'now')}` : sw.offline || 'offline', W - 20, 27);
     g.textAlign = 'left';
     if (!a.online) {
       g.fillStyle = '#3a4256'; g.font = '30px system-ui'; g.textAlign = 'center';
@@ -910,8 +734,84 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   const V = (x, z) => new THREE.Vector3(x, 0, z);
   const zA = (k) => AISLE_Z + k * ROW_D;
   const lastAisle = () => plan.rows - 1;
-  const seatOf = (st) => V(st.x, SEAT_Z + st.z);
-  const sideOf = (st) => V(st.x + plan.side, SEAT_Z + st.z);
+  // A point given in a desk's own coordinates (as in its group: desk centre at x 0, z DESK_Z), in the room. Only the
+  // centre desk can be turned (st.yaw) or raised (st.lift); the rows never are.
+  function loc(st, lx, lz, y = 0, out = new THREE.Vector3()) {
+    const a = st.yaw || 0;
+    if (!a) return out.set(st.x + lx, y, st.z + lz);
+    const c = Math.cos(a), s = Math.sin(a);
+    return out.set(st.x + lx * c + lz * s, y, st.z - lx * s + lz * c);
+  }
+  const deskAt = (st) => (st.centre ? loc(st, 0, DESK_Z) : V(st.x, DESK_Z + st.z));
+  const seatOf = (st) => (st.centre ? loc(st, 0, SEAT_Z, st.lift) : V(st.x, SEAT_Z + st.z));
+  const sideOf = (st) => (st.centre ? loc(st, CENTRE.side, SEAT_Z) : V(st.x + plan.side, SEAT_Z + st.z));
+  const nearSeat = (st, p, r) => { const s = seatOf(st); return Math.hypot(p.x - s.x, p.z - s.z) < r; };
+  // ---- walking around blocked areas (the centre desk, k.block): a straight walk that would cross one goes round
+  // it by its corners instead. A walk that starts or ends inside an area (their own desk) may cross that one.
+  const inR = (x, z, r) => x > r.x0 && x < r.x1 && z > r.z0 && z < r.z1;
+  function segHit(ax, az, bx, bz, r) { // where the segment enters the rectangle's inside (0..1), or -1
+    let t0 = 0, t1 = 1;
+    const dx = bx - ax, dz = bz - az, P = [-dx, dx, -dz, dz], Q = [ax - r.x0, r.x1 - ax, az - r.z0, r.z1 - az];
+    for (let i = 0; i < 4; i++) {
+      if (Math.abs(P[i]) < 1e-9) { if (Q[i] <= 0) return -1; continue; }
+      const t = Q[i] / P[i];
+      if (P[i] < 0) { if (t > t1) return -1; if (t > t0) t0 = t; } else { if (t < t0) return -1; if (t < t1) t1 = t; }
+    }
+    return t1 - t0 > 1e-6 ? t0 : -1;
+  }
+  function detour(a, b) {
+    let best = null, bt = 2, bandA = false, bandB = false;
+    for (const o of obs) {
+      if (inR(a.x, a.z, o) || inR(b.x, b.z, o)) continue;
+      const ia = inR(a.x, a.z, o.ex), ib = inR(b.x, b.z, o.ex), t = segHit(a.x, a.z, b.x, b.z, ia || ib ? o : o.ex);
+      if (t >= 0 && t < bt) { bt = t; best = o; bandA = ia; bandB = ib; }
+    }
+    if (!best) return [];
+    const e = best.ex, E = 0.06, cs = [[e.x0 - E, e.z0 - E], [e.x1 + E, e.z0 - E], [e.x1 + E, e.z1 + E], [e.x0 - E, e.z1 + E]];
+    const inRoom = (c) => c[0] > LEFT_X + 0.45 && c[0] < 12.6 && c[1] > BACK_Z + 0.45 && c[1] < 8.9;
+    // a way round must not cut through another area either (two areas close together: the centre desk and a counter)
+    const others = obs.filter((o) => o !== best && !inR(a.x, a.z, o) && !inR(b.x, b.z, o));
+    const clear = (p, q, band) => segHit(p[0], p[1], q[0], q[1], band ? best : e) < 0 && others.every((o) => segHit(p[0], p[1], q[0], q[1], o) < 0);
+    const A = [a.x, a.z], Bp = [b.x, b.z], d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
+    let way = null, wl = Infinity;
+    for (let i = 0; i < 4; i++) for (const path of [[cs[i]], [cs[i], cs[(i + 1) % 4]], [cs[i], cs[(i + 3) % 4]]]) {
+      if (!path.every(inRoom) || path.some((c) => others.some((o) => inR(c[0], c[1], o.ex)))) continue;
+      const pts = [A, ...path, Bp];
+      let ok = true, len = 0;
+      for (let j = 0; j < pts.length - 1 && ok; j++) { ok = clear(pts[j], pts[j + 1], (j === 0 && bandA) || (j === pts.length - 2 && bandB)); len += d(pts[j], pts[j + 1]); }
+      if (ok && len < wl) { wl = len; way = path; }
+    }
+    return way ? way.map((c) => V(c[0], c[1])) : [];
+  }
+  // A place to stand, moved out of any blocked area it falls in: to its nearest edge that is still on the floor (a
+  // desk near the front wall is left by a side, never through the wall).
+  const onFloor = (x, z) => x > LEFT_X + 0.45 && x < 12.6 && z > BACK_Z + 0.45 && z < 8.6;
+  function freeSpot(v) {
+    for (const o of obs) {
+      const e = o.ex;
+      if (!inR(v.x, v.z, e)) continue;
+      const ms = [[v.x - e.x0, e.x0 - 0.06, null], [e.x1 - v.x, e.x1 + 0.06, null], [v.z - e.z0, null, e.z0 - 0.06], [e.z1 - v.z, null, e.z1 + 0.06]].sort((p, q) => p[0] - q[0]);
+      const m = ms.find((c) => onFloor(c[1] ?? v.x, c[2] ?? v.z)) || ms[0];
+      if (m[1] != null) v.x = m[1]; else v.z = m[2];
+    }
+    return v;
+  }
+  // Before a walk starts: round any blocked area on the way (a few levels deep at most).
+  function guardSteps(st) {
+    for (let n = 0; n < 4; n++) {
+      const s = st.steps[0];
+      if (!s || s.type !== 'walk' || s.ck) return;
+      s.ck = true;
+      const depth = s.dd || 0;
+      if (depth >= 4) return;
+      const w = detour(st.ch.root.position, s.to);
+      if (!w.length) return;
+      // the rest of the way, from the last corner on, is checked again when it starts: another area may lie on it
+      // (the walk round goes one level deeper each time, so it always ends)
+      s.ck = false; s.dd = depth + 1;
+      st.steps.unshift(...w.map((p) => ({ type: 'walk', to: p, dd: depth + 1 })));
+    }
+  }
   const walk = (to) => ({ type: 'walk', to });
   const nearAisle = (z) => Math.max(0, Math.min(lastAisle(), Math.round((z - AISLE_Z) / ROW_D)));
   // You cross a row of desks through the nearest gap between two of them.
@@ -926,9 +826,16 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     return out;
   }
   // Out from the desk to aisle `dest`: sideways first when seated, otherwise straight to the nearest aisle.
+  // The centre desk stands in the open floor in front of the rows: out of it by its side, then straight on in the
+  // open floor, or back through the rows when going further back.
   function leave(st, dest = st.row) {
     dest = Math.max(0, Math.min(lastAisle(), dest));
-    const p = st.ch.root.position, atSeat = Math.abs(p.z - (SEAT_Z + st.z)) < 1.3 && Math.abs(p.x - st.x) < 2.6;
+    const p = st.ch.root.position;
+    if (st.centre && nearSeat(st, p, 1.3)) {
+      const s = sideOf(st), last = lastAisle();
+      return dest >= last ? [walk(s)] : [walk(s), walk(V(s.x, zA(last))), ...cross(s.x, last, dest)];
+    }
+    const atSeat = !st.centre && Math.abs(p.z - (SEAT_Z + st.z)) < 1.3 && Math.abs(p.x - st.x) < 2.6;
     if (atSeat) { const a = dest < st.row ? st.row - 1 : st.row; return [walk(sideOf(st)), walk(V(st.x + plan.side, zA(a))), ...cross(st.x + plan.side, a, dest)]; }
     const a = nearAisle(p.z);
     return [walk(V(p.x, zA(a))), ...cross(p.x, a, dest)];
@@ -937,6 +844,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   function homeSteps(st, from, x) {
     if (from == null) { from = nearAisle(st.ch.root.position.z); x = st.ch.root.position.x; }
     from = Math.max(0, Math.min(lastAisle(), from));
+    if (st.centre) return [...cross(x, from, lastAisle()), walk(sideOf(st)), walk(seatOf(st)), { type: 'arrive', at: 'desk' }];
     const a = from < st.row ? st.row - 1 : st.row;
     return [...cross(x, from, a), walk(V(st.x + plan.side, zA(a))), walk(sideOf(st)), walk(seatOf(st)), { type: 'arrive', at: 'desk' }];
   }
@@ -947,12 +855,41 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     if (at === 'board') return new THREE.Vector3(LEFT_X + 1.5, 0, -0.6 - slot * 1.0);
     return new THREE.Vector3(WHITE.x + (slot - 1.5) * 0.8 * WHITE.tx, 0, WHITE.z + (slot - 1.5) * 0.8 * WHITE.tz);
   }
+  // where this person stands for their coffee: side by side across the way the spot faces, out of blocked areas
+  function coffeeSpot(st) {
+    const v = tc ? new THREE.Vector3(COFFEE.x - Math.cos(COFFEE.yaw) * ((st.seed % 2) - 0.5), 0, COFFEE.z + Math.sin(COFFEE.yaw) * ((st.seed % 2) - 0.5))
+      : new THREE.Vector3(9.3, 0, 0.2 + (st.seed % 2));
+    return obs.length ? freeSpot(v) : v;
+  }
   const placeYaw = (at) => (at === 'board' ? -Math.PI / 2 : Math.atan2(0.66, -0.75));
+
+  // ---- the centre desk
+  let layoutKey = '';
+  const roleIs = (role, want) => new RegExp(`^\\s*${String(want).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(String(role || ''));
+  function pickCentre(agents) {
+    if (!CENTRE || agents.length - 1 > 10) return null; // the others must fit in two rows in front of the back wall
+    for (const want of [].concat(CENTRE.roles || [])) {
+      const a = agents.find((x) => !x.temp && roleIs(x.role, want));
+      if (a) return a.slug;
+    }
+    return null;
+  }
+  // Where it stands for this many rows: theme numbers or functions of `rows`, else the middle of the open floor.
+  function centrePlace(rows) {
+    const val = (v, d) => { const r = typeof v === 'function' ? v(rows) : v; return Number.isFinite(r) ? r : d; };
+    return { x: val(CENTRE.x, 0.6), z: val(CENTRE.z, rows === 1 ? 0.9 : 4.0), yaw: val(CENTRE.yaw, 0) };
+  }
+  // its footprint (desk, chair and whatever the theme says it covers), as a world rectangle
+  function footOf(c) {
+    const f = CENTRE.foot, cs = Math.cos(c.yaw), sn = Math.sin(c.yaw), xs = [], zs = [];
+    for (const [lx, lz] of [[f.x0, f.z0], [f.x1, f.z0], [f.x1, f.z1], [f.x0, f.z1]]) { xs.push(c.x + lx * cs + lz * sn); zs.push(c.z - lx * sn + lz * cs); }
+    return rect(Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs));
+  }
 
   // a thin arc between two desks while their owners talk
   const links = [];
   function linkDesks(a, b, dur) {
-    const p0 = new THREE.Vector3(a.x, 1.3, DESK_Z + a.z), p1 = new THREE.Vector3(b.x, 1.3, DESK_Z + b.z);
+    const p0 = deskAt(a).setY(1.3 + a.lift), p1 = deskAt(b).setY(1.3 + b.lift);
     const mid = p0.clone().lerp(p1, 0.5); mid.y += 1.5 + Math.abs(a.x - b.x) * 0.1; mid.z += 1.3;
     const curve = new THREE.QuadraticBezierCurve3(p0, mid, p1);
     const m = new THREE.Mesh(new THREE.TubeGeometry(curve, 36, 0.02, 6), new THREE.MeshBasicMaterial({ color: a.agent.color, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
@@ -967,7 +904,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       const u = l.t / l.dur;
       l.m.material.opacity = Math.max(0, Math.min(1, u * 8, (1 - u) * 5)) * 0.7;
       l.bead.position.copy(l.curve.getPoint((l.t * 0.45) % 1));
-      if (u >= 1) { scene.remove(l.m, l.bead); l.m.geometry.dispose(); links.splice(i, 1); }
+      if (u >= 1) { scene.remove(l.m, l.bead); for (const o of [l.m, l.bead]) { o.geometry.dispose(); o.material.dispose(); } links.splice(i, 1); }
     }
   }
 
@@ -1000,11 +937,21 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   // Where talker number `n` stands to speak to `to`, right now: in front of their desk while they sit at it,
   // around them anywhere else (the board, the whiteboard, someone else's desk, on their way somewhere).
   const DESK_ROW = [0, -0.9, 0.9, -1.8, 1.8], RING = [[0.95, 0], [-0.95, 0], [0.7, 0.65], [-0.7, 0.65], [0, 1.1], [1.8, 0.1], [-1.8, 0.1], [1.5, 0.9], [-1.5, 0.9]];
-  const seatedAt = (to) => { const p = to.ch.root.position; return Math.abs(p.z - (SEAT_Z + (to.z || 0))) < 0.5 && Math.abs(p.x - to.x) < 0.5; };
+  const seatedAt = (to) => { const p = to.ch.root.position; if (to.centre) { const s = seatOf(to); return Math.abs(p.z - s.z) < 0.5 && Math.abs(p.x - s.x) < 0.5; } return Math.abs(p.z - (SEAT_Z + (to.z || 0))) < 0.5 && Math.abs(p.x - to.x) < 0.5; };
   function talkSpot(to, n) {
-    if (seatedAt(to)) return new THREE.Vector3(to.x + DESK_ROW[n % 5], 0, AISLE_Z + (to.z || 0) - 0.35 + (n >= 5 ? 0.8 : 0));
+    if (seatedAt(to)) {
+      if (to.centre) { // in front of the centre desk, or (when its footprint reaches the front wall) along its sides,
+        // the outer ones further back so the group does not pile up on one spot
+        const v = loc(to, DESK_ROW[n % 5], AISLE_Z - 0.35 + (n >= 5 ? 0.8 : 0)), x0 = v.x;
+        freeSpot(v);
+        if (Math.abs(v.x - x0) > 0.01) { v.z -= Math.abs(DESK_ROW[n % 5]) * 0.75; freeSpot(v); }
+        return v;
+      }
+      return new THREE.Vector3(to.x + DESK_ROW[n % 5], 0, AISLE_Z + (to.z || 0) - 0.35 + (n >= 5 ? 0.8 : 0));
+    }
     const p = to.ch.root.position, o = RING[n % RING.length];
-    return new THREE.Vector3(Math.max(LEFT_X + 0.9, p.x + o[0]), 0, p.z + o[1]);
+    const v = new THREE.Vector3(Math.max(LEFT_X + 0.9, p.x + o[0]), 0, p.z + o[1]);
+    return obs.length ? freeSpot(v) : v;
   }
   function startConversation(from, to, text) {
     const dur = Math.min(11, Math.max(5, 3 + text.length * 0.045));
@@ -1031,7 +978,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     const ch = st.ch, root = ch.root;
     ch.body.visible = st.online;
     if (st.trip) { if (!st.online) endTrip(st); else if (st.trip.hold) { ch.body.visible = !st.trip.gone; return; } } // teleported to another room (travel)
-    if (!st.online) { st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; root.position.copy(seatOf(st)); root.rotation.y = 0; return; }
+    if (!st.online) { st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; root.position.copy(seatOf(st)); root.rotation.y = st.yaw || 0; return; }
     const needs = st.status === 'blocked' || st.askReq > 0;
     // Where the work happens. A new kind has to hold for a few seconds, and nobody moves more than once every 20s.
     if (st.kind !== st.kindWant && t - st.kindSince > 6 && t - st.placeSince > 20) { st.kind = st.kindWant; st.placeSince = t; }
@@ -1045,18 +992,19 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       st.nextBreak -= dt;
       if (st.nextBreak <= 0) {
         st.nextBreak = 70 + Math.random() * 120;
-        const spot = new THREE.Vector3(9.3, 0, 0.2 + (st.seed % 2));
-        st.steps = [...leave(st, lastAisle()), walk(spot), { type: 'wait', dur: 7, pose: 'coffee', yaw: Math.PI / 2 }, ...homeSteps(st, lastAisle(), spot.x)];
+        const spot = coffeeSpot(st);
+        st.steps = [...leave(st, lastAisle()), walk(spot), { type: 'wait', dur: 7, pose: 'coffee', yaw: COFFEE.yaw }, ...homeSteps(st, lastAisle(), spot.x)];
       }
     }
     if (st.status !== 'idle' && st.steps.some((s) => s.pose === 'coffee')) { st.steps = st.steps.filter((s) => s.pose !== 'coffee'); st.hurry = true; }
 
     for (let k = 0; k < 4 && st.steps[0] && (st.steps[0].type === 'arrive' || st.steps[0].type === 'plan'); k++) { const s0 = st.steps.shift(); if (s0.type === 'arrive') st.at = s0.at; else st.steps.unshift(...s0.make()); } // 'plan': a route worked out when its turn comes
+    if (obs.length) guardSteps(st);
     const step = st.steps[0];
     let yawTarget = 0;
     if (!step) {
       st.hurry = false;
-      if (st.at === 'desk') { st.mode = 'seat'; root.position.lerp(seatOf(st), Math.min(1, dt * 12)); }
+      if (st.at === 'desk') { st.mode = 'seat'; root.position.lerp(seatOf(st), Math.min(1, dt * 12)); yawTarget = st.yaw || 0; }
       else { st.mode = 'stand'; st.pose = st.at; yawTarget = placeYaw(st.at); }
     } else if (step.type === 'walk') {
       st.mode = 'walk';
@@ -1069,7 +1017,9 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       st.mode = 'walk';
       const goal = step.to(), d = goal.clone().sub(root.position), dist = d.length(), sp = 8.5 * dt;
       const more = step.route && step.tries < 3 && dist > 2.4 ? step.route(root.position, goal) : null;
+      const round = !more && obs.length && (step.dtries || 0) < 6 && dist > 0.3 ? detour(root.position, goal) : null;
       if (more) { step.tries++; st.steps.unshift(...more); yawTarget = root.rotation.y; }
+      else if (round && round.length) { step.dtries = (step.dtries || 0) + 1; st.steps.unshift(...round.map((p) => walk(p))); yawTarget = root.rotation.y; }
       else {
         if (dist < 5 && step.who) step.who.holdUntil = Math.max(step.who.holdUntil || 0, t + 1.5); // they do not wander off as you reach them
         yawTarget = dist > 0.01 ? Math.atan2(d.x, d.z) : root.rotation.y; step.max -= dt;
@@ -1201,25 +1151,30 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       const ph = (t * 0.32 + i / st.glyphs.length + st.seed) % 1;
       const on = st.status === 'working' && !needs && seated && st.kind === 'code' && st.listenUntil < t;
       sp.material.opacity = on ? Math.sin(ph * Math.PI) * 0.9 : 0;
-      sp.position.set(st.x + Math.sin(ph * 5 + i * 2) * 0.35 + (i - 1) * 0.3, 1.45 + ph * 1.25, DESK_Z - 0.2 + st.z);
+      if (st.centre) loc(st, Math.sin(ph * 5 + i * 2) * 0.35 + (i - 1) * 0.3, DESK_Z - 0.2, 1.45 + ph * 1.25 + st.lift, sp.position);
+      else sp.position.set(st.x + Math.sin(ph * 5 + i * 2) * 0.35 + (i - 1) * 0.3, 1.45 + ph * 1.25, DESK_Z - 0.2 + st.z);
     });
     const sleepy = st.status === 'idle' && !needs && seated && Date.now() - st.agent.statusSince > 15 * 60000;
     st.zs.forEach((sp, i) => {
       const ph = (t * 0.25 + i * 0.5) % 1;
       sp.material.opacity = sleepy ? Math.sin(ph * Math.PI) * 0.85 : 0;
-      sp.position.set(st.x + 0.35 + ph * 0.5, 2.0 + ph * 0.9, SEAT_Z + st.z);
+      if (st.centre) loc(st, 0.35 + ph * 0.5, SEAT_Z, 2.0 + ph * 0.9 + st.lift, sp.position);
+      else sp.position.set(st.x + 0.35 + ph * 0.5, 2.0 + ph * 0.9, SEAT_Z + st.z);
       sp.scale.setScalar(0.25 + ph * 0.25);
     });
     const sign = st.askReq > 0 ? st.ask : st.alert, off = sign === st.ask ? st.alert : st.ask;
     off.material.opacity = 0;
     sign.material.opacity = needs ? 1 : 0;
-    sign.position.set(st.ch.root.position.x - 0.55, 2.55 + Math.sin(t * 2.2) * 0.08, st.ch.root.position.z + 0.2);
+    sign.position.set(st.ch.root.position.x - 0.55, 2.55 + Math.sin(t * 2.2) * 0.08 + st.ch.root.position.y, st.ch.root.position.z + 0.2);
     st.note.material.opacity = st.online && st.askNote > 0 ? 0.95 : 0;
-    st.note.position.set(st.x - 1.15, 1.62 + Math.sin(t * 1.7 + st.seed) * 0.04, DESK_Z + 0.5 + st.z);
+    const ob = st.info.orb.position; // the envelope floats over the status light, wherever the theme put it
+    if (st.centre || ob.x || ob.y || ob.z) loc(st, ob.x - 1.15, DESK_Z + 0.5 + ob.z, 1.62 + Math.sin(t * 1.7 + st.seed) * 0.04 + ob.y + st.lift, st.note.position);
+    else st.note.position.set(st.x - 1.15, 1.62 + Math.sin(t * 1.7 + st.seed) * 0.04, DESK_Z + 0.5 + st.z);
     // a draft waiting for you: a pen hops over the desk and the desk light beats teal
     const hasDraft = st.askDraft > 0, hop = Math.abs(Math.sin(t * 3.1 + st.seed));
     st.draft.material.opacity = hasDraft ? 1 : 0;
-    st.draft.position.set(st.x + 1.0, 2.0 + hop * 0.4, DESK_Z + 0.45 + st.z);
+    if (st.centre) loc(st, 1.0, DESK_Z + 0.45, 2.0 + hop * 0.4 + st.lift, st.draft.position);
+    else st.draft.position.set(st.x + 1.0, 2.0 + hop * 0.4, DESK_Z + 0.45 + st.z);
     st.draft.scale.setScalar(0.8 + hop * 0.14);
     if (hasDraft && !needs) st.strip.material.color.set(0x2dd4bf).multiplyScalar(0.55 + hop * 0.6);
     st.flags.forEach((f, j) => { if (f.visible) f.userData.cloth.rotation.y = Math.sin(t * (f.userData.state === 'approved' ? 5 : 1.6) + j) * (f.userData.state === 'approved' ? 0.5 : 0.12); });
@@ -1250,7 +1205,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       const u = Math.min(1, p.t), a = p.from.clone().lerp(mid, u), b = mid.clone().lerp(to, u), pos = a.lerp(b, u);
       p.m.lookAt(pos); p.m.rotateX(Math.PI / 2); p.m.position.copy(pos);
       if (p.t >= 1) {
-        scene.remove(p.m); planes.splice(i, 1);
+        scene.remove(p.m); p.m.geometry.dispose(); p.m.material.dispose(); planes.splice(i, 1);
         if (p.st.online) { showBubble(p.st, p.text, 7000, 'from you', 'you'); p.st.listenUntil = performance.now() / 1000 + 3; }
       }
     }
@@ -1272,6 +1227,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     if (slug && SPOTS[slug]) return flyTo(SPOTS[slug][0].clone(), SPOTS[slug][1].clone());
     const st = slug && stations.get(slug);
     if (!st) return flyTo(home().pos.clone(), home().target.clone());
+    if (st.centre) { // the same view as of a desk in the rows, turned with the desk
+      const c = centered || (PHONE && tall), lz = DESK_Z, y = st.lift;
+      return flyTo(loc(st, c ? 1.8 : 3.4, lz + (c ? 10.6 : 10.0), y + (c ? 5.2 : 5.4)), loc(st, c ? 0 : 1.1, lz - 1.0, y + (c ? 2.5 : 2.3)));
+    }
     if (centered || (PHONE && tall)) return flyTo(new THREE.Vector3(st.x + 1.8, 5.2, 5.2 + st.z), new THREE.Vector3(st.x, 2.5 - st.row * 0.5, -6.4 + st.z));
     flyTo(new THREE.Vector3(st.x + 3.4, 5.4, 4.6 + st.z), new THREE.Vector3(st.x + 1.1, 2.3 - st.row * 0.5, -6.4 + st.z));
   }
@@ -1382,9 +1341,42 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
   });
   renderer.domElement.addEventListener('wheel', () => { tween = null; }, { passive: true });
 
+  // Glow (bloom), for themes that ask for it (theme.bloom), never on phones. The scene is drawn into an offscreen
+  // picture that three treats like the screen (tone mapping and sRGB done in each material, so toneMapped:false
+  // screens keep their exact colours), the bright parts are blurred on top, and a plain copy puts it on screen.
+  // If pictures come too slowly with it, it switches itself off for this page.
+  let composer = null, bloomPass = null;
+  const B = theme.bloom;
+  if (!PHONE && B && B.strength > 0) {
+    try {
+      const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+      rt.texture.colorSpace = THREE.SRGBColorSpace;
+      rt.isXRRenderTarget = true; // three 0.170: "like the screen" for tone mapping and colour space (WebGLRenderer getProgram)
+      composer = new EffectComposer(renderer, rt);
+      composer.renderTarget2.isXRRenderTarget = true; composer.renderTarget2.texture.colorSpace = THREE.SRGBColorSpace;
+      composer.addPass(new RenderPass(scene, camera));
+      bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), B.strength, B.radius != null ? B.radius : 0.4, B.threshold != null ? B.threshold : 1);
+      composer.addPass(bloomPass);
+      composer.addPass(new ShaderPass(CopyShader)); // already tone mapped and sRGB: copied as is (OutputPass would do both twice)
+    } catch (e) { console.warn('bloom off', e); composer = null; }
+  }
+  let slowFor = 0, slowN = 0, lastFrameAt = 0;
+  const KEEP_BLOOM = /[?&]bloom=1\b/.test(location.search); // ?bloom=1: never switch it off (tests on slow software GL)
+  // A paused or hidden page draws nothing for a while: the first picture after it has no gap worth judging.
+  const resumeSpeed = () => { lastFrameAt = 0; };
+  document.addEventListener('visibilitychange', resumeSpeed);
+  function watchSpeed(nowMs) { // more than 1.5 s of pictures over 70 ms apart (at least 4 of them): the glow costs too much here
+    const gap = lastFrameAt ? nowMs - lastFrameAt : 0; lastFrameAt = nowMs;
+    if (!composer || !gap || KEEP_BLOOM || document.hidden) return;
+    if (gap > 70) { slowFor += Math.min(gap, 2000); slowN++; } // a very slow picture counts too (one long stall alone is not enough)
+    else { slowFor = Math.max(0, slowFor - gap * 0.5); if (!slowFor) slowN = 0; }
+    if (slowFor > 1500 && slowN >= 4) { console.info('office: bloom switched off, frames were slow'); composer.dispose(); composer = null; bloomPass = null; }
+  }
+
   function resize() {
     const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
     renderer.setSize(w, h); labels.setSize(w, h);
+    if (composer) { composer.setPixelRatio(renderer.getPixelRatio()); composer.setSize(w, h); }
     camera.aspect = w / h;
     camera.fov = w / h < 1 ? 58 : w / h < 1.5 ? 44 : 36;
     camera.updateProjectionMatrix();
@@ -1444,13 +1436,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
     }
     tickLinks(dt);
     tickTravel(dt, t);
-    robot.position.x += Math.sin(robotDir) * dt * 0.9; robot.position.z += Math.cos(robotDir) * dt * 0.9;
-    const rz = Math.min(5, zA(lastAisle()) + 1.5);
-    if (robot.position.x < -5.5 || robot.position.x > 7 || robot.position.z < rz || robot.position.z > 7.2) {
-      robot.position.x = Math.min(7, Math.max(-5.5, robot.position.x)); robot.position.z = Math.min(7.2, Math.max(rz, robot.position.z));
-      robotDir += 2 + Math.random() * 2;
-    }
-    robot.rotation.y = robotDir;
+    hook('tick', dt, t); // the theme's moving decor (Oficina: the cleaning robot)
     if (tween) {
       tween.t = Math.min(1, tween.t + dt / 0.9);
       const e = 1 - Math.pow(1 - tween.t, 3);
@@ -1463,7 +1449,8 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard }) {
       camera.position.x += tx - controls.target.x; camera.position.z += tz - controls.target.z; controls.target.x = tx; controls.target.z = tz;
     }
     controls.update();
-    renderer.render(scene, camera);
+    if (composer) composer.render(dt); else renderer.render(scene, camera);
+    watchSpeed(nowMs);
     labels.render(scene, camera);
     tickBoard();
     tidyLabels();
@@ -1603,7 +1590,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       tr.gone = true; tr.phase = 'away';
       // the tag moves to their chair and stays readable; whatever they were on the way to is dropped
       st.steps = []; st.at = 'desk'; st.carry = false; st.hurry = false; st.mode = 'away';
-      st.ch.root.position.copy(seatOf(st)); st.ch.root.rotation.y = 0;
+      st.ch.root.position.copy(seatOf(st)); st.ch.root.rotation.y = st.yaw || 0;
       const c = st.ch; // sitting, hands down, for when they come back
       c.hips.position.y = SEAT_Y; c.legL.rotation.x = c.legR.rotation.x = -1.5; c.armL.rotation.set(-0.4, 0, 0.1); c.armR.rotation.set(-0.4, 0, -0.1);
       c.upper.rotation.x = 0; c.head.rotation.set(0, 0, 0); c.mug.visible = c.phone.visible = c.card.visible = false;
@@ -1675,10 +1662,11 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       // beside them wherever they are, or are heading (as startConversation does): their desk, the board or the whiteboard
       const last = [...host.steps].reverse().find((s) => s.type === 'arrive'), at = last ? last.at : host.at;
       if (at !== 'desk') { const ps = placeSpot(host, at); yaw = placeYaw(at); spot = new THREE.Vector3(ps.x - Math.sin(yaw) * (0.95 + n * 0.9), 0, ps.z - Math.cos(yaw) * (0.95 + n * 0.9)); }
+      else if (host.centre) { spot = freeSpot(loc(host, (n % 2 ? -1 : 1) * CENTRE.side * (1 + (n >> 1) * 0.45), SEAT_Z + 0.25)); yaw = host.yaw + (n % 2 ? Math.PI / 2 : -Math.PI / 2); }
       else { spot = new THREE.Vector3(host.x + (n % 2 ? -1 : 1) * Math.min(1.9, side) * (1 + (n >> 1) * 0.45), 0, SEAT_Z + (host.z || 0) + 0.25); yaw = n % 2 ? Math.PI / 2 : -Math.PI / 2; }
       host.holdUntil = Math.max(host.holdUntil || 0, now + FX_DUR + dur + 1);
       if (host.steps.length) { host.steps = host.steps.filter((s) => s.pose !== 'coffee'); host.hurry = true; }
-    } else spot = new THREE.Vector3(2.4 + (n % 4) * 1.2, 0, AISLE_Z + (plan.rows - 1) * ROW_D + 1.9 + (n >> 2) * 1.2); // nobody to stand beside: the open floor in front of the desks
+    } else spot = freeSpot(new THREE.Vector3(2.4 + (n % 4) * 1.2, 0, AISLE_Z + (plan.rows - 1) * ROW_D + 1.9 + (n >> 2) * 1.2)); // nobody to stand beside: the open floor in front of the desks
     const slug = `@visitor:${id}`, name = String(o.name || 'Visitor');
     const ch = buildCharacter({ slug, lookSlug: o.slug || name, color: o.color || '#38d6ff' }, 0);
     for (let i = pickables.length - 1; i >= 0; i--) if (pickables[i].userData.slug === slug) pickables.splice(i, 1); // a visitor is not someone you can open
@@ -1723,6 +1711,28 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       }
     }
   }
+  // What a departed person's desk, character, wall screen and signs held on the GPU is freed, except what the rest
+  // of the room still shows (a theme shares some materials and textures between desks; three uploads again
+  // anything disposed that a later desk reuses).
+  function freeUnused(roots) {
+    const geos = new Set(), mats = new Set(), texs = new Set();
+    const take = (o, G, M, T) => {
+      if (o.geometry) G.add(o.geometry);
+      for (const m of [].concat(o.material || [])) {
+        M.add(m);
+        for (const v of Object.values(m)) if (v && v.isTexture) T.add(v);
+        if (m.uniforms) for (const u of Object.values(m.uniforms)) if (u && u.value && u.value.isTexture) T.add(u.value);
+      }
+    };
+    for (const r of roots) r.traverse((o) => take(o, geos, mats, texs));
+    const used = { g: new Set(), m: new Set(), t: new Set() };
+    scene.traverse((o) => take(o, used.g, used.m, used.t));
+    for (const t of [scene.background, scene.environment]) if (t && t.isTexture) used.t.add(t);
+    geos.forEach((g) => used.g.has(g) || g.dispose());
+    mats.forEach((m) => used.m.has(m) || m.dispose());
+    texs.forEach((t) => used.t.has(t) || t.dispose());
+    renderer.shadowMap.needsUpdate = true;
+  }
   function tickTravel(dt, t) {
     if (!trips.length && !visitors.size && !fxs.length) return;
     try { tickTrips(t); tickVisitors(dt, t); tickFx(dt); } catch (e) { console.warn('travel', e); }
@@ -1761,40 +1771,65 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       }
     },
     setAgents(agents, extra = {}) {
-      // people who left (a temp that was released): take their desk and character out of the room
+      // Who sits at the centre desk (theme.centre): the first role of its list that someone here has, never a temp,
+      // and only while everybody else still fits in two rows.
+      const centreSlug = pickCentre(agents);
+      // people who left (a temp that was released), and a desk that moves between the rows and the centre (the theme
+      // dresses the two differently, so it is built again): take their desk and character out of the room
       const here = new Set(agents.map((a) => a.slug));
       for (const [slug, st] of [...stations]) {
-        if (here.has(slug)) continue;
+        if (here.has(slug) && st.centre === (slug === centreSlug)) continue;
         try {
-          scene.remove(st.group); scene.remove(st.ch.root); st.tag.remove();
-          scene.remove(st.wall); [...st.glyphs, ...st.zs, st.alert, st.ask, st.note, st.draft].forEach((s) => scene.remove(s));
+          const parts = [st.group, st.ch.root, st.wall, ...st.glyphs, ...st.zs, st.alert, st.ask, st.note, st.draft];
+          parts.forEach((o) => scene.remove(o)); st.tag.remove(); if (st.art) st.art.element.remove();
           for (let i = pickables.length - 1; i >= 0; i--) if (pickables[i].userData.slug === slug) pickables.splice(i, 1);
-        } catch {}
+          freeUnused(parts);
+        } catch (e) { console.warn('desk removal', e); }
         stations.delete(slug);
+        if (here.has(slug)) continue; // built again below, still selected
         if (selected === slug) selected = null;
         if (hovered === slug) hovered = null;
       }
-      // Up to six desks share one row; bigger teams sit in rows of up to five, one behind the other.
-      const n = Math.max(1, agents.length), rows = n <= 6 ? 1 : Math.ceil(n / 5), per = Math.ceil(n / rows);
-      const gap = rows === 1 ? Math.min(5.2, 21 / n) : Math.min(4.4, 19 / per), cx = rows === 1 ? 0.6 : 0.2;
-      // Wall screens: one line, or two smaller ones when the team is big.
+      // Up to six desks share one row; bigger teams sit in rows of up to five, one behind the other. The centre desk
+      // is not in the rows: the others close up without a gap.
+      const n = Math.max(1, agents.length), inRows = centreSlug ? agents.filter((a) => a.slug !== centreSlug) : agents;
+      const m = Math.max(1, inRows.length), rows = m <= 6 ? 1 : Math.ceil(m / 5), per = Math.ceil(m / rows);
+      const gap = rows === 1 ? Math.min(5.2, 21 / m) : Math.min(4.4, 19 / per), cx = rows === 1 ? 0.6 : 0.2;
+      // Wall screens: one line, or two smaller ones when the team is big. The centre person's screen stays on the
+      // wall with the others, in the middle of the (top) line.
       const tiers = n <= 6 ? 1 : 2, perTier = Math.ceil(n / tiers);
-      const cell = tiers === 1 ? Math.max(gap, Math.min(4.35, 22 / n)) : Math.min(4.35, 22 / perTier);
+      const cell = tiers === 1 ? Math.max(Math.min(5.2, 21 / n), Math.min(4.35, 22 / n)) : Math.min(4.35, 22 / perTier);
       const sScale = Math.min(1, (cell - 0.22) / 4.1, tiers === 1 ? 1 : 0.76);
+      const onWall = inRows.slice();
+      if (centreSlug) onWall.splice(Math.floor(((tiers === 1 ? n : perTier) - 1) / 2), 0, agents.find((a) => a.slug === centreSlug));
       labelsEl.classList.toggle('crowded', n > 6); // big team: name only on the tags, the role shows on hover
       plan.rows = rows; plan.side = rows === 1 ? 1.9 : gap / 2;
       plan.rowX = Array.from({ length: rows }, () => []);
-      agents.forEach((a, i) => {
-        const st = stations.get(a.slug) || createStation(a, i);
+      centreFoot = null;
+      let ri = 0;
+      agents.forEach((a, idx) => {
+        const isC = a.slug === centreSlug;
+        const st = stations.get(a.slug) || createStation(a, idx, isC);
         st.agent = a; st.status = a.status; st.online = a.online;
-        const row = Math.floor(i / per), inRow = Math.min(per, n - row * per), z = row * ROW_D;
-        const x = (i % per - (inRow - 1) / 2) * gap + cx;
-        plan.rowX[row].push(x);
-        if (st.x !== x || st.z !== z) {
-          st.x = x; st.z = z; st.row = row; st.group.position.set(x, 0, z);
-          st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; st.ch.root.position.copy(seatOf(st));
+        if (isC) {
+          const c = centrePlace(rows), x = c.x - DESK_Z * Math.sin(c.yaw), z = c.z - DESK_Z * Math.cos(c.yaw);
+          centreFoot = footOf(c);
+          if (st.x !== x || st.z !== z || st.yaw !== c.yaw || st.row !== rows - 1) {
+            st.x = x; st.z = z; st.yaw = c.yaw; st.row = rows - 1;
+            st.group.position.set(x, st.lift, z); st.group.rotation.y = c.yaw;
+            st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; st.ch.root.position.copy(seatOf(st)); st.ch.root.rotation.y = c.yaw;
+          }
+        } else {
+          const i = ri++;
+          const row = Math.floor(i / per), inRow = Math.min(per, m - row * per), z = row * ROW_D;
+          const x = (i % per - (inRow - 1) / 2) * gap + cx;
+          plan.rowX[row].push(x);
+          if (st.x !== x || st.z !== z) {
+            st.x = x; st.z = z; st.row = row; st.group.position.set(x, 0, z);
+            st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; st.ch.root.position.copy(seatOf(st));
+          }
         }
-        const tier = Math.floor(i / perTier), inTier = Math.min(perTier, n - tier * perTier);
+        const i = onWall.indexOf(a), tier = Math.floor(i / perTier), inTier = Math.min(perTier, n - tier * perTier);
         st.wall.position.set((i % perTier - (inTier - 1) / 2) * cell + 0.6, tiers === 1 ? 3.75 : 4.62 - tier * 2.02, 0);
         st.wall.scale.set(sScale, sScale, 1);
         st.doing.textContent = a.nowDoing || '';
@@ -1829,6 +1864,9 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
         drawScreen(st);
       });
       order = agents.map((a) => a.slug);
+      rebuildObs();
+      const lk = [...stations.values()].map((s) => `${s.slug}:${s.x.toFixed(2)},${s.z.toFixed(2)},${s.centre ? 1 : 0}`).join('|');
+      if (lk !== layoutKey) { layoutKey = lk; hook('layout'); } // the theme may follow the desks (k.desks(), k.centre(), k.frontZ())
       const h = JSON.stringify([agents.map((a) => [a.slug, a.tickets]), extra.jira && extra.jira.error, new Date().getMinutes()]);
       if (h !== boardHash) { boardHash = h; drawBoard(agents, extra.jira); }
       drawTrace(extra.trace);
@@ -1885,7 +1923,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
     setLight(mode) { lightMode = mode; dayNow = -1; applyLight(); },
     order: () => order,
     // Stops drawing entirely (used when the Herdr tab showing the office is not on screen).
-    setPaused(paused) { renderer.setAnimationLoop(paused ? null : frame); },
+    setPaused(paused) { renderer.setAnimationLoop(paused ? null : frame); resumeSpeed(); },
     setBottomInset(px) { px = Math.max(0, Math.round(px || 0)); if (px !== inset) { inset = px; resize(); } },
     view(pos, target) { flyTo(new THREE.Vector3(...pos), new THREE.Vector3(...target)); },
     zoom() { return camera.position.distanceTo(controls.target) / controls.maxDistance; }, // 1 = as far out as it goes (floors.js shows the building there)

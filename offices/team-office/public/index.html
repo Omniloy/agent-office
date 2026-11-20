@@ -10,7 +10,7 @@
 <script>/* touch + phone mode: see js/phone.js */(function () { var q = new URLSearchParams(location.search), e = document.documentElement, t = navigator.maxTouchPoints > 0 && matchMedia('(pointer: coarse)').matches; if (q.has('embed')) return; if (t || q.has('phone')) e.classList.add('touch'); if ((t && Math.min(screen.width, screen.height) <= 600) || q.has('phone')) e.classList.add('phone'); })();</script>
 <title>Omniloy HQ</title>
 <link rel="icon" href="data:,">
-<script>window.__TOKEN__ = '%%OFFICE_TOKEN%%';</script>
+<script>window.__TOKEN__ = '%%OFFICE_TOKEN%%'; window.__THEME__ = '%%OFFICE_THEME%%';</script>
 <script type="importmap">
 { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
 </script>
@@ -37,6 +37,7 @@ button { cursor: pointer; }
 .brand .logo { width: 22px; height: 22px; border-radius: 6px; background: #fff url(/logo.svg) center / 72% no-repeat; color: transparent; display: grid; place-items: center; font-weight: 800; font-size: 12px; }
 .brand b { font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
 .brand small { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+.brand .room { color: var(--muted); font-size: 12.5px; font-weight: 500; } /* the theme's name for the room */
 .live { width: 7px; height: 7px; border-radius: 50%; background: var(--offline); flex: none; }
 .live.on { background: var(--working); }
 .stats { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; gap: 0 18px; height: 20px; overflow: hidden; }
@@ -274,7 +275,7 @@ html body #requests, html body.panel-open #requests, html body.clients-open #req
 <div id="labels"></div>
 
 <header class="top">
-  <div class="brand"><div class="logo">O</div><b>Omniloy HQ</b><i class="live" id="live" title="Connection to the local server"></i><small id="clock">connecting…</small></div>
+  <div class="brand"><div class="logo">O</div><b>Omniloy HQ</b><span class="room" id="room-name" hidden></span><i class="live" id="live" title="Connection to the local server"></i><small id="clock">connecting…</small></div>
   <div class="stats" id="stats"></div>
   <div class="tools">
     <button id="btn-home" title="Whole office (0)">Overview</button>

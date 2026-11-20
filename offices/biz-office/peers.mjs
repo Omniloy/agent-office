@@ -26,7 +26,7 @@ const tool = (name, args, input) => new Promise((resolve) => {
   if (input !== undefined) c.stdin.end(typeof input === 'string' ? input : JSON.stringify(input)); else c.stdin.end();
 });
 
-export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
+export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
   const mine = OFFICES.find((o) => o.port === port) || OFFICES[0];
   const peersFile = () => readJson(path.join(SHARED, 'peers.json'), { peers: {} });
   const seenFile = () => readJson(path.join(SHARED, 'peers-seen.json'), {});
@@ -130,11 +130,12 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
   setInterval(() => crossFloor().catch(() => {}), 3000).unref();
 
   // ---- the guest listener
+  const themeNow = async () => { try { return theme ? await theme() : undefined; } catch { return undefined; } }; // the room's look: visitors see it too, and cannot change it
   const QUIET = { screen: [], activity: [], nowDoing: '', lastSaid: '', memory: null, tickets: [], prs: [], description: '', statusMsg: '', menu: null };
   const guestState = async () => {
     const t = await readJson(path.join(HOME, mine.dir, 'team.json'), {});
     let list = []; try { list = agents() || []; } catch { /* starting */ }
-    return { ts: Date.now(), agents: list.map((a) => ({ ...a, ...QUIET })), feed: [], approvals: [], watchdog: {}, trace: [], hcOk: true, prs: [], prsError: null, prsAt: 0, prsMerged: [], team: { name: t.name || mine.name }, jira: {}, projects: [] };
+    return { ts: Date.now(), agents: list.map((a) => ({ ...a, ...QUIET })), feed: [], approvals: [], watchdog: {}, trace: [], hcOk: true, prs: [], prsError: null, prsAt: 0, prsMerged: [], team: { name: t.name || mine.name }, jira: {}, projects: [], theme: await themeNow() };
   };
   async function who(req) { // which building is on the other end of the tunnel
     const id = String(req.headers['x-peer-id'] || ''), key = String(req.headers['x-peer-key'] || '');
@@ -170,7 +171,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
         const peer = await who(req), c = await floorCard(mine), me = (await peersFile()).me || {};
         const info = { building: me.name || '', owner: me.owner || '', floor: mine.name, lead: c ? c.lead : {}, viewer: peer ? { id: peer.id, name: peer.name, user: String(req.headers['x-peer-user'] || peer.owner || '') } : null,
           share: !!(peer && ((peer.my || {})[port] || {}).share), chats: !!(peer && peer.chats && peer.status === 'on'), back: String(req.headers['x-peer-back'] || '') };
-        const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest')
+        const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest').replace('%%OFFICE_THEME%%', ((await themeNow()) || {}).effective || '')
           .replace('</head>', `<script>window.__GUEST__ = ${JSON.stringify(info).replace(/</g, '\\u003c')};</script><script type="module" src="/js/guest.js"></script></head>`);
         res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' }); return res.end(html);
       }
@@ -184,6 +185,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
         await send(); const t = setInterval(send, 2500); req.on('close', () => clearInterval(t)); return;
       }
       if (p === '/api/visits') return json(res, 200, await visits());
+      if (p === '/api/theme' && req.method === 'GET') return json(res, 200, (await themeNow()) || {});
       if (p === '/api/guest/message' && req.method === 'POST') { // a person from another building writes to this floor's lead
         const peer = await who(req), b = await readBody(req);
         if (!peer) return json(res, 401, { error: 'This building does not know who you are.' });

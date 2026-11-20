@@ -218,7 +218,7 @@ async function chatLog(name, pos, known, worker) {
 }
 const clipLong = (s) => (s.length > 12000 ? `${s.slice(0, 12000)}\n…` : s);
 
-export function createHub({ port, stuck, agents }) {
+export function createHub({ port, stuck, agents, theme }) { // theme: () => the building's theme setting (team office)
   const officeOf = (p) => OFFICES.find((o) => o.port === p) || OFFICES[0];
 
   // ---------------------------------------------------------------- attention
@@ -328,7 +328,7 @@ export function createHub({ port, stuck, agents }) {
   // ---------------------------------------------------------------- routes (the caller has already checked the office token)
   const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
   const readBody = (req, max = 16_000) => new Promise((resolve, reject) => { let s = ''; req.on('data', (c) => { s += c; if (s.length > max) { reject(new Error('too large')); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch (e) { reject(e); } }); req.on('error', reject); });
-  const peers = createPeers({ port, agents, OFFICES, APP, chatLog }); // other buildings: guest listener and connections
+  const peers = createPeers({ port, agents, OFFICES, APP, chatLog, theme }); // other buildings: guest listener and connections
   async function route(req, res, p) {
     if (p === '/api/buildings' || p === '/api/visits' || p.startsWith('/api/peers/')) return peers.route(req, res, p);
     if (p === '/api/attention') {

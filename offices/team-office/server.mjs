@@ -484,6 +484,41 @@ async function watchdogState(team) {
 // Everything here is local files plus, on demand, one Jira read. Nothing asks a model: no tokens are spent.
 const SHARED = path.join(HOME, '.omniloy-team');
 const readJsonOr = async (f, d) => { try { return await readJson(f); } catch { return d; } };
+
+// ---------------------------------------------------------------- theme
+// The look of the rooms (public/js/themes), one setting for the whole building: { mode: 'fixed' | 'daily', theme }.
+// It lives with the other building-wide settings in ~/.omniloy-team, so every floor reads the same file on each
+// refresh and every open page follows within a few seconds. OFFICE_THEME_FILE points elsewhere (tests).
+// 'daily' picks by the Europe/Madrid date, cycling every theme in order (Oficina first, then by file name).
+const THEME_FILE = process.env.OFFICE_THEME_FILE || path.join(SHARED, 'office-theme.json');
+let themeList = { at: 0, ids: ['oficina'] };
+async function themeIds() {
+  if (Date.now() - themeList.at < 60_000) return themeList.ids;
+  let ids = [];
+  try { ids = (await fs.readdir(path.join(ROOT, 'public', 'js', 'themes'))).filter((f) => /^[a-z][a-z0-9-]*\.js$/.test(f) && f !== 'index.js').map((f) => f.slice(0, -3)).sort(); } catch { /* none */ }
+  ids = ['oficina', ...ids.filter((x) => x !== 'oficina')];
+  themeList = { at: Date.now(), ids };
+  return ids;
+}
+const madridDay = (d = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+async function themeSetting() {
+  const ids = await themeIds(), s = await readJsonOr(THEME_FILE, {}), day = madridDay();
+  const mode = s && s.mode === 'daily' ? 'daily' : 'fixed', theme = s && ids.includes(s.theme) ? s.theme : 'oficina';
+  let effective = theme;
+  if (mode === 'daily') { const [y, m, d] = day.split('-').map(Number); effective = ids[Math.floor(Date.UTC(y, m - 1, d) / 864e5) % ids.length]; }
+  return { mode, theme, effective, day };
+}
+async function saveTheme(body) {
+  const ids = await themeIds(), mode = body.mode === 'daily' ? 'daily' : body.mode === 'fixed' ? 'fixed' : '';
+  if (!mode) return { error: 'mode is fixed or daily' };
+  const old = await themeSetting(), theme = body.theme == null || body.theme === '' ? old.theme : String(body.theme);
+  if (!ids.includes(theme)) return { error: 'unknown theme' };
+  const tmp = `${THEME_FILE}.${process.pid}.tmp`;
+  await fs.mkdir(path.dirname(THEME_FILE), { recursive: true });
+  await fs.writeFile(tmp, JSON.stringify({ mode, theme, at: new Date().toISOString() }, null, 1));
+  await fs.rename(tmp, THEME_FILE);
+  return themeSetting();
+}
 // "On their plate" and "Waiting on" come from who holds which card (team-card) and from open requests,
 // not from the memory file: its sections are free text and rarely match.
 async function withPlate(memory, hn) {
@@ -630,7 +665,7 @@ async function refresh() {
     const next = {
       agents, feed, approvals: await approvalCards(team), watchdog: await watchdogState(team), trace: await loadTrace(team), hcOk: probe.ok,
       prs: await assignPrs(agents), prsError: prs.error, prsAt: prs.at, prsMerged: prs.merged,
-      team: { name: await spaceName(team) },
+      team: { name: await spaceName(team) }, theme: await themeSetting(),
       jira: { site: team.jira && team.jira.site, error: jira.error, updatedMs: jira.updatedMs },
       projects: team.projects.map((p) => ({ id: p.id, name: p.name, key: p.jiraProject })),
     };
@@ -842,7 +877,7 @@ function remoteOk(req, host) {
 }
 
 // What waits for __OWNER__ in every office, and the phone notifications (hub.mjs).
-const hub = createHub({ port: PORT, stuck: () => state.agents.filter((x) => x.status === 'blocked'), agents: () => state.agents });
+const hub = createHub({ port: PORT, stuck: () => state.agents.filter((x) => x.status === 'blocked'), agents: () => state.agents, theme: themeSetting });
 
 const term = createTerm({ teamDir: TEAM_DIR, owner: '__OWNER__' }); // the room's terminal (term.mjs): the owner's page only
 
@@ -853,7 +888,7 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     if (p === '/' || p === '/index.html') {
-      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN);
+      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN).replace('%%OFFICE_THEME%%', (await themeSetting()).effective);
       res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
       return res.end(html);
     }
@@ -871,6 +906,14 @@ const server = http.createServer(async (req, res) => {
     if (await term.route(req, res, p, url)) return;
 
     if (p === '/api/state') return json(res, 200, state);
+    if (p === '/api/theme') { // the building's theme: anyone with this page reads it, the owner (this token) changes it
+      if (req.method !== 'POST') return json(res, 200, await themeSetting());
+      if (!String(req.headers['content-type'] || '').includes('application/json')) return json(res, 415, { error: 'json only' });
+      const r = await saveTheme(await readBody(req));
+      if (r.error) return json(res, 400, r);
+      scheduleRefresh();
+      return json(res, 200, r);
+    }
     if (p === '/api/stream') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`);

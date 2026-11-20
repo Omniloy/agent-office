@@ -11,6 +11,7 @@ function start() {
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const office = () => window.office || {};
+  const roleOf = (r) => (window.officeRole ? window.officeRole(r) : r); // the role as the room's theme names it (team office)
   const api = (p, b) => office().api(p, b);
   const PHONE = document.documentElement.classList.contains('phone');
 
@@ -303,7 +304,7 @@ body.embed #chat { display: none !important; }`;
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
         { let last = null; const fin = new Set(); for (const el of log.children) { if (el.classList.contains('you') || el.classList.contains('peer')) { if (last) fin.add(last); last = null; } else if (el.classList.contains('them') && !el.classList.contains('scr')) last = el; } if (last && !r.working) fin.add(last); for (const el of log.querySelectorAll('.m.them')) el.classList.toggle('fin', fin.has(el)); } // the answer that closes each turn stands out; what they said on the way there is quieter
-        status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : r.person.role; sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
+        status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : roleOf(r.person.role); sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
         need.classList.toggle('on', !!target && !!$('#asks.show')); // they asked something: the question and its answers are in Overview
         if (stick || r.reset) log.scrollTop = log.scrollHeight;
       }
