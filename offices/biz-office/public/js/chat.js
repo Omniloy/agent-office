@@ -57,14 +57,11 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .menu button:active { background: rgba(255, 255, 255, .08); }
 #chat .need { display: none; flex: none; margin: 6px 10px 0; padding: 9px 12px; border-radius: 11px; border: 0; background: var(--needs, #fbbf24); color: #201600; font: 600 14px var(--sans, system-ui, sans-serif); text-align: left; }
 #chat .need.on { display: block; }
-/* the terminal is asking something (a permission): its question and options, answered from here */
-#chat .tq { display: none; flex: none; margin: 8px 10px 0; padding: 12px; border-radius: 13px; border: 1px solid var(--needs, #fbbf24); background: rgba(251, 191, 36, .08); max-height: 55%; overflow-y: auto; }
-#chat .tq.on { display: block; } #chat.sec .tq, #chat.art .tq, #chat.wkl .tq, #chat.wkv .tq, #chat.ro .tq { display: none; }
-#chat .tq b { display: block; font: 600 14px var(--sans, system-ui, sans-serif); color: var(--needs, #fbbf24); }
-#chat .tq code { display: block; margin: 6px 0; padding: 6px 8px; border-radius: 7px; background: rgba(0, 0, 0, .3); font: 12px/1.45 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
-#chat .tq p { margin: 4px 0 8px; font-size: 14px; line-height: 1.4; }
-#chat .tq button { display: flex; gap: 8px; width: 100%; min-height: 40px; margin-top: 6px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line, rgba(255,255,255,.2)); background: rgba(255, 255, 255, .05); color: inherit; font: 500 14px/1.35 var(--sans, system-ui, sans-serif); text-align: left; cursor: pointer; }
-#chat .tq button:hover { background: rgba(255, 255, 255, .11); } #chat .tq button i { font-style: normal; color: var(--muted, #8d97b0); flex: none; } #chat .tq.busy button { opacity: .5; pointer-events: none; }
+#chat .menu-card { flex: none; margin: 6px 10px 0; padding: 10px 12px; border-radius: 11px; border: 1px solid rgba(251, 191, 36, .55); background: rgba(251, 191, 36, .12); color: var(--text, #e8eaf2); }
+#chat .menu-card .q { font-size: 14px; font-weight: 650; line-height: 1.4; }
+#chat .menu-card .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#chat .menu-card button { max-width: 100%; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.1); color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+#chat .menu-card button:first-child { background: var(--needs, #fbbf24); border-color: var(--needs, #fbbf24); color: #201600; font-weight: 650; }
 #chat .detail { display: none; flex: 1; min-height: 0; flex-direction: column; }
 #chat.sec .detail { display: flex; } #chat.sec .log, #chat.sec .need { display: none; }
 #chat .detail #asks { flex: none; } #chat .detail .pbody { flex: 1; min-height: 0; }
@@ -187,7 +184,7 @@ body.embed #chat { display: none !important; }`;
   box.id = 'chat';
   box.innerHTML = `<header><button type="button" class="back" aria-label="Back">‹</button><div class="av"></div><div class="who"><b class="nm"></b><small></small></div><button type="button" class="stop" title="Stop what they are doing">Stop</button><button type="button" class="arts none" aria-label="Their artifacts" title="Pages they have published"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z"/><path d="M14 3.5V8h4M10 12.5h5M10 16h5"/></svg><i></i></button><button type="button" class="dots" aria-label="More about them">⋯</button><button type="button" class="x" aria-label="Close">✕</button></header>
 <div class="menu"><button type="button" class="chat" data-tab="">Chat</button><button type="button" data-tab="overview">Overview</button><button type="button" data-tab="activity">Activity</button><button type="button" data-tab="terminal">Live screen</button><button type="button" data-tab="notes">Notes</button></div>
-<button type="button" class="need">Needs your answer ›</button><div class="tq"></div>
+<button type="button" class="need">Needs your answer ›</button>
 <button type="button" class="wkhead"></button><div class="log"></div><div class="wklist"></div><div class="detail"></div><div class="artview"></div><button type="button" class="wkbar"></button><div class="err"></div>
 <form><textarea rows="1" placeholder="Message" enterkeyhint="send"></textarea><button type="submit" class="go" title="Send"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></form>`;
   document.body.append(box);
@@ -250,11 +247,11 @@ body.embed #chat { display: none !important; }`;
   function rich(t) { return esc(t).split(/```/).map((part, i) => (i % 2 ? fence(part) : blocks(part))).join(''); }
 
   const shots = (h) => (window.compose ? window.compose.shots(h) : h); // attached pictures show as pictures
-  let who = '', file = '', pos = 0, timer = 0, open = false, run = 0, pending = [], lastStep = null, target = '', sec = '', status = '';
+  let who = '', file = '', pos = 0, timer = 0, open = false, run = 0, pending = [], lastStep = null, target = '', sec = '', status = '', currentMenu = null;
   let wk = '', wkl = false, workers = [], doing = ''; // the helper whose log is showing ('' = the person), whether their list is up, and who they are
   const SEC = { overview: 'Overview', activity: 'Activity', terminal: 'Live screen', notes: 'Notes', artifacts: 'Artifacts' }, holder = $('.detail', box), artsB = $('.arts', box), artView = $('.artview', box);
   let arts = [], asking = '';
-  const menu = $('.menu', box), need = $('.need', box), tq = $('.tq', box), panel = $('#panel'), root = document.documentElement;
+  const menu = $('.menu', box), need = $('.need', box), panel = $('#panel'), root = document.documentElement;
   const qs = () => (target ? `&name=${encodeURIComponent(target)}` : '') + (wk ? `&worker=${encodeURIComponent(wk)}` : '');
   const near = () => log.scrollTop + log.clientHeight >= log.scrollHeight - 80;
   function add(m, live) {
@@ -290,6 +287,7 @@ body.embed #chat { display: none !important; }`;
           let s = $('.scr', log); if (!s) { s = document.createElement('div'); s.className = 'm them scr'; log.append(s); }
           s.textContent = r.screen || ''; if (!r.live) s.remove();
         }
+        paintMenu(r.menu || null);
         if (!r.live && !$('.note', log)) { const n = document.createElement('div'); n.className = 'note'; n.textContent = `${r.person.name} is not running in Herdr right now.${r.person.admin ? ' Start him on the computer with: omniloy-admin start' : ''}`; log.append(n); }
         if (nowEl) { // what they are doing right now: the tool in use, or the line the room shows over their head
           if (fresh) doing = ''; if ('now' in r) doing = r.now || '';
@@ -298,11 +296,6 @@ body.embed #chat { display: none !important; }`;
         }
         if (typing) log.append(typing);
         box.classList.toggle('working', !!r.working);
-        { const m = wk ? null : r.prompt || null, sig = m ? m.sig : ''; // the terminal is waiting on a menu: show it here
-          if (tq.dataset.sig !== sig) { tq.dataset.sig = sig; tq.classList.remove('busy'); tq.textContent = '';
-            if (m) { const el = (t, s) => { if (!s) return; const e = document.createElement(t); e.textContent = s; tq.append(e); }; el('b', m.title || 'Their terminal is asking'); el('code', m.detail); el('p', m.question);
-              for (const o of m.options) { const bt = document.createElement('button'); bt.type = 'button'; bt.dataset.n = o.n; const i = document.createElement('i'); i.textContent = `${o.n}.`; bt.append(i, document.createTextNode(o.text)); tq.append(bt); } } }
-          tq.classList.toggle('on', !!m); }
         { let last = null; const fin = new Set(); for (const el of log.children) { if (el.classList.contains('you') || el.classList.contains('peer')) { if (last) fin.add(last); last = null; } else if (el.classList.contains('them') && !el.classList.contains('scr')) last = el; } if (last && !r.working) fin.add(last); for (const el of log.querySelectorAll('.m.them')) el.classList.toggle('fin', fin.has(el)); } // the answer that closes each turn stands out; what they said on the way there is quieter
         status = !r.live ? 'offline' : r.working ? 'working…' : r.blocked ? 'waiting for you' : PHONE ? '' : r.person.role; sub.textContent = sec ? SEC[sec] : status; sub.classList.toggle('work', !!r.working && !sec);
         need.classList.toggle('on', !!target && !!$('#asks.show')); // they asked something: the question and its answers are in Overview
@@ -382,8 +375,32 @@ body.embed #chat { display: none !important; }`;
     o.world.setWorkers(map);
   }
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, innerHeight * 0.4)}px`; };
+  const freeMenu = (label) => /type something|tell Claude|chat about this/i.test(label);
+  const menuChoice = (menu, text) => menu && /^[1-9]$/.test(text) ? menu.options.find((x) => x.startsWith(`${text}. `)) : null;
+  function paintMenu(m) {
+    if (box.classList.contains('ro')) m = null;
+    currentMenu = m;
+    const old = $('[data-menu-card]', log);
+    if (!m) { if (old) old.remove(); return; }
+    const sig = JSON.stringify(m);
+    if (old && old.dataset.sig === sig) return;
+    if (old) old.remove();
+    const card = document.createElement('div'); card.className = 'menu-card'; card.dataset.menuCard = ''; card.dataset.sig = sig;
+    card.innerHTML = `<div class="q">${esc(m.question)}</div><div class="acts">${m.options.map((o) => `<button type="button" data-menu-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+    log.append(card);
+  }
+  async function answerMenu(label) {
+    const m = currentMenu, message = freeMenu(label) ? ta.value.trim() : '';
+    if (!m || !who) return;
+    try {
+      await api('/api/requests/answer', { id: `menu:${who}`, text: label, question: m.question, options: m.options, menuId: m.id, terminalId: m.terminalId, ...(message ? { message } : {}) });
+      if (message) { ta.value = ''; grow(); }
+      paintMenu(null); log.scrollTop = log.scrollHeight; err.textContent = '';
+    } catch (e) { err.textContent = e.message || 'Could not answer the menu.'; }
+  }
   async function send() {
     const text = ta.value.trim(); if (!text || !who) return;
+    const choice = menuChoice(currentMenu, text); if (choice) return answerMenu(choice);
     ta.value = ''; grow(); err.textContent = '';
     const el = document.createElement('div'); el.className = 'm you wait'; el.innerHTML = shots(esc(text)); log.append(el); log.scrollTop = log.scrollHeight;
     const p = { k: text.slice(0, 60), el, t: Date.now() }; pending.push(p);
@@ -397,8 +414,6 @@ body.embed #chat { display: none !important; }`;
   $('.dots', box).onclick = () => menu.classList.toggle('on');
   menu.onclick = (e) => { const b = e.target.closest('[data-tab]'); if (b) section(b.dataset.tab); };
   need.onclick = () => section('overview');
-  tq.onclick = async (e) => { const bt = e.target.closest('button[data-n]'); if (!bt || tq.classList.contains('busy')) return; tq.classList.add('busy'); err.textContent = '';
-    try { await api('/api/chat/prompt', { name: target, n: Number(bt.dataset.n), sig: tq.dataset.sig }); } catch (x) { err.textContent = x.message || 'Could not answer.'; tq.classList.remove('busy'); } };
   artsB.onclick = () => section(sec === 'artifacts' ? '' : 'artifacts');
 
   // ---------------------------------------------------------------- artifacts: the pages people publish with `team-artifact`
@@ -443,6 +458,7 @@ body.embed #chat { display: none !important; }`;
     show(a.herdrName); section('artifacts');
   });
   log.addEventListener('pointerdown', () => menu.classList.remove('on'));
+  log.addEventListener('click', (e) => { const b = e.target.closest('[data-menu-answer]'); if (b) answerMenu(b.dataset.menuAnswer); });
   if (PHONE) { try { const f = Number(localStorage.getItem('office.chat.h')); if (f > 0.1 && f < 1) root.style.setProperty('--chat-h', `${(f * 100).toFixed(1)}dvh`); } catch { /* no storage: the usual height */ } } // the height you left it at (drag its top edge)
   if (panel && (!window.__GUEST__ || window.__GUEST__.chats)) { // a visitor reads chats only where that building allows it
     if (window.__GUEST__) box.classList.add('ro'); // picking someone opens their chat; their panel stays underneath for the sections

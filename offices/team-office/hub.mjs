@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createPeers } from './peers.mjs';
+import { menuInstance, parseMenu } from './menu.mjs';
 
 const APP = path.dirname(fileURLToPath(import.meta.url)); // this office app's folder
 const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = path.join(SHARED, 'push');
@@ -162,38 +163,18 @@ const doingOf = (x) => { // what a tool call is about, in a few words
   const i = x.input || {}, hint = i.description || (i.file_path && path.basename(String(i.file_path))) || i.pattern || i.query || i.url || i.skill || '';
   return `${String(x.name || '').replace(/^mcp__/, '').replace(/__/g, ' · ')}${hint ? `: ${String(hint).replace(/\s+/g, ' ').slice(0, 90)}` : ''}`;
 };
-// A menu the program is showing in the terminal and waiting on (Claude Code asking for a permission): what it asks and its
-// options, so the chat can show them as buttons. Only a numbered list with the cursor on it, at the very bottom of the screen.
-function menuOf(screen) {
-  const lines = String(screen || '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split('\n').map((l) => l.replace(/\s+$/, ''));
-  const opt = /^\s*(❯\s*)?(\d)\.\s+(\S.*)$/, rule = /^\s*[─╌━-]{20,}/;
-  let last = -1; for (let i = lines.length - 1; i >= 0; i--) if (opt.test(lines[i])) { last = i; break; }
-  if (last < 0 || lines.slice(last + 1).filter((l) => l.trim() && !rule.test(l)).length > 3) return null;
-  const options = []; let i = last, cursor = false, tail = '';
-  for (; i >= 0 && lines[i].trim(); i--) {
-    if (options.length && options[0].n === 1) break; // above the first option: the question itself
-    const m = opt.exec(lines[i]);
-    if (!m) { tail = `${lines[i].trim()} ${tail}`.trim(); continue; }
-    options.unshift({ n: Number(m[2]), text: `${m[3]} ${tail}`.trim().slice(0, 200) }); tail = ''; if (m[1]) cursor = true;
-  }
-  if (tail || !cursor || options.length < 2 || options.length > 9 || options.some((o, k) => o.n !== k + 1)) return null;
-  while (i >= 0 && !lines[i].trim()) i--;
-  const question = i >= 0 ? lines[i].trim().slice(0, 200) : '';
-  let top = i; while (top > 0 && !/^\s*─{20,}/.test(lines[top])) top--;
-  const head = lines.slice(top + 1, i).filter((l) => l.trim()), title = head.length && !rule.test(head[0]) ? head[0].trim().slice(0, 120) : '';
-  const d = head.findIndex((l) => rule.test(l)), detail = d >= 0 && head[d + 1] && !rule.test(head[d + 1]) ? head[d + 1].trim().slice(0, 300) : '';
-  return { title, detail, question, options, sig: crypto.createHash('sha1').update(JSON.stringify([title, detail, question, options])).digest('hex').slice(0, 12) };
-}
-const promptOf = async (name) => menuOf(await hcOut(['read', name, '--lines', '45']));
 async function chatLog(name, pos, known, worker) {
   let t = {}; try { t = JSON.parse(await hcOut(['get', name, '--json'])); } catch { /* not running */ }
   const live = t.state === 'live', working = !!(t.status && t.status.state === 'working'), blocked = !!(t.status && ['blocked', 'error'].includes(t.status.state));
   const main = live ? await sessionLog(t) : '', helpers = await workersOf(main), side = worker ? helpers.find((x) => x.id === worker) : null, workers = publicWorkers(helpers);
   if (worker && !side) return { file: '', pos: 0, messages: [], live, working: false, blocked: false, workers, gone: true }; // that helper is no longer listed
   const file = side ? side.file : main;
+  // the screen: the whole chat when it is not Claude Code, and where the menu they are stopped on is read
+  const screen = live && !side && (blocked || !file) ? (await hcOut(['read', name, '--lines', file ? '40' : '80'])).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[ \t]+$/gm, '').trim() : '';
+  const parsed = blocked && !side ? parseMenu(screen) : null;
+  const menu = parsed ? menuInstance(t, parsed) : null;
   if (!file) { // not Claude Code (or not running): the screen is all there is
-    const screen = live ? (await hcOut(['read', name, '--lines', '80'])).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/[ \t]+$/gm, '').trim() : '';
-    return { file: '', pos: 0, messages: [], live, working, blocked, screen, workers };
+    return { file: '', pos: 0, messages: [], live, working, blocked, screen, workers, menu };
   }
   const id = path.basename(file), first = id !== known || !pos;
   const size = (await fs.stat(file)).size, from = first ? Math.max(0, size - 700_000) : Math.min(pos, size);
@@ -211,6 +192,7 @@ async function chatLog(name, pos, known, worker) {
       let text = typeof c === 'string' ? c : Array.isArray(c) && !c.some((x) => x.type === 'tool_result') ? c.filter((x) => x.type === 'text').map((x) => x.text).join('\n') : '';
       text = text.trim(); if (!text) continue;
       let from = '';
+      const paste = /^<pasted_content id="[^"]*">\s*([\s\S]*?)\s*<\/pasted_content[^>]*>$/.exec(text); if (paste) text = paste[1]; // a long message arrives wrapped as a paste: without this it was skipped and its bubble stayed last forever
       const m = /^<hc from="([^"]*)">([\s\S]*?)(<\/hc>)?\s*$/.exec(text);
       if (m) { from = m[1].split(' ').pop(); text = m[2].trim(); } else if (text.startsWith('<')) continue; // reminders, commands, notifications
       const mate = from && who[from] && from !== name ? who[from] : null;
@@ -221,7 +203,7 @@ async function chatLog(name, pos, known, worker) {
       for (const x of c) { if (x.type === 'text' && x.text.trim()) { out.push({ role: 'them', text: clipLong(x.text.trim()), ts }); now = ''; } else if (x.type === 'tool_use') { out.push({ role: 'step', text: String(x.name || ''), ts }); now = doingOf(x); } }
     }
   }
-  return { file: id, pos: from + end, reset: first, messages: first ? out.slice(-60) : out, live, working: side ? !side.done : working, blocked: side ? false : blocked, workers, ...(now !== undefined ? { now } : {}), ...(blocked && !side ? { prompt: await promptOf(name) } : {}) };
+  return { file: id, pos: from + end, reset: first, messages: first ? out.slice(-60) : out, live, working: side ? !side.done : working, blocked: side ? false : blocked, workers, ...(now !== undefined ? { now } : {}), menu };
 }
 const clipLong = (s) => (s.length > 12000 ? `${s.slice(0, 12000)}\n…` : s);
 
@@ -232,13 +214,15 @@ export function createHub({ port, stuck, agents }) {
   const since = new Map(); // herdrName -> when they got stuck (so the same wait keeps one id)
   async function writeLocal() {
     let list = []; try { list = (stuck ? stuck() : []) || []; } catch { list = []; }
+    let all = []; try { all = (agents ? agents() : []) || []; } catch { all = []; }
     for (const k of [...since.keys()]) if (!list.some((a) => a.herdrName === k)) since.delete(k);
     for (const a of list) if (!since.has(a.herdrName)) since.set(a.herdrName, Date.now());
-    const items = list.filter((a) => Date.now() - since.get(a.herdrName) > 15_000).map((a) => { // a short stop is not a wait
+    const items = list.flatMap((a) => {
       const t = since.get(a.herdrName);
-      return { id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() };
+      if (a.menu) return [{ id: `menu:${a.herdrName}:${a.menu.id}`, port, kind: 'request', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.question, 140), created: new Date(a.statusSince || t).toISOString() }];
+      if (Date.now() - t <= 15_000) return []; // a short stop is not a wait
+      return [{ id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() }];
     });
-    let all = []; try { all = (agents ? agents() : []) || []; } catch { all = []; }
     await writeJson(path.join(PUSH, `local-${port}.json`), { ts: Date.now(), items, people: all.length, working: all.filter((a) => a.status === 'working').length }); // the head count is what the building view shows
   }
   async function attention() {
@@ -436,11 +420,6 @@ export function createHub({ port, stuck, agents }) {
         if (!text || text.length > 6000) json(res, 400, { error: 'message is empty or too long' });
         else { const ok = await hcDo(['send', '--json', me.herdrName, '--', text]); json(res, ok ? 200 : 502, ok ? { ok: true } : { error: `${person.name} is not running in Herdr` }); }
       } else if (p === '/api/chat/stop') { const ok = await hcDo(['interrupt', me.herdrName, '--json']); json(res, ok ? 200 : 502, ok ? { ok: true } : { error: 'could not stop' }); }
-      else if (p === '/api/chat/prompt') { // the owner picked one of the options the terminal is showing: press that number, if the same menu is still up
-        const m = await promptOf(me.herdrName), n = Number(body.n);
-        if (!m || m.sig !== String(body.sig || '') || !m.options.some((o) => o.n === n)) json(res, 409, { error: 'that question is no longer on their screen' });
-        else { const ok = await hcDo(['keys', me.herdrName, String(n)]); json(res, ok ? 200 : 502, ok ? { ok: true } : { error: 'could not press the key' }); }
-      }
       else json(res, 404, { error: 'not found' });
       return true;
     }
