@@ -13,7 +13,7 @@ function start() {
   const office = () => window.office || {};
   const click = (sel) => { const b = $(sel); if (b) b.click(); return !!b; };
   // The other offices run on this same machine, one port each.
-  const OFFICES = [['Dev', 4317], ['Business', 4318]];
+  const OFFICES = [['Dev', 4317], ['CRM', 4319], ['Web', 4320], ['Lab', 4321]];
   const ICON = {
     office: '<path d="M3 10.5 12 4l9 6.5V20H3z"/><path d="M9.5 20v-6h5v6"/>',
     team: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3 19.5c.6-3.3 3-5 6-5s5.4 1.7 6 5"/><circle cx="17.2" cy="9.5" r="2.4"/><path d="M17 14.6c2.3.2 3.7 1.7 4.2 4.4"/>',

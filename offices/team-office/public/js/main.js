@@ -455,15 +455,44 @@ recapBox.id = 'recap'; recapBox.type = 'button'; recapBox.title = 'Dismiss';
 document.body.appendChild(recapBox);
 recapBox.onclick = () => recapBox.classList.remove('show');
 
+// ------------------------------------------------------------------ terminal menus (a Claude/Codex question waiting in a terminal)
+// What the agent asks is shown as written, in monospace and escaped, never through rich(): a command here must not
+// become a Run button. After an answer the menu id is hidden for 10 s, so a poll that started earlier cannot bring
+// the old card back; a different menu that comes right after is a new card, marked "new".
+const menuHide = new Map(), menuFresh = new Map(), menuBusy = new Set();
+const menuHidden = (id) => { const t = menuHide.get(id); if (t > Date.now()) return true; if (t) menuHide.delete(id); return false; };
+const menuIsNew = (id) => (menuFresh.get(id) || 0) > Date.now();
+function menuBody(x) {
+  const ctx = x.context || [], shown = ctx.slice(0, 6);
+  return (x.question && x.question !== x.title ? `<div class="mq">${esc(x.question)}</div>` : '')
+    + (shown.length ? `<pre class="menuctx">${esc(shown.join('\n'))}${ctx.length > 6 ? `\n<i>… ${ctx.length - 6} more lines on Live screen</i>` : ''}</pre>` : '')
+    + (x.said ? `<div class="msaid"><b>${esc(x.name || '')}:</b> ${esc(x.said)}</div>` : '');
+}
+async function answerMenuItem(x, label, extra = {}) {
+  if (menuBusy.has(x.from)) return null; // one answer at a time per person: a second tap never presses again
+  menuBusy.add(x.from);
+  try {
+    const r = await api('/api/requests/answer', { id: x.id || `menu:${x.from}`, text: label, menuId: x.menuId, terminalId: x.terminalId, via: PHONE ? 'phone' : 'office', ...extra });
+    menuHide.set(x.menuId, Date.now() + 10000);
+    toast(`<i class="dot" style="background:#4ade80"></i><span>Sent to <b>${esc(x.name || x.from)}</b>: ${esc(label)}</span>`, 'ok', 5000);
+    if (r.next) { menuFresh.set(r.next.menuId, Date.now() + 20000); toast(`<i class="dot blocked"></i><span>Contestado. Ahora <b>${esc(r.next.name || x.name)}</b> pregunta: ${esc(String(r.next.title || '').slice(0, 90))}</span><button type="button" class="go" data-go="requests">Open</button>`, '', 12000); }
+    return r;
+  } catch (e) {
+    if (/no longer on the screen/i.test(e.message)) menuHide.set(x.menuId, Date.now() + 10000);
+    throw e;
+  } finally { menuBusy.delete(x.from); }
+}
+const menuData = (x) => (x.menu ? ` data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : '');
+
 function renderAsks() {
   const a = selected && agentBy(selected), list = a ? asksOf(a) : [];
   asksBox.classList.toggle('show', list.length > 0);
-  asksBox.innerHTML = list.map((x) => `<div class="ask ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}" data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : ''}>
-    <div class="ahead"><b>${x.kind === 'request' ? 'Needs your answer' : 'Message for you'}</b><span>${esc(since(new Date(x.created).getTime()))}</span>
+  asksBox.innerHTML = list.map((x) => `<div class="ask ${x.kind === 'request' ? 'request' : 'note'}${x.menu ? ' tmenu' : ''}" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${menuData(x)}>
+    <div class="ahead"><b>${x.menu ? 'Waiting in the terminal' : x.kind === 'request' ? 'Needs your answer' : 'Message for you'}</b>${x.menu && menuIsNew(x.menuId) ? '<i class="mnew">new question</i>' : ''}<span>${esc(since(new Date(x.created).getTime()))}</span>
       ${x.ticket && asks.site ? `<a class="key" href="${esc(asks.site)}/browse/${esc(x.ticket)}" target="_blank" rel="noopener">${esc(x.ticket)}</a>` : ''}</div>
-    <div class="atitle">${rich(x.title || '')}</div>${x.body ? `<div class="abody">${md(x.body)}</div>` : ''}
+    <div class="atitle">${x.menu ? esc(x.title || '') : rich(x.title || '')}</div>${x.menu ? menuBody(x) : x.body ? `<div class="abody">${md(x.body)}</div>` : ''}
     ${x.kind === 'request'
-      ? `${x.options.length ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+      ? `${x.options.length ? `<div class="acts">${x.options.map((o, i) => (!x.menu && window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
          ${x.menu ? '' : '<div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>'}`
       : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
   </div>`).join('');
@@ -483,10 +512,10 @@ async function pollAsks() {
     const d = await api('/api/requests'), sig = JSON.stringify(d);
     if (sig === asksSig) return;
     asksSig = sig;
-    asks = { items: d.items || [], more: d.withLucia ?? d.withLead ?? 0, site: d.site || '' };
+    asks = { items: (d.items || []).filter((x) => !(x.menu && menuHidden(x.menuId))), more: d.withLucia ?? d.withLead ?? 0, site: d.site || '' };
     const ids = new Set(asks.items.map((x) => x.notifyId || x.id));
     if (asksSeen) for (const x of asks.items) {
-      if (asksSeen.has(x.notifyId || x.id) || x.kind !== 'request') continue;
+      if (asksSeen.has(x.notifyId || x.id) || x.kind !== 'request' || (x.menu && menuIsNew(x.menuId))) continue; // a follow-up menu already has its "Contestado. Ahora…" toast
       toast(`<i class="dot blocked"></i><b>${esc(x.name)}</b> has a question for you<button type="button" class="go" data-go="requests">Open</button>`, '', 12000); chime([880, 660]);
     }
     asksSeen = ids;
@@ -499,16 +528,18 @@ asksBox.addEventListener('click', async (e) => {
   const id = card.dataset.id;
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? card.querySelector('input').value.trim() : null);
   try {
-    if (card.dataset.menuQuestion && /type something|tell Claude|chat about this/i.test(text)) {
-      if (office().chat && office().chat.open) return office().chat.open(card.dataset.from || (asks.items.find((x) => String(x.id) === id) || {}).from);
+    if (card.dataset.menuId && /type something|tell (Claude|Codex)|chat about this/i.test(text)) {
+      const chat = window.office.chat; // window.office: here `office` is the object itself, not a function (B17)
+      if (chat && chat.open) return chat.open(card.dataset.from || (asks.items.find((x) => String(x.id) === id) || {}).from);
       throw new Error('Open this person’s chat to type the answer.');
     }
     if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
-    else if (text) {
-      const body = { id, text };
-      if (card.dataset.menuQuestion) { body.question = card.dataset.menuQuestion; body.options = JSON.parse(card.dataset.menuOptions || '[]'); body.menuId = card.dataset.menuId; body.terminalId = card.dataset.terminalId; }
-      await api('/api/requests/answer', body);
+    else if (text && card.dataset.menuId) {
+      const x = asks.items.find((q) => q.menu && q.menuId === card.dataset.menuId) || { id, from: card.dataset.from, menuId: card.dataset.menuId, terminalId: card.dataset.terminalId };
+      card.classList.add('busy'); card.querySelectorAll('button').forEach((q) => { q.disabled = true; });
+      try { await answerMenuItem(x, text); } finally { card.classList.remove('busy'); }
     }
+    else if (text) await api('/api/requests/answer', { id, text });
     else return;
     if (document.activeElement) document.activeElement.blur();
     asksSig = ''; pollAsks();
@@ -556,7 +587,7 @@ function away(isAway) {
 }
 document.addEventListener('visibilitychange', () => away(document.hidden));
 window.office.pause = (p) => { world.setPaused(!!p); away(!!p); };
-Object.assign(window.office, { rich, md, selected: () => selected, zap: runZap, api, openCard, closeCard, boardSets, personName, agoOf, toast, chime, select, applyAsks, state: () => state, agents: () => (state ? state.agents : []), refreshAsks: () => { asksSig = ''; pollAsks(); } }); // for inbox.js
+Object.assign(window.office, { menus: { body: menuBody, answer: answerMenuItem, hidden: menuHidden, isNew: menuIsNew, hide: (id, ms = 10000) => menuHide.set(id, Date.now() + ms) }, rich, md, selected: () => selected, zap: runZap, api, openCard, closeCard, boardSets, personName, agoOf, toast, chime, select, applyAsks, state: () => state, agents: () => (state ? state.agents : []), refreshAsks: () => { asksSig = ''; pollAsks(); } }); // for inbox.js
 window.office.recap = (sinceMs) => setTimeout(() => recap(sinceMs), 2500); // after a fresh page: let the first state and questions arrive
 
 // ------------------------------------------------------------------ state stream

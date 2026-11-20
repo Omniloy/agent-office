@@ -15,7 +15,7 @@ instructions to <team>/former/; the memory file stays. It refuses while they sti
 unless --force. <who> and <lead> are Herdr names."""
 import json, os, sys, subprocess, datetime, fcntl, re, shutil
 HOME = os.path.expanduser("~"); HC = f"{HOME}/.local/bin/hc"
-TEAMS = [(4317, f"{HOME}/.omniloy-team"), (4318, f"{HOME}/.omniloy-biz")]
+TEAMS = [(4317, f"{HOME}/.omniloy-team"), (4318, f"{HOME}/.omniloy-biz"), (4319, f"{HOME}/.omniloy-crm"), (4320, f"{HOME}/.omniloy-web"), (4321, f"{HOME}/.omniloy-lab")]
 MODELS = ["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "inherit"]
 PALETTE = ["#e11d48", "#2563eb", "#16a34a", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6", "#6366f1", "#eab308"]
 def sh(*a, **k):

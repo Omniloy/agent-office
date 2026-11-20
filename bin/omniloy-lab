@@ -1,0 +1,3 @@
+#!/bin/sh
+# Lab floor: same launcher, other team folder.  omniloy-lab start|stop|ls|runtime
+OMNILOY_TEAM_DIR="$HOME/.omniloy-lab" exec "$HOME/.local/bin/omniloy-team" "$@"

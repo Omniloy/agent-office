@@ -26,7 +26,7 @@ hold cards that are not waiting, the watchdog tells your Product lead. So before
 waiting, or finish it. Store: ~/.omniloy-team/cards.json"""
 import json, os, sys, fcntl, datetime, subprocess
 HOME = os.path.expanduser("~"); STORE = f"{HOME}/.omniloy-team/cards.json"; LOG = f"{HOME}/.omniloy-team/cards-log.jsonl"
-DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz"]
+DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz", f"{HOME}/.omniloy-crm", f"{HOME}/.omniloy-web", f"{HOME}/.omniloy-lab"]
 NAMES = {}
 for d in DIRS:
     try: tj = json.load(open(f"{d}/team.json"))

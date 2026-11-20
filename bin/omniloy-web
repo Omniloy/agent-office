@@ -1,0 +1,3 @@
+#!/bin/sh
+# WEB floor: same launcher, other team folder.  omniloy-web start|stop|ls|runtime
+OMNILOY_TEAM_DIR="$HOME/.omniloy-web" exec "$HOME/.local/bin/omniloy-team" "$@"

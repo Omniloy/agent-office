@@ -1,0 +1,3 @@
+#!/bin/sh
+# CRM floor: same launcher, other team folder.  omniloy-crm start|stop|ls|runtime
+OMNILOY_TEAM_DIR="$HOME/.omniloy-crm" exec "$HOME/.local/bin/omniloy-team" "$@"

@@ -58,7 +58,12 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .need { display: none; flex: none; margin: 6px 10px 0; padding: 9px 12px; border-radius: 11px; border: 0; background: var(--needs, #fbbf24); color: #201600; font: 600 14px var(--sans, system-ui, sans-serif); text-align: left; }
 #chat .need.on { display: block; }
 #chat .menu-card { flex: none; margin: 6px 10px 0; padding: 10px 12px; border-radius: 11px; border: 1px solid rgba(251, 191, 36, .55); background: rgba(251, 191, 36, .12); color: var(--text, #e8eaf2); }
-#chat .menu-card .q { font-size: 14px; font-weight: 650; line-height: 1.4; }
+#chat .menu-card .q { font-size: 14px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+#chat .menu-card .mq { margin-top: 2px; font-size: 12.5px; opacity: .8; }
+#chat .menu-card .new { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: #b9c8ff; }
+#chat .menu-card pre { margin: 6px 0 0; padding: 7px 9px; border-radius: 7px; background: rgba(0,0,0,.3); font: 12px/1.45 var(--mono, Menlo, ui-monospace, monospace); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 150px; overflow: auto; user-select: text; }
+#chat .menu-card.busy { opacity: .6; pointer-events: none; }
+#chat .log .m.you.menuans { background: rgba(74, 222, 128, .16); border: 1px solid rgba(74, 222, 128, .45); color: inherit; }
 #chat .menu-card .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 #chat .menu-card button { max-width: 100%; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2); background: rgba(255,255,255,.1); color: inherit; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
 #chat .menu-card button:first-child { background: var(--needs, #fbbf24); border-color: var(--needs, #fbbf24); color: #201600; font-weight: 650; }
@@ -261,6 +266,7 @@ body.embed #chat { display: none !important; }`;
       const el = document.createElement('div'); el.className = 'st'; el.textContent = `1 step (${m.text})`; lastStep = { el, n: 1, tools: [m.text] }; log.append(el); return;
     }
     if (m.role === 'you') { const k = m.text.slice(0, 60); const i = pending.findIndex((x) => x.k === k || m.text.includes(x.k)); if (i >= 0) { pending[i].el.remove(); pending.splice(i, 1); } }
+    if (m.role === 'menu') { const el = document.createElement('div'); el.className = 'm you menuans'; el.textContent = m.text; log.append(el); for (const x of pending) log.append(x.el); return; } // "✓ 1. Yes · git push…"
     const el = document.createElement('div'); el.className = `m ${m.role}`;
     el.innerHTML = m.role === 'peer' ? `<b style="color:${esc(m.color)}">${esc(m.from)}</b>${esc(m.text.length > 600 ? `${m.text.slice(0, 600)}…` : m.text)}` : m.role === 'them' ? rich(m.text) : `${m.spoken ? '🎙 ' : ''}${shots(esc(m.text))}`;
     log.append(el);
@@ -309,7 +315,7 @@ body.embed #chat { display: none !important; }`;
     if (name !== target || !open) menu.classList.remove('on');
     section('');
     box.dataset.who = name;
-    if (name !== target) { wk = ''; wkl = false; workers = []; box.classList.remove('wkv', 'wkl'); paintWorkers(); status = ''; target = name; who = ''; file = ''; pos = 0; pending = []; lastStep = null; log.innerHTML = ''; nm.textContent = ''; sub.textContent = ''; av.textContent = ''; av.style.background = 'transparent'; err.textContent = ''; need.classList.remove('on'); box.classList.remove('working'); }
+    if (name !== target) { const from = target; if (!name && from && office().select) office().select(null); /* from a person to the superadmin: let go of the person too */ wk = ''; wkl = false; workers = []; box.classList.remove('wkv', 'wkl'); paintWorkers(); status = ''; target = name; who = ''; file = ''; pos = 0; pending = []; lastStep = null; log.innerHTML = ''; nm.textContent = ''; sub.textContent = ''; av.textContent = ''; av.style.background = 'transparent'; err.textContent = ''; need.classList.remove('on'); box.classList.remove('working'); }
     box.classList.toggle('person', !!target); box.classList.toggle('admin', !target); paintArts();
     open = true; box.classList.add('on'); root.classList.add('chat-on'); root.classList.toggle('chat-person', !!target); dispatchEvent(new Event('office-chat'));
     clearTimeout(timer); poll(++run);
@@ -375,10 +381,14 @@ body.embed #chat { display: none !important; }`;
     o.world.setWorkers(map);
   }
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, innerHeight * 0.4)}px`; };
-  const freeMenu = (label) => /type something|tell Claude|chat about this/i.test(label);
+  const freeMenu = (label) => /type something|tell (Claude|Codex)|chat about this/i.test(label);
   const menuChoice = (menu, text) => menu && /^[1-9]$/.test(text) ? menu.options.find((x) => x.startsWith(`${text}. `)) : null;
+  // A menu answered here stays hidden for 10 s (here and in For you), so a poll that started before the answer
+  // cannot paint it again; the next question, if the agent asks one right away, comes as a new card.
+  const hidden = new Map(), menuHidden = (id) => (hidden.get(id) || 0) > Date.now() || !!(office().menus && office().menus.hidden && office().menus.hidden(id));
+  let menuBusy = false, nextNote = { id: '', text: '', until: 0 };
   function paintMenu(m) {
-    if (box.classList.contains('ro')) m = null;
+    if (box.classList.contains('ro') || (m && menuHidden(m.id))) m = null;
     currentMenu = m;
     const old = $('[data-menu-card]', log);
     if (!m) { if (old) old.remove(); return; }
@@ -386,17 +396,30 @@ body.embed #chat { display: none !important; }`;
     if (old && old.dataset.sig === sig) return;
     if (old) old.remove();
     const card = document.createElement('div'); card.className = 'menu-card'; card.dataset.menuCard = ''; card.dataset.sig = sig;
-    card.innerHTML = `<div class="q">${esc(m.question)}</div><div class="acts">${m.options.map((o) => `<button type="button" data-menu-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+    const ctx = m.context || [];
+    const note = nextNote.id === m.id && nextNote.until > Date.now() ? nextNote.text : '';
+    card.innerHTML = `${note ? `<span class="new">${esc(note)}</span>` : ''}<div class="q">${esc(m.title || m.question)}</div>${m.title && m.title !== m.question ? `<div class="mq">${esc(m.question)}</div>` : ''}`
+      + (ctx.length ? `<pre>${esc(ctx.slice(0, 6).join('\n'))}${ctx.length > 6 ? `\n… ${ctx.length - 6} more lines on Live screen` : ''}</pre>` : '') // as written, never as a Run button
+      + `<div class="acts">${m.options.map((o) => `<button type="button" data-menu-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
     log.append(card);
   }
   async function answerMenu(label) {
     const m = currentMenu, message = freeMenu(label) ? ta.value.trim() : '';
-    if (!m || !who) return;
+    if (!m || !who || menuBusy) return; // pressed once: a second tap never presses again
+    menuBusy = true; const card = $('[data-menu-card]', log); if (card) card.classList.add('busy');
     try {
-      await api('/api/requests/answer', { id: `menu:${who}`, text: label, question: m.question, options: m.options, menuId: m.id, terminalId: m.terminalId, ...(message ? { message } : {}) });
+      const r = await api('/api/requests/answer', { id: `menu:${who}`, text: label, menuId: m.id, terminalId: m.terminalId, via: 'chat', ...(message ? { message } : {}) });
+      hidden.set(m.id, Date.now() + 10000); if (office().menus && office().menus.hide) office().menus.hide(m.id);
       if (message) { ta.value = ''; grow(); }
-      paintMenu(null); log.scrollTop = log.scrollHeight; err.textContent = '';
-    } catch (e) { err.textContent = e.message || 'Could not answer the menu.'; }
+      paintMenu(null); add({ role: 'menu', text: `✓ ${label} · ${m.title || m.question}` }); err.textContent = '';
+      if (office().toast) office().toast(`<i class="dot" style="background:#4ade80"></i><span>Sent to <b>${esc(nm.textContent.split(' ')[0] || who)}</b>: ${esc(label)}</span>`, 'ok', 5000);
+      const n = r && r.next;
+      if (n) { nextNote = { id: n.menuId, text: `Contestado. Ahora ${n.name || nm.textContent.split(' ')[0]} pregunta…`, until: Date.now() + 20000 }; paintMenu({ id: n.menuId, terminalId: n.terminalId, question: n.question, title: n.title, context: n.context, options: n.options }); }
+      log.scrollTop = log.scrollHeight;
+    } catch (e) {
+      if (/no longer on the screen/i.test(e.message || '')) { hidden.set(m.id, Date.now() + 10000); paintMenu(null); }
+      err.textContent = e.message || 'Could not answer the menu.';
+    } finally { menuBusy = false; const c = $('[data-menu-card]', log); if (c) c.classList.remove('busy'); }
   }
   async function send() {
     const text = ta.value.trim(); if (!text || !who) return;
@@ -488,7 +511,7 @@ body.embed #chat { display: none !important; }`;
       wait();
     } else {
       const tools = $('.tools');
-      if (tools) { const b = document.createElement('button'); b.type = 'button'; b.id = 'btn-chat'; b.textContent = `⚡ ${name}`; b.title = 'Talk to the superadmin: change floors, people, looks and features'; b.onclick = () => (open ? close() : show('')); tools.insertBefore(b, $('#btn-more', tools) || null); }
+      if (tools) { const b = document.createElement('button'); b.type = 'button'; b.id = 'btn-chat'; b.textContent = `⚡ ${name}`; b.title = 'Talk to the superadmin: change floors, people, looks and features'; b.onclick = () => (open && !target ? close() : show('')); /* a person's chat is open: switch to the superadmin, do not just close it */ tools.insertBefore(b, $('#btn-more', tools) || null); }
     }
   };
   boot();

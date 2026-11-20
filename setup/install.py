@@ -164,7 +164,7 @@ class Run:
     def services(self):
         nd = node()
         if not nd: self.warn.append("node was not found: the artifacts server and the offices cannot start until Node is installed"); return
-        path = f"{os.path.dirname(nd)}:{BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        path = f"{os.path.dirname(nd)}:{BIN}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"  # /usr/sbin: office-restart uses lsof
         def plist(label, args, cwd, log, keep):
             a = "".join(f"<string>{x}</string>" for x in args)
             return (f'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n'
@@ -226,7 +226,7 @@ def check():
         try: return urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=4).status == 200
         except Exception: return False
     line(up(4317), "Dev floor answers on 4317", "" if up(4317) else "office-restart all")
-    line(up(4318), "Business floor answers on 4318")
+    for port, name in ((4319, "CRM"), (4320, "Web"), (4321, "Lab")): opt(up(port), f"{name} floor answers on {port}")  # Business (4318) is retired
     line(up(4340, "/"), "artifacts server answers on 4340")
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())

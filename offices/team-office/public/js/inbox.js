@@ -69,6 +69,21 @@ style.textContent = `
 #inbox a.prow span { grid-column: 1 / -1; font-size: 12.5px; overflow-wrap: anywhere; }
 #inbox .st { font-style: normal; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 99px; background: rgba(251,191,36,.16); color: #fbbf24; white-space: nowrap; }
 #inbox .st.approved { background: rgba(34,197,94,.18); color: #4ade80; } #inbox .st.changes, #inbox .st.failing { background: rgba(248,113,113,.18); color: #f87171; } #inbox .st.draft { background: rgba(255,255,255,.1); color: var(--muted, #a9b3c9); }
+/* terminal menus: what the agent asks, as written (also used by the person panel, #asks, and the chat card) */
+#inbox .it.tmenu { border-left-color: var(--needs, #fbbf24); }
+.menuctx { margin: 6px 0 0; padding: 7px 9px; border-radius: 7px; background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.08); font: 12px/1.45 var(--mono, Menlo, ui-monospace, monospace); color: var(--text, #e8ecf5); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; user-select: text; }
+.menuctx i { color: var(--dim, #7f8aa3); font-style: normal; }
+.mq { margin-top: 3px; color: var(--muted, #a9b3c9); font-size: 12px; }
+.msaid { margin-top: 6px; color: var(--muted, #a9b3c9); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.msaid b { color: var(--text, #e8ecf5); font-weight: 600; }
+.mnew { font-style: normal; font-size: 11px; padding: 1px 7px; border-radius: 99px; background: rgba(124,156,255,.22); color: #b9c8ff; margin-left: 6px; }
+.it.busy, .ask.busy { opacity: .6; pointer-events: none; }
+#inbox .grp.fold { cursor: pointer; user-select: none; }
+#inbox .done { padding: 7px 12px; border-radius: 8px; background: rgba(255,255,255,.03); border-left: 3px solid var(--c, #888); font-size: 12.5px; }
+#inbox .done .h { display: flex; gap: 7px; align-items: baseline; } #inbox .done .h b { font-weight: 650; } #inbox .done .h time { margin-left: auto; color: var(--dim, #7f8aa3); font-size: 11.5px; }
+#inbox .done .t { margin-top: 3px; overflow-wrap: anywhere; } #inbox .done .a { margin-top: 3px; color: #4ade80; overflow-wrap: anywhere; }
+#inbox .done .h i { font-style: normal; font-size: 11px; color: var(--dim, #7f8aa3); }
+.toast.ok { border-color: rgba(74, 222, 128, .5); }
 .toast .go { border: 0; background: transparent; color: var(--accent, #7c9cff); font: inherit; font-weight: 600; padding: 0 0 0 4px; cursor: pointer; }
 body.embed #inbox { display: none !important; }
 `;
@@ -83,7 +98,9 @@ pop.id = 'inbox';
 pop.innerHTML = '<header></header><div class="list"></div>';
 document.body.append(pop);
 
-let tab = 'requests', items = [], sig = '', itemSeen = null;
+let tab = 'requests', items = [], sig = '', itemSeen = null, answered = [], doneOpen = false;
+const menus = () => office().menus || {};
+const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
 let drafts = [], people = {}, draftSeen = null, draftsOn = true, readOnly = false;
 const prs = () => { const s = office().state && office().state(); return (s && s.prs) || []; };
 const agentOf = (name) => (office().agents ? office().agents() : []).find((x) => x.herdrName === name);
@@ -104,15 +121,19 @@ function render(force) {
   pop.querySelector('header').innerHTML = tabs.map(([id, name, n, cls]) => `<button type="button" class="tab ${tab === id ? 'on' : ''}" data-tab="${id}">${name}${n ? `<b class="${cls}">${n}</b>` : ''}</button>`).join('') + '<button type="button" class="x" data-close title="Close (Esc)">✕</button>';
   const body = pop.querySelector('.list');
   if (tab === 'requests') {
-    body.innerHTML = items.length ? items.map((x) => `
-      <div class="it ${x.kind === 'request' ? 'request' : 'note'}" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${x.menu ? ` data-menu-question="${esc(x.title)}" data-menu-options="${esc(JSON.stringify(x.options || []))}" data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : ''} style="--c:${esc(x.color)}">
-        <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc(x.name)}</button><i>${x.kind === 'request' ? 'needs your answer' : 'message'}</i><time>${esc(ago(x.created))}</time></div>
-        <div class="t">${((window.office || {}).rich || esc)(x.title || '')}</div>${x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
+    const menuBody = menus().body || ((x) => ((x.context || []).length ? `<pre class="menuctx">${esc(x.context.slice(0, 6).join('\n'))}</pre>` : ''));
+    const done = answered.length ? `<div class="grp fold" data-fold>${doneOpen ? '▾' : '▸'} Respondidas hoy · ${answered.length}</div>${doneOpen ? answered.map((x) => `
+      <div class="done" style="--c:${esc(x.color)}"><div class="h"><b>${esc(x.name)}</b><i>${x.menu ? 'terminal' : x.kind === 'note' ? 'message' : 'request'}${x.answeredVia ? ` · ${esc(x.answeredVia)}` : ''}</i><time>${esc(hhmm(x.answeredAt))}</time></div>
+        <div class="t">${esc(x.title || '')}</div>${x.answer ? `<div class="a">✓ ${esc(x.answer)}</div>` : x.status === 'read' ? '<div class="a">✓ read</div>' : ''}</div>`).join('') : ''}` : '';
+    body.innerHTML = (items.length ? items.map((x) => `
+      <div class="it ${x.kind === 'request' ? 'request' : 'note'}${x.menu ? ' tmenu' : ''}" data-id="${esc(x.id)}" data-from="${esc(x.from)}"${x.menu ? ` data-menu-id="${esc(x.menuId)}" data-terminal-id="${esc(x.terminalId)}"` : ''} style="--c:${esc(x.color)}">
+        <div class="h"><button type="button" class="who" data-who="${esc(x.from)}" title="Go to their desk">${esc(x.name)}</button><i>${x.menu ? `waiting in the terminal${x.floor ? ` · ${esc(x.floor)}` : ''}` : x.kind === 'request' ? 'needs your answer' : 'message'}</i>${x.menu && menus().isNew && menus().isNew(x.menuId) ? '<i class="mnew">new question</i>' : ''}<time>${esc(ago(x.created))}</time></div>
+        <div class="t">${x.menu ? esc(x.title || '') : ((window.office || {}).rich || esc)(x.title || '')}</div>${x.menu ? menuBody(x) : x.body ? `<div class="b">${((window.office || {}).md || (window.office || {}).rich || esc)(x.body)}</div>` : ''}
         ${x.kind === 'request'
-          ? `${(x.options || []).length ? `<div class="acts">${x.options.map((o, i) => (window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+          ? `${(x.options || []).length ? `<div class="acts">${x.options.map((o, i) => (!x.menu && window.termRun && window.termRun.option(esc(o))) || `<button type="button" class="${i ? '' : 'pri'}" data-answer="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
              ${x.menu ? '' : '<div class="acts"><input placeholder="Write an answer…"><button type="button" data-send>Send</button></div>'}`
           : '<div class="acts"><button type="button" data-read>Mark as read</button></div>'}
-      </div>`).join('') : `<div class="empty">No questions or messages are waiting for you.${notes ? '' : '<br>When someone on the team needs an answer, it shows up here.'}</div>`;
+      </div>`).join('') : `<div class="empty">No questions or messages are waiting for you.${notes ? '' : '<br>When someone on the team needs an answer, it shows up here.'}</div>`) + done;
   } else if (tab === 'drafts') {
     body.innerHTML = open ? drafts.map((x) => {
       const p = people[x.from] || {}, app = APP[x.channel] || x.channel || 'the app';
@@ -168,9 +189,10 @@ async function refreshPrs(force) { // read GitHub now: when the tab opens, and f
 async function poll() {
   try {
     const d = await api('/api/requests');
-    const next = d.items || [], s = JSON.stringify(next);
+    const hidden = menus().hidden || (() => false);
+    const next = (d.items || []).filter((x) => !(x.menu && hidden(x.menuId))), s = JSON.stringify([next, d.answered || []]);
     if (s === sig) return;
-    sig = s; items = next;
+    sig = s; items = next; answered = d.answered || [];
     if (itemSeen) for (const x of next) { // say so when something new arrives, question or message
       if (itemSeen.has(x.notifyId || x.id) || x.kind === 'request') continue; // questions are already announced by the main page
       toast(`<i class="dot" style="background:${esc(x.color || '#fbbf24')}"></i><b>${esc(x.name || x.from)}</b> ${x.kind === 'request' ? 'needs your answer' : 'left you a message'}: ${esc(String(x.title || '').slice(0, 90))}<button type="button" class="go" data-go="requests">Open</button>`, x.kind === 'request' ? 'err' : '', 14000);
@@ -192,6 +214,7 @@ pop.addEventListener('click', async (e) => {
   const pf = e.target.closest('[data-pf]');
   if (pf) { const [g, id] = pf.dataset.pf.split(/:(.*)/); prF[g] = id; try { localStorage.setItem('office.prf', JSON.stringify(prF)); } catch {} return render(true); }
   if (e.target.closest('[data-prrefresh]')) return refreshPrs(true);
+  if (e.target.closest('[data-fold]')) { doneOpen = !doneOpen; return render(true); }
   const full = e.target.closest('[data-full]');
   if (full) { show(false); const id = Number(full.dataset.full); if (id && window.__openDraft) window.__openDraft(id); else { const b = $('#btn-drafts'); if (b) b.click(); } return; }
   const who = e.target.closest('[data-who]');
@@ -201,16 +224,20 @@ pop.addEventListener('click', async (e) => {
   const id = card.dataset.id;
   const text = b.dataset.answer ?? (b.hasAttribute('data-send') ? card.querySelector('input').value.trim() : null);
   try {
-    if (card.dataset.menuQuestion && /type something|tell Claude|chat about this/i.test(text)) {
+    if (card.dataset.menuId && /type something|tell (Claude|Codex)|chat about this/i.test(text)) {
       if (office().chat && office().chat.open) return office().chat.open(card.dataset.from);
       throw new Error('Open this person’s chat to type the answer.');
     }
     if (b.hasAttribute('data-read')) await api('/api/requests/read', { id });
-    else if (text) {
-      const body = { id, text };
-      if (card.dataset.menuQuestion) { body.question = card.dataset.menuQuestion; body.options = JSON.parse(card.dataset.menuOptions || '[]'); body.menuId = card.dataset.menuId; body.terminalId = card.dataset.terminalId; }
-      await api('/api/requests/answer', body);
+    else if (text && card.dataset.menuId) { // a terminal menu: pressed once, then the card goes (or the next question comes as a new card)
+      const x = items.find((q) => q.menu && q.menuId === card.dataset.menuId) || { id, from: card.dataset.from, menuId: card.dataset.menuId, terminalId: card.dataset.terminalId };
+      card.classList.add('busy'); card.querySelectorAll('button').forEach((q) => { q.disabled = true; });
+      try {
+        if (menus().answer) await menus().answer(x, text);
+        else await api('/api/requests/answer', { id, text, menuId: x.menuId, terminalId: x.terminalId, via: document.documentElement.classList.contains('phone') ? 'phone' : 'office' });
+      } finally { card.classList.remove('busy'); }
     }
+    else if (text) await api('/api/requests/answer', { id, text });
     else return;
     if (document.activeElement) document.activeElement.blur();
     sig = ''; await poll(); if (office().refreshAsks) office().refreshAsks();

@@ -16,7 +16,7 @@ model and tools as <who>, appears in the team's Herdr space and 3D office, and i
 Only the team's lead can hire or release. At most `maxTemps` (team.json, default 2) at once per team."""
 import json, os, sys, subprocess, datetime, time, fcntl
 HOME = os.path.expanduser("~"); HC = f"{HOME}/.local/bin/hc"
-DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz"]
+DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz", f"{HOME}/.omniloy-crm", f"{HOME}/.omniloy-web", f"{HOME}/.omniloy-lab"]
 def sh(*a): return subprocess.run(a, capture_output=True, text=True)
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 def teams():

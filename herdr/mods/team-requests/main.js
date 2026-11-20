@@ -41,8 +41,8 @@ export default class TeamRequests extends View {
         if (!this.team || !this.teamAt || Date.now() - this.teamAt > 60000) {
           const dev = JSON.parse(await readTextFile(`${home()}/.omniloy-team/team.json`));
           let biz = null; try { biz = JSON.parse(await readTextFile(`${home()}/.omniloy-biz/team.json`)); } catch {}
-          const mar = { personas: [], leads: [] }; for (const d of []) { try { const x = JSON.parse(await readTextFile(`${home()}/${d}/team.json`)); mar.personas.push(...x.personas); mar.leads.push(x.lead); } catch {} }
-          const temps = []; for (const d of [".omniloy-team", ".omniloy-biz"]) { try { temps.push(...JSON.parse(await readTextFile(`${home()}/${d}/temps.json`))); } catch {} }
+          const mar = { personas: [], leads: [] }; for (const d of [".omniloy-crm", ".omniloy-web", ".omniloy-lab"]) { try { const x = JSON.parse(await readTextFile(`${home()}/${d}/team.json`)); mar.personas.push(...x.personas); mar.leads.push(x.lead); } catch {} }
+          const temps = []; for (const d of [".omniloy-team", ".omniloy-biz", ".omniloy-crm", ".omniloy-web", ".omniloy-lab"]) { try { temps.push(...JSON.parse(await readTextFile(`${home()}/${d}/temps.json`))); } catch {} }
           mar.personas.push(...temps);
           this.team = { ...dev, personas: [...dev.personas, ...(biz?.personas ?? []), ...(mar?.personas ?? [])], leads: [dev.lead ?? "lucia", biz?.lead, ...mar.leads].filter(Boolean) };
           this.teamAt = Date.now();
@@ -96,9 +96,9 @@ export default class TeamRequests extends View {
           .on_click(() => { if (site) exec("open", [`${site}/browse/${x.ticket}`]); }).child(x.ticket)))
         .child(div().flex_none().px(5).h(16).flex().items_center().rounded(4).text_size(10)
           .bg(isReq && open ? t.blocked + "33" : t.raised).text_color(isReq && open ? t.blocked : t.muted)
-          .child(isReq ? (open ? "needs you" : x.status) : open ? "message" : x.status)))
+          .child(x.menu ? `terminal · ${x.status}${x.answeredVia ? ` in ${x.answeredVia}` : ""}` : isReq ? (open ? "needs you" : x.status) : open ? "message" : x.status)))
       .child(div().text_size(13).text_color(t.foreground).child(sel(`rq-ti-${x.id}`, x.title)))
-      .when(Boolean(x.body), (e) => e.child(div().text_size(11).text_color(t.muted).child(sel(`rq-bo-${x.id}`, x.body, t.muted))))
+      .when(Boolean(x.body), (e) => e.child(div().text_size(11).text_color(t.muted).when(Boolean(x.menu), (e2) => e2.font_family("Menlo")).child(sel(`rq-bo-${x.id}`, x.body, t.muted))))
       .when(Boolean(x.answer), (e) => e.child(div().text_size(11).text_color(t.ansi2).child(sel(`rq-an-${x.id}`, `You: ${x.answer}`, t.ansi2))))
       .when(open && isReq && !busy, (e) => e
         .when(x.options.length > 0, (e2) => e2.child(h_flex().gap(5).flex_wrap().children(x.options.map((o, i) =>

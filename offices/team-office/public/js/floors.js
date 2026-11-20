@@ -18,7 +18,9 @@ function start() {
   // ground floor first; the colours echo each room
   const FLOORS = [
     { name: 'Dev', port: '4317', floor: 0xead7b4, wall: 0xf3efe6, line: 0x5b6ee1, desks: 4 },
-    { name: 'Business', port: '4318', floor: 0x3f8f88, wall: 0xe9f1ee, line: 0xfb923c, desks: 3 },
+    { name: 'CRM', port: '4319', floor: 0x2f6f6a, wall: 0xe6f4f2, line: 0x14b8a6, desks: 3 },
+    { name: 'Web', port: '4320', floor: 0xc9a27a, wall: 0xf7eee6, line: 0xf97316, desks: 3 },
+    { name: 'Lab', port: '4321', floor: 0x1e1b4b, wall: 0xeef0fb, line: 0x6366f1, desks: 4 },
   ];
   const PEOPLE = [0xf87171, 0x60a5fa, 0x34d399, 0xfbbf24, 0xa78bfa, 0xf472b6];
   const GAP = 4.0, FW = 10, FD = 7, MID = ((FLOORS.length - 1) * GAP) / 2 + 0.5;

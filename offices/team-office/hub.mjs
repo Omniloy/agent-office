@@ -21,7 +21,9 @@ const APP = path.dirname(fileURLToPath(import.meta.url)); // this office app's f
 const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = path.join(SHARED, 'push');
 const DEFAULT_OFFICES = [
   { name: 'Dev', port: 4317, dir: '.omniloy-team' },
-  { name: 'Business', port: 4318, dir: '.omniloy-biz' },
+  { name: 'CRM', port: 4319, dir: '.omniloy-crm' },
+  { name: 'Web', port: 4320, dir: '.omniloy-web' },
+  { name: 'Lab', port: 4321, dir: '.omniloy-lab' },
 ];
 // A computer with other floors says so in ~/.omniloy-team/floors.json: [{ "name", "port", "dir" }]
 export const OFFICES = (() => { try { const l = JSON.parse(readFileSync(path.join(SHARED, 'floors.json'), 'utf8')); return Array.isArray(l) && l.length ? l : DEFAULT_OFFICES; } catch { return DEFAULT_OFFICES; } })();
@@ -203,6 +205,15 @@ async function chatLog(name, pos, known, worker) {
       for (const x of c) { if (x.type === 'text' && x.text.trim()) { out.push({ role: 'them', text: clipLong(x.text.trim()), ts }); now = ''; } else if (x.type === 'tool_use') { out.push({ role: 'step', text: String(x.name || ''), ts }); now = doingOf(x); } }
     }
   }
+  if (first && out.length && !side) { // the menus __OWNER__ answered from the office (team-ask menu-log) show where they happened: "✓ 1. Yes · git push…"
+    const since = out[0].ts || 0, reqs = await readJson(path.join(SHARED, 'requests.json'), { items: [] });
+    for (const x of reqs.items || []) {
+      if (!x.menu || x.from !== name || x.status !== 'answered') continue;
+      const ts = Date.parse(x.answeredAt) || 0; if (ts < since) continue;
+      const at = out.findIndex((m) => (m.ts || 0) > ts);
+      out.splice(at < 0 ? out.length : at, 0, { role: 'menu', text: `✓ ${x.answer} · ${x.title}`, ts });
+    }
+  }
   return { file: id, pos: from + end, reset: first, messages: first ? out.slice(-60) : out, live, working: side ? !side.done : working, blocked: side ? false : blocked, workers, ...(now !== undefined ? { now } : {}), menu };
 }
 const clipLong = (s) => (s.length > 12000 ? `${s.slice(0, 12000)}\n…` : s);
@@ -219,7 +230,9 @@ export function createHub({ port, stuck, agents }) {
     for (const a of list) if (!since.has(a.herdrName)) since.set(a.herdrName, Date.now());
     const items = list.flatMap((a) => {
       const t = since.get(a.herdrName);
-      if (a.menu) return [{ id: `menu:${a.herdrName}:${a.menu.id}`, port, kind: 'request', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.question, 140), created: new Date(a.statusSince || t).toISOString() }];
+      // a terminal menu: its readable title ("¿Ejecutar `git push …`?") goes to the phone; the rest lets the Dev floor list and answer it
+      if (a.menu) return [{ id: `menu:${a.herdrName}:${a.menu.id}`, port, kind: 'request', who: shortName(a.name || a.herdrName), name: a.name || a.herdrName, role: a.role || '', from: a.herdrName, color: a.color || '#f87171', title: clip(a.menu.title || a.menu.question, 140), created: new Date(a.statusSince || t).toISOString(),
+        menu: { id: a.menu.id, terminalId: a.menu.terminalId, question: a.menu.question, title: a.menu.title || a.menu.question, context: a.menu.context || [], options: a.menu.options, said: a.menu.said || '' } }];
       if (Date.now() - t <= 15_000) return []; // a short stop is not a wait
       return [{ id: `b${port}-${a.herdrName}-${t}`, port, kind: 'stuck', who: shortName(a.name || a.herdrName), from: a.herdrName, color: a.color || '#f87171', title: clip(a.nowDoing || a.statusMsg || 'Needs your answer in the terminal', 140), created: new Date(t).toISOString() }];
     });
@@ -232,12 +245,6 @@ export function createHub({ port, stuck, agents }) {
       if (x.status !== 'open' || (x.to || '__OWNER_ID__') !== '__OWNER_ID__') continue;
       const p = who[x.from] || { port: 4317, name: x.from, color: '#888' };
       items.push({ id: `r${x.id}`, port: p.port, kind: x.kind === 'request' ? 'request' : 'note', who: p.name, from: x.from, color: p.color, title: clip(x.title || x.body, 140), created: x.created });
-    }
-    const drafts = await readJson(path.join(HOME, '.omniloy-biz', 'drafts.json'), { drafts: [] });
-    for (const x of (Array.isArray(drafts) ? drafts : drafts.drafts) || []) {
-      if (x.status !== 'open') continue;
-      const p = who[x.from] || { name: x.from, color: '#2dd4bf' };
-      items.push({ id: `d${x.id}`, port: 4318, kind: 'draft', who: p.name, from: x.from, color: '#2dd4bf', title: clip(x.subject || x.client || x.to || 'A draft', 140), created: x.created });
     }
     for (const o of OFFICES) {
       const d = await readJson(path.join(PUSH, `local-${o.port}.json`), null);

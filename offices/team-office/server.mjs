@@ -11,7 +11,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createHub, OFFICES } from './hub.mjs';
-import { menuInstance, parseMenu, terminalId } from './menu.mjs';
+import { menuInstance, parseMenu, terminalId, maskSecrets } from './menu.mjs';
 
 const HOME = os.homedir();
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -463,6 +463,7 @@ async function buildAgent(p, team, names) {
   const lastSay = [...items].reverse().find((i) => i.kind === 'say');
   const lastAct = [...items].reverse().find((i) => i.kind !== 'inbox');
   agent.lastSaid = lastSay ? clip(lastSay.text, 600) : '';
+  if (agent.menu && !agent.menu.said) agent.menu.said = saidOf(agent); // the agent's last words next to its question (For you, the phone, the Dev floor)
   agent.nowDoing = status === 'working'
     ? (agent.statusMsg || (lastAct ? clip(oneLine(lastAct.text), 120) : 'Thinking'))
     : status === 'blocked' ? (agent.statusMsg || 'Needs your answer in the terminal') : '';
@@ -700,19 +701,47 @@ async function loadRequests() {
   if (!process.env.TEAM_DIR) for (const o of OFFICES) for (const f of ['team.json', 'temps.json']) {
     try { const d = JSON.parse(await fs.readFile(path.join(HOME, o.dir, f), 'utf8')); for (const q of (Array.isArray(d) ? d : d.personas) || []) if (q && q.herdrName && !elsewhere[q.herdrName]) elsewhere[q.herdrName] = q; } catch { /* no such file on that floor */ }
   }
-  const menus = state.agents.filter((a) => a.status === 'blocked' && a.menu).map((a) => ({
-    id: `menu:${a.herdrName}`, kind: 'request', from: a.herdrName, name: shortName(a.name || a.herdrName), role: a.role || '', color: a.color || '#888',
-    title: a.menu.question, body: a.statusMsg && a.statusMsg !== a.menu.question ? a.statusMsg : '', /* what it asks for, e.g. "approve Bash: git push" */ options: a.menu.options, menuId: a.menu.id, terminalId: a.menu.terminalId, notifyId: `menu:${a.herdrName}:${a.menu.id}`, created: new Date(a.statusSince || Date.now()).toISOString(), menu: true,
-  }));
+  const menus = state.agents.filter((a) => a.status === 'blocked' && a.menu).map((a) => menuItem(a, a.menu, { said: saidOf(a), created: a.statusSince }));
+  // The Dev floor lists every floor's requests, so it lists every floor's terminal menus too (each floor writes its
+  // own to push/local-<port>.json, see hub.mjs); answering them works from here (hc reaches every terminal).
+  if (!process.env.TEAM_DIR) for (const o of OFFICES) {
+    if (o.port === PORT) continue;
+    let d = null; try { d = JSON.parse(await fs.readFile(path.join(HOME, '.omniloy-team', 'push', `local-${o.port}.json`), 'utf8')); } catch { /* that floor is not running */ }
+    if (!d || Date.now() - d.ts > 30_000) continue;
+    for (const x of d.items || []) if (x.menu && x.menu.id && !menus.some((m) => m.from === x.from)) menus.push(menuItem({ herdrName: x.from, name: x.name || x.who, role: x.role, color: x.color }, x.menu, { said: x.menu.said, created: x.created, floor: o.name }));
+  }
+  const today = new Date().toLocaleDateString('sv'); // YYYY-MM-DD here, like team-ask's times
+  const mineDone = (x) => x.status !== 'open' && (x.to || '__OWNER_ID__') === '__OWNER_ID__' && String(x.answeredAt || '').slice(0, 10) === today;
+  const person = (x) => team.personas.find((q) => q.herdrName === x.from) || elsewhere[x.from] || {};
   return {
     site: team.jira && team.jira.site,
     withLucia: open.filter((x) => x.to === (team.lead || 'lucia')).length,
-    items: open.filter((x) => (x.to || '__OWNER_ID__') === '__OWNER_ID__').map((x) => {
-      const p = team.personas.find((q) => q.herdrName === x.from) || elsewhere[x.from] || {};
+    // a question waiting in a terminal blocks its agent: those go first
+    items: menus.concat(open.filter((x) => (x.to || '__OWNER_ID__') === '__OWNER_ID__').map((x) => {
+      const p = person(x);
       return { id: x.id, kind: x.kind, from: x.from, name: x.ext ? x.from : shortName(p.name || x.from), role: p.role || '', color: p.color || '#888', via: x.via || '',
         title: x.title, body: x.body, ticket: x.ticket, options: x.options || [], created: x.created };
-    }).concat(menus),
+    })),
+    // answered today (requests and terminal menus, team-ask menu-log): For you shows them folded under "Respondidas hoy"
+    answered: items.filter(mineDone).reverse().slice(0, 30).map((x) => {
+      const p = person(x);
+      return { id: x.id, kind: x.kind, menu: !!x.menu, from: x.from, name: x.ext ? x.from : shortName(p.name || x.from), color: p.color || '#888', status: x.status,
+        title: x.title, body: x.menu ? x.body : '', answer: x.answer || '', answeredAt: x.answeredAt, answeredVia: x.answeredVia || '' };
+    }),
   };
+}
+// One terminal menu as an item of For you: what it asks (a readable title, the question as written, the context
+// box: tool, command, file, diff), the agent's last words, and the options.
+const saidOf = (a) => {
+  if (a.statusMsg && a.statusMsg !== (a.menu && a.menu.question)) return clip(oneLine(maskSecrets(a.statusMsg)), 300);
+  if (a.menu && a.menu.said) return clip(oneLine(maskSecrets(a.menu.said)), 300); // what is on the screen above the question
+  const t = String(a.lastSaid || '').trim().split(/\n\s*\n/).pop();
+  return t ? clip(oneLine(maskSecrets(t)), 300) : '';
+};
+function menuItem(p, m, { said = '', created = 0, floor = '' } = {}) {
+  return { id: `menu:${p.herdrName}`, kind: 'request', from: p.herdrName, name: shortName(p.name || p.herdrName), role: p.role || '', color: p.color || '#888',
+    title: m.title || m.question, question: m.question, context: m.context || [], said, body: '', options: m.options, menuId: m.id, terminalId: m.terminalId,
+    notifyId: `menu:${p.herdrName}:${m.id}`, created: new Date(created || Date.now()).toISOString(), menu: true, floor };
 }
 let requestsSig = '';
 setInterval(async () => { // a new or answered request changes the picture in the Herdr tab too
@@ -720,9 +749,16 @@ setInterval(async () => { // a new or answered request changes the picture in th
 }, 3000).unref();
 const personaByName = async (name) => (await loadTeam()).personas.find((p) => p.herdrName === name);
 
-const freeMenu = (label) => /type something|tell Claude|chat about this/i.test(label);
+const freeMenu = (label) => /type something|tell (Claude|Codex)|chat about this/i.test(label);
+async function anyPersona(name) { // someone on this floor, or on another one (the Dev floor answers every floor's menus)
+  const mine = await personaByName(name); if (mine) return mine;
+  for (const o of OFFICES) for (const f of ['team.json', 'temps.json']) {
+    try { const d = JSON.parse(await fs.readFile(path.join(HOME, o.dir, f), 'utf8')); const q = ((Array.isArray(d) ? d : d.personas) || []).find((x) => x && x.herdrName === name); if (q) return q; } catch { /* no such file on that floor */ }
+  }
+  return null;
+}
 async function liveMenu(name) {
-  if (!(await personaByName(name))) return { ok: false, menu: null };
+  if (!(await anyPersona(name))) return { ok: false, menu: null };
   const g = await run(HC, ['get', name, '--json']);
   let t = null; try { t = JSON.parse(g.stdout); } catch {}
   if (!g.ok || !t) return { ok: false, menu: null };
@@ -732,28 +768,51 @@ async function liveMenu(name) {
   return r.ok ? { ok: true, menu: parsed ? menuInstance(t, parsed) : null, terminalId: terminalId(t) } : { ok: false, menu: null };
 }
 const menuAnswers = new Map();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Answer a terminal menu: press its digit once (never twice), then watch the screen for up to ~4 s. The menu gone,
+// or another one in its place (Claude often asks the next permission right away), is a success; only the same menu
+// still there is not. Each answer is logged in requests.json (team-ask menu-log) so it stays in the history.
 async function answerMenu(body) {
-  const id = String(body.id || ''), name = id.slice('menu:'.length), question = String(body.question || ''), options = Array.isArray(body.options) ? body.options.map(String) : [];
-  if (menuAnswers.has(name)) return { code: 409, body: { error: 'Another answer is already in progress; open Live screen.' } };
+  const id = String(body.id || ''), name = id.slice('menu:'.length);
+  if (menuAnswers.has(name)) return { code: 409, body: { error: 'Another answer to this person is already on its way.' } };
   const lock = Symbol(name); menuAnswers.set(name, lock);
   try {
     const live = await liveMenu(name), menu = live.menu;
-    if (!live.ok || !menu || menu.question !== question || JSON.stringify(menu.options) !== JSON.stringify(options) || menu.id !== String(body.menuId || '') || live.terminalId !== String(body.terminalId || '')) return { code: 409, body: { error: 'The question changed; open Live screen.' } };
+    if (!live.ok || !menu || menu.id !== String(body.menuId || '') || live.terminalId !== String(body.terminalId || '')) return { code: 409, body: { error: 'That question is no longer on the screen (already answered, or it changed).', stale: true } };
     const label = String(body.text || '').trim(), m = /^(?:([1-9])\.\s)/.exec(label), digit = m && m[1];
     if (!digit || !menu.options.includes(label)) return { code: 400, body: { error: 'That option is no longer on screen.' } };
     const key = await run(HC, ['keys', name, digit], { timeout: 30000 });
     if (!key.ok) return { code: 502, body: { error: clip(oneLine(key.stderr || key.stdout), 240) || 'Could not press that option.' } };
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const after = await liveMenu(name);
-    if (!after.ok) return { code: 502, body: { error: 'Could not read the screen; open Live screen.' } };
-    if (after.menu) return { code: 409, body: { error: 'The menu is still open; open Live screen.' } };
-    const message = String(body.message || '').trim();
-    if (message && freeMenu(label)) {
-      const sent = await run(HC, ['send', '--json', name, '--', message], { timeout: 120000 });
-      if (!sent.ok) return { code: 502, body: { error: clip(oneLine(sent.stderr || sent.stdout), 240) || 'The follow-up text was not sent.' } };
+    const started = Date.now();
+    let after = null, goneAt = 0;
+    while (Date.now() - started < 4000) {
+      await sleep(300);
+      const r = await liveMenu(name);
+      if (!r.ok) continue;
+      after = r;
+      if (r.menu && r.menu.id !== menu.id) break; // the next question
+      if (!r.menu) { if (!goneAt) goneAt = Date.now(); else if (Date.now() - goneAt > 1200) break; } // gone; a follow-up comes within a second
+      else goneAt = 0;
     }
+    if (!after) return { code: 502, body: { error: `Pressed ${digit}, but the screen could not be read afterwards; check it on Live screen.`, pressed: true } };
+    if (after.menu && after.menu.id === menu.id) return { code: 409, body: { error: `Pressed ${digit}, but the same question is still on the screen; check it on Live screen.`, pressed: true } };
+    const next = after.menu || null;
+    const message = String(body.message || '').trim(), sent = !!message && freeMenu(label) && !next;
+    if (sent) {
+      const r = await run(HC, ['send', '--json', name, '--', message], { timeout: 120000 });
+      if (!r.ok) return { code: 502, body: { error: clip(oneLine(r.stderr || r.stdout), 240) || 'The follow-up text was not sent.', pressed: true } };
+    }
+    // the picture changes now, not at the next refresh: a poll right after this must not bring the old card back
+    const a = state.agents.find((x) => x.herdrName === name);
+    if (a) { a.menu = next; if (!next && a.status === 'blocked') { a.status = 'working'; a.nowDoing = 'Working'; } }
+    const p = (await anyPersona(name)) || { herdrName: name };
+    const created = a && a.statusSince ? new Date(a.statusSince - new Date(a.statusSince).getTimezoneOffset() * 60000).toISOString().slice(0, 19) : ''; // local time, like team-ask
+    const via = ['office', 'phone', 'chat'].includes(body.via) ? body.via : 'office';
+    const log = await run(TEAM_ASK, ['menu-log', '--from', name, '--title', clip(menu.title || menu.question, 200), '--answer', label, '--body', clip((menu.context || []).join('\n'), 1500),
+      '--via', via, '--menu-id', menu.id, ...(created ? ['--created', created] : [])], { timeout: 15000 });
     scheduleRefresh();
-    return { code: 200, body: { ok: true, gone: true, sent: !!message && freeMenu(label) } };
+    return { code: 200, body: { ok: true, gone: !next, sent, logged: log.ok, answered: { from: name, title: menu.title || menu.question, answer: label },
+      next: next ? menuItem({ ...p, herdrName: name }, next, { said: a ? saidOf(a) : '', created: Date.now() }) : null } };
   } finally {
     if (menuAnswers.get(name) === lock) menuAnswers.delete(name);
   }

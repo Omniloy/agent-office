@@ -21,6 +21,9 @@ __OWNER__ (the Herdr Requests panel and the 3D office use these):
   team-ask ls --to __OWNER_ID__           what is waiting for __OWNER__
   team-ask answer <id> "text"        answers and tells the agent(s) in their terminal
   team-ask read <id>                 marks a note as read
+  team-ask menu-log --from <agent> --title "..." --answer "1. Yes" [--body context] [--via office|phone|chat]
+                    [--menu-id ID] [--created ISO]
+                                     the office logs a terminal menu __OWNER__ answered (history only: nothing is sent)
 <you> is your Herdr name (dev: lucia, daniel, marta, kenji; business: irene, pablo, elena). Where this help says Lucía/lucia, the business team reads Irene/irene. Store: ~/.omniloy-team/requests.json
 If __OWNER__ has to run something, mark the command so it becomes a Run button for him: `$ command` (or `machine$ command`,
 or a ```run block). A request that asks him to run something without one is refused (--as-is "" sends it anyway).
@@ -28,7 +31,7 @@ A page he must open: the full https:// address."""
 import sys, os, json, time, fcntl, subprocess, datetime, re
 TEAM = os.path.expanduser("~/.omniloy-team"); STORE = f"{TEAM}/requests.json"
 NAMES, LEAD = {}, {}   # every persona of every team, and each one's team lead
-for d in ("~/.omniloy-team", "~/.omniloy-biz"):
+for d in ("~/.omniloy-team", "~/.omniloy-biz", "~/.omniloy-crm", "~/.omniloy-web", "~/.omniloy-lab"):
     try: tj = json.load(open(os.path.expanduser(d + "/team.json")))
     except Exception: continue
     try: tj["personas"] = tj["personas"] + json.load(open(os.path.expanduser(d + "/temps.json")))   # temps hired with team-temp
@@ -206,6 +209,20 @@ elif c in ("answer", "read", "cancel"):
             subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", x["via"], "FYI, " + msg + f' (asked by {x["from"]}, already told)'], capture_output=True)
         print("answered; " + ("delivered to " + x["from"] if r.returncode == 0 else f'{x["from"]} is not running, they will see it with: team-ask ls --from {x["from"]} --all'))
     else: print("ok")
+elif c == "menu-log":   # a terminal menu (Claude/Codex permission prompt) __OWNER__ answered from the office: kept as an answered request
+    who = d.get("from") or sys.exit("--from <agent> is required")
+    if who not in NAMES: sys.exit(f"--from must be one of {list(NAMES)}")
+    title, answer = str(d.get("title") or "").strip()[:200], str(d.get("answer") or "").strip()[:200]
+    if not title or not answer: sys.exit("--title and --answer are required")
+    with Box() as b:
+        mid = str(d.get("menu-id") or "")
+        dup = [x for x in b["items"] if mid and x.get("menu") and x.get("menuId") == mid and x["from"] == who]
+        if dup: print(dup[0]["id"]); sys.exit()   # the same menu answered once is logged once
+        t = now()
+        x = {"id": b["next"], "kind": "request", "menu": True, "from": who, "to": "__OWNER_ID__", "title": title, "body": str(d.get("body") or "")[:1500],
+             "ticket": "", "options": [], "status": "answered", "created": str(d.get("created") or t)[:19], "answer": answer, "answeredAt": t,
+             "answeredBy": "__OWNER__", "answeredVia": str(d.get("via") or "office")[:20], "menuId": mid}
+        b["next"] += 1; b["items"].append(x); print(x["id"])
 elif c == "escalate":
     one_click(d, pos[1] if len(pos) > 1 else "", d.get("body"), d.get("options"))
     with Box() as b:
