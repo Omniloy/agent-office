@@ -23,6 +23,7 @@ const linked = (s) => {
 };
 const sel = (id, s, color) => { const el = TextView.html(id, `<span>${linked(s)}</span>`).selectable(true).on_link_click((url) => { exec("open", [url]); }); return color ? el.text_color(color) : el; };
 
+const FLOORS = [".omniloy-team", ".omniloy-crm", ".omniloy-web", ".omniloy-lab"]; // when floors.json does not say otherwise
 const ago = (iso) => {
   const m = Math.max(0, (Date.now() - new Date(iso).getTime()) / 60000);
   return m < 1 ? "now" : m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
@@ -39,12 +40,17 @@ export default class TeamRequests extends View {
     cx.spawn(async (cx) => {
       try {
         if (!this.team || !this.teamAt || Date.now() - this.teamAt > 60000) {
-          const dev = JSON.parse(await readTextFile(`${home()}/.omniloy-team/team.json`));
-          let biz = null; try { biz = JSON.parse(await readTextFile(`${home()}/.omniloy-biz/team.json`)); } catch {}
-          const mar = { personas: [], leads: [] }; for (const d of [".omniloy-crm", ".omniloy-web", ".omniloy-lab"]) { try { const x = JSON.parse(await readTextFile(`${home()}/${d}/team.json`)); mar.personas.push(...x.personas); mar.leads.push(x.lead); } catch {} }
-          const temps = []; for (const d of [".omniloy-team", ".omniloy-biz", ".omniloy-crm", ".omniloy-web", ".omniloy-lab"]) { try { temps.push(...JSON.parse(await readTextFile(`${home()}/${d}/temps.json`))); } catch {} }
-          mar.personas.push(...temps);
-          this.team = { ...dev, personas: [...dev.personas, ...(biz?.personas ?? []), ...(mar?.personas ?? [])], leads: [dev.lead ?? "lucia", biz?.lead, ...mar.leads].filter(Boolean) };
+          // every floor of the building (~/.omniloy-team/floors.json, else these four; Business is retired) and the admin
+          let floors = FLOORS; try { const l = JSON.parse(await readTextFile(`${home()}/.omniloy-team/floors.json`)); if (Array.isArray(l) && l.length) floors = l.map((f) => f.dir); } catch {}
+          const dev = JSON.parse(await readTextFile(`${home()}/.omniloy-team/team.json`)), personas = [], leads = [];
+          for (const d of [...floors, ".omniloy-admin"]) {
+            const dir = d.startsWith("/") ? d : `${home()}/${d}`;
+            let t = null; try { t = JSON.parse(await readTextFile(`${dir}/team.json`)); } catch { continue; }
+            let temps = []; try { temps = JSON.parse(await readTextFile(`${dir}/temps.json`)); } catch {}
+            for (const p of [...(t.personas ?? []), ...(Array.isArray(temps) ? temps : [])]) if (p?.herdrName) personas.push({ ...p, tabPrefix: t.tabPrefix ?? "team-" });
+            if (t.lead) leads.push(t.lead);
+          }
+          this.team = { ...dev, personas, leads };
           this.teamAt = Date.now();
         }
         const text = await readTextFile(`${home()}/.omniloy-team/requests.json`);
@@ -61,7 +67,13 @@ export default class TeamRequests extends View {
   ask(args, id, cx) {
     this.sending[id] = true; cx.notify();
     cx.spawn(async (cx) => {
-      try { const r = await exec(`${home()}/.local/bin/team-ask`, args, { timeout: 30000 }); if (r.code !== 0) this.error = (r.stderr || r.stdout).trim().split("\n")[0]; }
+      // answered as the owner (team-ask asks every other caller who they are); the result says whether it was typed
+      // into the agent's terminal or queued because the agent is on a question in its terminal or not running
+      try {
+        const r = await exec(`${home()}/.local/bin/team-ask`, [...args, "--as", "__OWNER_ID__"], { timeout: 30000 });
+        if (r.code !== 0) this.error = (r.stderr || r.stdout).trim().split("\n")[0];
+        else { this.error = null; this.note = /queued/.test(r.stdout) ? r.stdout.trim().replace(/^answered; /, "Answered. ") : null; }
+      }
       catch (e) { this.error = String(e.message || e); }
       delete this.sending[id]; this.load(cx); cx.notify();
     });
@@ -85,7 +97,8 @@ export default class TeamRequests extends View {
   }
 
   card(x, t) {
-    const p = this.persona(x.from), open = x.status === "open", isReq = x.kind === "request", busy = Boolean(this.sending[x.id]);
+    const p = this.persona(x.from), open = x.status === "open", isReq = x.kind === "request", busy = Boolean(this.sending[x.id]), options = x.options ?? [];
+    const by = x.answeredBy && x.answeredBy !== "__OWNER__" ? x.answeredBy : "You";
     const site = this.team?.jira?.site;
     return v_flex().id(`rq-${x.id}`).w_full().flex_none().px(12).py(10).gap(6).border_b(1).border_color(t.border)
       .child(h_flex().gap(6).items_center()
@@ -99,15 +112,15 @@ export default class TeamRequests extends View {
           .child(x.menu ? `terminal · ${x.status}${x.answeredVia ? ` in ${x.answeredVia}` : ""}` : isReq ? (open ? "needs you" : x.status) : open ? "message" : x.status)))
       .child(div().text_size(13).text_color(t.foreground).child(sel(`rq-ti-${x.id}`, x.title)))
       .when(Boolean(x.body), (e) => e.child(div().text_size(11).text_color(t.muted).when(Boolean(x.menu), (e2) => e2.font_family("Menlo")).child(sel(`rq-bo-${x.id}`, x.body, t.muted))))
-      .when(Boolean(x.answer), (e) => e.child(div().text_size(11).text_color(t.ansi2).child(sel(`rq-an-${x.id}`, `You: ${x.answer}`, t.ansi2))))
+      .when(Boolean(x.answer), (e) => e.child(div().text_size(11).text_color(t.ansi2).child(sel(`rq-an-${x.id}`, `${by}: ${x.answer}`, t.ansi2))))
       .when(open && isReq && !busy, (e) => e
-        .when(x.options.length > 0, (e2) => e2.child(h_flex().gap(5).flex_wrap().children(x.options.map((o, i) =>
+        .when(options.length > 0, (e2) => e2.child(h_flex().gap(5).flex_wrap().children(options.map((o, i) =>
           this.btn(`rq-o-${x.id}-${i}`, o, t, (cx) => this.ask(["answer", String(x.id), o], x.id, cx), i === 0)))))
         .child(h_flex().gap(5).items_center()
           .when(Boolean(this.input(x.id)), (e3) => e3.child(Input.new(this.input(x.id)).flex_1().min_w(0).h(28).px(8).rounded(6).border_1().border_color(t.input).bg(t.background).text_size(12).text_color(t.foreground)))
-          .child(this.btn(`rq-send-${x.id}`, "Send", t, (cx) => { const v = (this.input(x.id)?.value() ?? "").trim(); if (v) this.ask(["answer", String(x.id), v], x.id, cx); }, x.options.length === 0))))
+          .child(this.btn(`rq-send-${x.id}`, "Send", t, (cx) => { const v = (this.input(x.id)?.value() ?? "").trim(); if (v) this.ask(["answer", String(x.id), v], x.id, cx); }, options.length === 0))))
       .when(open && !busy, (e) => e.child(h_flex().gap(10).items_center().text_size(10).text_color(t.accent)
-        .child(div().id(`rq-go-${x.id}`).cursor_pointer().on_click(() => { run("tab.select", { id: `${["irene", "pablo", "elena"].includes(x.from) ? "biz" : "team"}-${x.from}` }); }).child(`Open ${p.name.split(" ")[0]}'s terminal`))
+        .child(div().id(`rq-go-${x.id}`).cursor_pointer().on_click(() => { run("tab.select", { id: `${p.tabPrefix ?? "team-"}${x.from}` }); }).child(`Open ${p.name.split(" ")[0]}'s terminal`))
         .when(!isReq, (e2) => e2.child(div().id(`rq-read-${x.id}`).cursor_pointer().on_click((_e, cx) => this.ask(["read", String(x.id)], x.id, cx)).child("Mark as read")))))
       .when(busy, (e) => e.child(div().text_size(11).text_color(t.dim).child("Sending…")));
   }
@@ -131,6 +144,7 @@ export default class TeamRequests extends View {
       .child(div().px(6).h(16).flex().items_center().rounded(8).bg(t.raised).text_size(10).text_color(t.muted).child(String(n)));
     const rows = [];
     if (this.error) rows.push(div().px(12).py(6).text_size(10).text_color(t.ansi1).child(this.error));
+    if (this.note) rows.push(div().id("rq-note").px(12).py(6).text_size(10).text_color(t.dim).cursor_pointer().on_click((_e, cx) => { this.note = null; cx.notify(); }).child(this.note));
     if (withLucia) rows.push(div().w_full().flex_none().px(12).py(6).text_size(10).text_color(t.dim).child(`The team leads are handling ${withLucia} more`));
     rows.push(head("Needs your answer", reqs.filter(pass).length));
     rows.push(...reqs.filter(pass).map((x) => this.card(x, t)));
@@ -142,7 +156,7 @@ export default class TeamRequests extends View {
       .on_click((_e, cx) => { this.showDone = !this.showDone; cx.notify(); })
       .child(div().w(10).text_size(10).text_color(t.dim).child(this.showDone ? "▾" : "▸"))
       .child(div().flex_1().text_size(11).font_semibold().text_color(t.muted).child("Answered and read"))
-      .child(div().px(6).h(16).flex().items_center().rounded(8).bg(t.raised).text_size(10).text_color(t.muted).child(String(done.length))));
+      .child(div().px(6).h(16).flex().items_center().rounded(8).bg(t.raised).text_size(10).text_color(t.muted).child(String(done.filter(pass).length))));
     if (this.showDone) rows.push(...done.filter(pass).map((x) => this.card(x, t)));
     return v_flex().id("team-requests").size_full().min_h(0).bg(t.surface).text_color(t.foreground).text_size(13)
       .child(h_flex().flex_none().px(12).pt(10).pb(8).gap(5).items_center().flex_wrap().border_b(1).border_color(t.border)
