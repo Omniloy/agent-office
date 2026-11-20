@@ -222,7 +222,7 @@ body.embed #mic, body.embed #mic-say, body.embed #voice-card { display: none !im
   // ---------------------------------------------------------------- the way in
   if (PHONE) {
     const wait = (n = 0) => { const menu = $('#sheet-more .pmenu'); if (!menu) { if (n < 40) setTimeout(() => wait(n + 1), 300); return; }
-      entry = document.createElement('button'); entry.type = 'button'; entry.onclick = openCard;
+      entry = document.createElement('button'); entry.type = 'button'; entry.id = 'row-voice'; entry.onclick = openCard;
       const first = menu.firstElementChild; menu.insertBefore(entry, first ? first.nextSibling : null); label(); };
     wait();
   } else {

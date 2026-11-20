@@ -186,7 +186,7 @@ body.embed #people { display: none !important; }`;
   // ---------------------------------------------------------------- the way in: More on the phone, the top bar elsewhere
   if (PHONE) {
     const wait = (n = 0) => { const menu = $('#sheet-more .pmenu'); if (!menu) { if (n < 40) setTimeout(() => wait(n + 1), 300); return; }
-      const row = document.createElement('button'); row.type = 'button'; row.innerHTML = 'Roles & people<small>›</small>'; row.onclick = open;
+      const row = document.createElement('button'); row.type = 'button'; row.id = 'row-people'; row.innerHTML = 'Roles & people<small>›</small>'; row.onclick = open;
       const sw = [...menu.children].find((x) => /Switch office/.test(x.textContent)); menu.insertBefore(row, sw || null); };
     wait();
   } else {

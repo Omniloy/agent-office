@@ -42,6 +42,7 @@ body.embed #xoffice { display: none !important; }
     const html = `<i class="d" style="background:${esc(x.color)}"></i><span class="t"><b>${esc(x.who)}</b> ${LABEL[x.kind] || 'needs you'} <small>· ${esc(x.office)}</small></span>${others.length > 1 ? `<em>+${others.length - 1}</em>` : ''}<span class="x" title="Hide">×</span>`;
     if (html !== sig) { sig = html; chip.innerHTML = html; }
   }
+  chip.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chip.click(); } }); // a button for the keyboard too
   chip.addEventListener('click', (e) => {
     if (e.target.closest('.x')) { for (const x of others) hidden.add(x.id); try { sessionStorage.setItem('xoffice-hidden', JSON.stringify([...hidden].slice(-200))); } catch { /* fine */ } others = []; return paint(); }
     if (others[0]) location.href = urlOf(others[0]);
@@ -50,7 +51,8 @@ body.embed #xoffice { display: none !important; }
     const api = office().api; if (!api || document.hidden) return;
     let d; try { d = await api('/api/attention'); } catch { return; }
     const all = d.items || [];
-    others = all.filter((x) => x.port !== d.here && !hidden.has(x.id));
+    const listed = new Set(office().forYouKeys ? office().forYouKeys() : []); // already in this floor's For you (the Dev floor lists every floor's)
+    others = all.filter((x) => x.port !== d.here && !hidden.has(x.id) && !listed.has(x.id));
     paint();
     for (const o of d.offices || []) { // the office switcher on the phone says how many wait in each
       const a = $(`#sheet-offices a[data-port="${o.port}"]`); if (!a) continue;
@@ -90,7 +92,7 @@ body.embed #xoffice { display: none !important; }
   if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && typeof e.data.hash === 'string') arrive(e.data.hash); });
 
   // ---------------------------------------------------------------- phone notifications
-  if (PHONE) pushRow();
+  if (PHONE && !window.__GUEST__) pushRow(); // a visitor's phone subscribes in its own building
   async function pushRow(n = 0) {
     const menu = $('#sheet-more .pmenu');
     if (!menu) { if (n < 40) setTimeout(() => pushRow(n + 1), 300); return; }

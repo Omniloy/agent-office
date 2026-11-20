@@ -8,6 +8,8 @@ if (G) {
   const css = document.createElement('style');
   css.textContent = `
 #cmd, #composer, #chat form, #mic, #chat .stop, #chat .arts, #chat .dots, #panel .tabs, #tabs, .chips { display: none !important; }
+/* what a visitor cannot use here: the team editor, voice, connections, the terminal, and For you unless this floor shares its questions */
+#btn-people, #row-people, #btn-voice, #row-voice, #btn-peers, #row-peers, #btn-term, #btn-chat, #btn-watch${G.share ? '' : ', #btn-reqs, #tabbar [data-t=you]'} { display: none !important; }
 #guest { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 30; width: min(560px, calc(100vw - 20px)); display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 16px; background: rgba(13, 16, 28, .92); border: 1px solid rgba(255, 255, 255, .16); color: #e8ecf6; font: 14px/1.4 var(--sans, system-ui, sans-serif); box-shadow: 0 12px 34px rgba(0, 0, 0, .45); backdrop-filter: blur(10px); }
 html.phone #guest { bottom: calc(var(--tab, 54px) + 10px); }
 #guest .h { display: flex; align-items: center; gap: 8px; }
