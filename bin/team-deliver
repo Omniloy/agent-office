@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""team-deliver: type a message into a teammate's terminal, or keep it until they can take it.
+
+  team-deliver <name> "text" [--source tool]   delivers now, or queues it when <name> is busy with a question in
+                                               their terminal (a permission or question menu) or is not running.
+                                               Prints "delivered" or "queued: <why>". Never answers a menu.
+  team-deliver flush                           try every queued message again (the watchdog does this every 10 s)
+  team-deliver ls [--json]                     what is waiting, per person (counts only)
+
+Queued messages are typed in, in order, as soon as the person is running and not on a menu. One that could not
+be delivered for 2 days is dropped (outbox/dropped.jsonl says when and to whom, not what).
+Store: ~/.omniloy-team/outbox/<name>.jsonl"""
+import sys, os, json
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
+a = sys.argv[1:]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit(0 if a else 2)
+if a[0] == "flush":
+    for n, r in L.flush().items(): print(f"{n}: {r}")
+elif a[0] == "ls":
+    p = L.pending()
+    if "--json" in a: print(json.dumps(p))
+    else: print("\n".join(f"{n}: {k} waiting" for n, k in sorted(p.items())) or "nothing waiting")
+else:
+    src = a[a.index("--source") + 1] if "--source" in a and a.index("--source") + 1 < len(a) else ""
+    rest = [x for i, x in enumerate(a) if x != "--source" and (i == 0 or a[i - 1] != "--source")]
+    if len(rest) != 2 or not rest[1].strip(): sys.exit('usage: team-deliver <name> "text" [--source tool]')
+    print(L.deliver(rest[0], rest[1], src))

@@ -18,6 +18,8 @@
 
 <building> is its id or the start of its name. Store: ~/.omniloy-team/peers.json (connections), peers-seen.json (what was found)."""
 import sys, os, json, time, secrets, subprocess, urllib.request, urllib.error, fcntl, re, socket
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
 H = os.path.expanduser; D = H("~/.omniloy-team"); F = D + "/peers.json"; SEEN = D + "/peers-seen.json"; VISITS = D + "/visits.json"
 os.makedirs(D, exist_ok=True)
 def load(f, dflt):
@@ -28,7 +30,7 @@ def save(f, d):
 class Box:   # one writer at a time
     def __enter__(self):
         self.l = open(F + ".lock", "w"); fcntl.flock(self.l, fcntl.LOCK_EX)
-        self.d = load(F, {}); self.d.setdefault("peers", {})
+        self.d = L.load(F, {}) or {}; self.d.setdefault("peers", {})   # unreadable: stop, never mint a new identity over it
         if not self.d.get("me"): self.d["me"] = {"id": secrets.token_hex(4), "name": socket.gethostname().split(".")[0] + " office", "owner": ""}
         return self.d
     def __exit__(self, *a):
@@ -86,7 +88,12 @@ if c == "me":
     with Box() as d:
         if o.get("name"): d["me"]["name"] = o["name"]
         if o.get("owner"): d["me"]["owner"] = o["owner"]
-        print(json.dumps(d["me"], ensure_ascii=False))
+        me = dict(d["me"])
+    # the name card other computers read over ssh (peer-link.mjs), written only here and always from the floors list,
+    # so a test floor run from a checkout cannot replace it with its own floors (every floor runs `team-peer me` at start)
+    card = {"id": me.get("id"), "name": me.get("name"), "owner": me.get("owner"), "floors": [{"port": f["port"], "name": f["name"], "dir": f["dir"]} for f in L.floors()]}
+    if L.read_quiet(D + "/building.json", None) != card: L.save(D + "/building.json", card)
+    print(json.dumps(me, ensure_ascii=False))
 elif c == "ls":
     with Box() as d: pass
     s = seen()
@@ -185,7 +192,7 @@ elif c == "incoming":   # called by the office server for what arrives from anot
             elif verb == "pause" and st == "on": p["status"], p["pausedBy"] = "paused", "them"; note = f'{p["name"]} paused the connection.'
             elif verb == "resume" and st == "paused" and p.get("pausedBy") == "them": p["status"] = "on"; p.pop("pausedBy", None); note = f'{p["name"]} resumed the connection.'
             name, owner = p["name"], p.get("owner") or "Someone"
-        if note == "ASK": ask("external", "--to", "owner", "--name", f"{owner} · {name}", "--peer", pid, "--connect", "--options", "Accept,Decline", f"{name} wants to connect its agents with yours. Accept?")
+        if note == "ASK": ask("external", "--to", "owner", "--name", f"{owner} · {name}", "--peer", pid, "--connect", "--options", "Accept|Decline", f"{name} wants to connect its agents with yours. Accept?")
         elif note: ask("external", "--to", "owner", "--note", "--name", name, "--peer", pid, note)
         print(json.dumps({"ok": True}))
     elif kind == "message":   # a person or an agent of another building writes to the lead of one of our floors
@@ -197,7 +204,7 @@ elif c == "incoming":   # called by the office server for what arrives from anot
             text = " ".join(str(b.get("text") or "").split()); body = str(b.get("body") or "")[:8000]
             if not text: sys.exit(json.dumps({"error": "empty message"}))
             if len(text) > 140: body = (text + "\n\n" + body).strip()
-            op = ",".join(str(o).replace(",", " ") for o in (b.get("options") or [])[:6])
+            op = "|".join(str(o).replace("|", "/") for o in (b.get("options") or [])[:6])
             r = ask("external", "--to", "owner", "--name", who, "--peer", pid, "--ref", json.dumps({"agent": b.get("agent") or "", "fromPort": b.get("fromPort"), "local": b.get("local")}),
                     *(["--note"] if b.get("note") else []), *(["--options", op] if op else []), *(["--body", body] if body else []), text[:140])
             if r.returncode: sys.exit(json.dumps({"error": (r.stderr or r.stdout).strip()[:200]}))
@@ -218,10 +225,11 @@ elif c == "incoming":   # called by the office server for what arrives from anot
     elif kind == "answer":   # the lead over there answered something that left from here
         ref = b.get("ref") or {}; who = b.get("lead") or "The lead"; nm = (load(F, {}).get("peers", {}).get(pid) or {}).get("name", "the other building")
         if ref.get("local"):   # it was a request to the owner opened here: closing it tells the agent and frees their card
-            r = ask("answer", str(int(ref["local"])), str(b.get("text", "")))
+            r = ask("answer", str(int(ref["local"])), str(b.get("text", "")), "--as", "__OWNER_ID__")
             print(json.dumps({"ok": r.returncode == 0, **({} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[:200]})})); sys.exit()
         msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
-        if ref.get("agent") and hc("send", ref["agent"], msg).returncode == 0: print(json.dumps({"ok": True})); sys.exit()
+        if ref.get("agent") and ref["agent"] in L.people(admin=True):   # typed in now, or held until they are off their menu
+            L.deliver(ref["agent"], msg, "team-peer"); print(json.dumps({"ok": True})); sys.exit()
         ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])
         print(json.dumps({"ok": True}))
     else: sys.exit(json.dumps({"error": "unknown"}))

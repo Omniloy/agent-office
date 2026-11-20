@@ -12,7 +12,8 @@
                                              new requirement row (existing approved docs: only after __OWNER__ approves)
   team-trace new <project> --title "..."     new empty matrix for a project, same tabs and columns
   team-trace push <project>                  write your changed cells into the Drive file (new version; nothing else in the file is touched)
-  team-trace status <project>                local changes that Drive doesn't have yet
+  team-trace status <project>                local changes that Drive doesn't have yet, and open conflicts
+  team-trace conflicts <project> [--clear]   cells changed both here and in Drive: the local, base and Drive values
   team-trace sync <project>                  pull Drive changes if nothing local is waiting
 Local copies: ~/.omniloy-team/trace/<project>.xlsx (+ .json for the panel). Drive needs: gcloud auth login --enable-gdrive-access"""
 import sys, os, json, re, subprocess, datetime, shutil, urllib.request, base64
@@ -196,6 +197,13 @@ def download(i):
     data = drive("GET", f"https://www.googleapis.com/drive/v3/files/{fileid(i)}?alt=media&supportsAllDrives=true")
     if len(data) < 1000: sys.exit("download looks empty; nothing changed")
     return data
+def cfile(i): return f"{DIR}/{i}.conflicts.json"
+def keep_conflicts(i, found):
+    """Conflicts are never resolved silently: each cell's local, base and Drive values, with when, until someone clears them."""
+    try: old = json.load(open(cfile(i)))
+    except FileNotFoundError: old = []
+    for k, v in sorted(found.items()): old.append({"sheet": k[0], "cell": k[1], **v, "at": datetime.datetime.now().isoformat(timespec="seconds")})
+    tmp = cfile(i) + ".tmp"; json.dump(old, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, cfile(i))
 def do_pull(i, force=False):
     p = pending(i)
     if p and not force: sys.exit(f"{len(p)} local changes are not in Drive yet: run  team-trace push {i}  first (or pull --discard to drop them)")
@@ -207,7 +215,7 @@ def do_push(i, dry=False, from_base=False):
     # from_base: rebuild from the last pulled file instead of what is in Drive now (repair after a bad upload)
     data = open(base(i), "rb").read() if from_base else download(i); tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False); tmp.write(data); tmp.close()
     dv, bv = values(tmp.name), values(base(i)); conflicts = {k for k in ch if dv.get(k, "") != bv.get(k, "") and dv.get(k, "") != ch[k]}
-    for k in sorted(conflicts): print(f"CONFLICT {k[0]}!{k[1]}: someone changed this cell in Drive; left as it is there")
+    for k in sorted(conflicts): print(f"CONFLICT {k[0]}!{k[1]}: someone changed this cell in Drive; left as it is there (yours is kept in {cfile(i)})")
     apply = {k: v for k, v in ch.items() if k not in conflicts}
     new = patch_xlsx(data, apply); open(tmp.name, "wb").write(new); nv = values(tmp.name)
     bad = [k for k, v in apply.items() if nv.get(k, "") != v] + [k for k in dv if k not in apply and nv.get(k, "") != dv[k]]
@@ -218,6 +226,8 @@ def do_push(i, dry=False, from_base=False):
         print(f"dry run: {len(apply)} cells would change, {len(conflicts)} conflicts; file parts identical: {za.namelist() == zb.namelist()}; parts touched: {[n for n in za.namelist() if za.read(n) != zb.read(n)]}; result matches local values: {nv == values(xlsx(i))}; saved {tmp.name}")
         return
     drive("PATCH", f"https://www.googleapis.com/upload/drive/v3/files/{fileid(i)}?uploadType=media&supportsAllDrives=true", new, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if conflicts:   # the local copy now follows Drive: keep all three values of each conflicting cell before that
+        keep_conflicts(i, {k: {"local": ch[k], "base": bv.get(k, ""), "drive": dv.get(k, "")} for k in conflicts})
     open(base(i), "wb").write(new); open(xlsx(i), "wb").write(new); build(i)
     print(f"pushed {len(apply)} cells to Drive as a new version of the same file" + (f"; {len(conflicts)} conflicts left for review" if conflicts else ""))
 a = sys.argv[1:]
@@ -266,6 +276,15 @@ elif c == "push": do_push(a[1], "--dry-run" in a, "--from-base" in a)
 elif c == "status":
     p = pending(a[1]); print(f"{len(p)} local changes not in Drive yet")
     for k in sorted(p)[:40]: print(f"  {k[0]}!{k[1]}")
+    try: n = len(json.load(open(cfile(a[1]))))
+    except FileNotFoundError: n = 0
+    if n: print(f"{n} conflict(s) kept from earlier pushes: team-trace conflicts {a[1]}")
+elif c == "conflicts":
+    try: cs = json.load(open(cfile(a[1])))
+    except FileNotFoundError: cs = []
+    for x in cs: print(f'{x["at"]}  {x["sheet"]}!{x["cell"]}\n    yours: {x["local"]}\n    base:  {x["base"]}\n    Drive: {x["drive"]}  (this is what Drive and the local copy have now)')
+    if not cs: print("no conflicts")
+    elif "--clear" in a: os.replace(cfile(a[1]), cfile(a[1]) + "." + datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + ".done"); print("cleared (kept as a .done file)")
 elif c == "sync":
     # safe direction only: bring Drive changes down when nothing local is waiting
     if pending(a[1]): print(f"{len(pending(a[1]))} local changes waiting for push; not pulling")

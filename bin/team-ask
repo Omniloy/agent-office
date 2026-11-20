@@ -1,52 +1,53 @@
 #!/usr/bin/env python3
 """team-ask: messages and requests inside the team, and from the team to __OWNER__.
-Rule: messages (notes, FYIs, status) go to your team lead (dev: Lucía, business: Irene), never to __OWNER__. A request that needs
-__OWNER__'s own answer can be opened directly to him with --to __OWNER_ID__; anything Lucía can
-decide goes to her.
-Daniel, Marta, Kenji:
-  team-ask note --from <you> "Short message" [--body ..] [--ticket KEY]     FYI: always goes to Lucía
-  team-ask request --from <you> "Short question" [--body ..] [--ticket KEY] [--options "A|B"]
-                                     a question for Lucía (she is nudged). Prints its id.
+Rule: messages (notes, FYIs, status) go to your team lead, never to __OWNER__. A request that needs __OWNER__'s own answer
+can be opened directly to him with --to __OWNER_ID__; anything your lead can decide goes to your lead.
+Everyone (your Herdr name is <you>):
+  team-ask note --from <you> "Short message" [--body ..] [--ticket KEY]     FYI: always goes to your lead
+  team-ask request --from <you> "Short question" [--body ..] [--ticket KEY] [--options "Yes|No"]
+                                     a question for your lead (who is told at once). Prints its id.
+  team-ask request --from <you> --to <teammate> "Short question" ...
+                                     a question for someone on your own team (they are told at once)
   team-ask request --from <you> --to __OWNER_ID__ "Short question" [--options "A|B"] ...
                                      a request straight to __OWNER__: only when it needs him
   team-ask ls --from <you> [--all]   yours, with answers
-Lucía:
-  team-ask ls --to lucia             what the team left for you
-  team-ask answer <id> "text" --as lucia     answer a teammate yourself
-  team-ask escalate <id> ["Rewritten short question"] [--body ..] [--options "A|B"]
+  team-ask show <id>                 one item, with its body
+  team-ask cancel <id> --as <you>    take back a request or note you opened
+--options: the answer buttons, two or more, separated by | (a comma is part of an answer, never a separator):
+  --options "Merge now|Wait for QA, then merge"   The body is shown exactly as written, lists included.
+Leads (and anyone a teammate asked):
+  team-ask inbox --as <you> [--keep] what was left for you: open requests, then notes (the notes are marked read
+                                     unless --keep)
+  team-ask answer <id> "text" --as <you>     answer a request that was addressed to you
+  team-ask escalate <id> --as <you> ["Rewritten short question"] [--body ..] [--options "A|B"]
                                      pass a teammate's request on to __OWNER__ (keeps who asked)
-  team-ask request|note --from lucia ...     your own request/message to __OWNER__
-  team-ask read <id> | cancel <id>
-__OWNER__ (the Herdr Requests panel and the 3D office use these):
+  team-ask read <id> --as <you>      marks a note to you as read
+__OWNER__ (his 3D office and the Herdr Requests panel use these; from his own shell add --as __OWNER_ID__):
   team-ask ls --to __OWNER_ID__           what is waiting for __OWNER__
   team-ask answer <id> "text"        answers and tells the agent(s) in their terminal
   team-ask read <id>                 marks a note as read
   team-ask menu-log --from <agent> --title "..." --answer "1. Yes" [--body context] [--via office|phone|chat]
                     [--menu-id ID] [--created ISO]
                                      the office logs a terminal menu __OWNER__ answered (history only: nothing is sent)
-<you> is your Herdr name (dev: lucia, daniel, marta, kenji; business: irene, pablo, elena). Where this help says Lucía/lucia, the business team reads Irene/irene. Store: ~/.omniloy-team/requests.json
+An answer reaches the asker in their terminal; when they are busy with a question in their terminal or not running,
+it is queued and typed in as soon as they can take it (team-deliver). Store: ~/.omniloy-team/requests.json
 If __OWNER__ has to run something, mark the command so it becomes a Run button for him: `$ command` (or `machine$ command`,
 or a ```run block). A request that asks him to run something without one is refused (--as-is "" sends it anyway).
 A page he must open: the full https:// address."""
-import sys, os, json, time, fcntl, subprocess, datetime, re
-TEAM = os.path.expanduser("~/.omniloy-team"); STORE = f"{TEAM}/requests.json"
-NAMES, LEAD = {}, {}   # every persona of every team, and each one's team lead
-for d in ("~/.omniloy-team", "~/.omniloy-biz", "~/.omniloy-crm", "~/.omniloy-web", "~/.omniloy-lab"):
-    try: tj = json.load(open(os.path.expanduser(d + "/team.json")))
-    except Exception: continue
-    try: tj["personas"] = tj["personas"] + json.load(open(os.path.expanduser(d + "/temps.json")))   # temps hired with team-temp
-    except Exception: pass
-    for p in tj["personas"]: NAMES[p["herdrName"]] = p; LEAD[p["herdrName"]] = tj.get("lead", "lucia")
+import sys, os, json, fcntl, subprocess, datetime, re
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
+TEAM = L.SHARED; STORE = f"{TEAM}/requests.json"; OWNER = "__OWNER_ID__"
+PEOPLE = L.people(admin=True)   # every persona and temp of every floor, and the admin (who is their own lead)
+NAMES = dict(PEOPLE); LEAD = {n: p.get("lead") or n for n, p in PEOPLE.items()}
 class Box:
     def __enter__(self):
         self.lock = open(STORE + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
-        try: self.d = json.load(open(STORE))
-        except Exception: self.d = {"next": 1, "items": []}
+        self.d = L.load(STORE, None) or {"next": 1, "items": []}   # unreadable: stop here, never write an empty store over it
         return self.d
     def __exit__(self, et, *_):
         if et is None or et is SystemExit:
-            tidy(self.d)
-            tmp = STORE + ".tmp"; json.dump(self.d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STORE)
+            tidy(self.d); L.save(STORE, self.d)
         self.lock.close()
 def age(ts):
     try: return (datetime.datetime.now() - datetime.datetime.fromisoformat(ts)).total_seconds() / 86400
@@ -54,16 +55,15 @@ def age(ts):
 # Two stores. requests.json is what gets loaded and shown: everything still open, plus __OWNER__'s last 15 finished
 # ones (the panel lists them). It is read whole by the Herdr panel (1 MiB limit) and by every office.
 # Everything else is history: requests-archive-<month>.jsonl, one line each, read only by `show` and `ls --all`.
+# Open items stay until someone reads or answers them (a lead reads hers with `team-ask inbox`); only on a very busy
+# day, past `cap`, do the oldest unread notes to leads move to the history to keep the store loadable.
 def tidy(d, cap=400_000):
-    mine = lambda x: x.get("to", "__OWNER_ID__") == "__OWNER_ID__"
+    mine = lambda x: x.get("to", OWNER) == OWNER
     recent = {x["id"] for x in [x for x in d["items"] if x["status"] != "open" and mine(x)][-15:]}
-    def keep(x):
-        if x["status"] != "open": return x["id"] in recent
-        return x["kind"] == "request" or mine(x) or age(x["created"]) <= 2   # a note to a lead nobody read in two days is history
-    old = [x for x in d["items"] if not keep(x)]; gone = {x["id"] for x in old}
+    old = [x for x in d["items"] if x["status"] != "open" and x["id"] not in recent]; gone = {x["id"] for x in old}
     size = lambda xs: sum(len(json.dumps(x, ensure_ascii=False)) + 40 for x in xs)
     left = size(x for x in d["items"] if x["id"] not in gone)
-    for x in d["items"]:   # a very busy day: the oldest unread notes to leads go first; open requests and __OWNER__'s items never do
+    for x in d["items"]:   # the oldest unread notes to leads go first; open requests and __OWNER__'s items never do
         if left <= cap: break
         if x["id"] in gone or x["status"] != "open" or x["kind"] != "note" or mine(x): continue
         old.append(x); gone.add(x["id"]); left -= size([x])
@@ -92,7 +92,7 @@ def archived(n):
 def opts(args):
     d, pos, it = {}, [], iter(args)
     for a in it:
-        if a.startswith("--"): d[a[2:]] = True if a in ("--all", "--note", "--connect") else next(it, "")
+        if a.startswith("--"): d[a[2:]] = True if a in ("--all", "--note", "--connect", "--keep") else next(it, "")
         else: pos.append(a)
     return d, pos
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
@@ -100,7 +100,11 @@ def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 _CMD = r"(?:sudo\s+)?(?:az|gcloud|aws|kubectl|helm|terraform|argocd|docker|git|gh|npm|npx|pnpm|yarn|node|python3?|pip3?|uv|brew|ssh|scp|curl|wget|open|launchctl|systemctl|journalctl|defaults|security|psql|tailscale|make|claude|codex|office-restart)"
 _MARKED = re.compile(r"`[A-Za-z0-9._-]*\$ [^`\n]+`|```run\b")
 _PLAIN = re.compile(r"`(" + _CMD + r"\s+[^`\n]+)`|```(?:sh|bash|zsh|shell|console)\s*\n")
-_ASKS = re.compile(r"\b(run|execute|ejecut\w+|lanz[ae]\w*|terminal|consola|console|command line|l[ií]nea de comandos|comandos?)\b", re.I)
+# Asking him to run something: a verb aimed at him ("can you run", "please run", "ejecuta", "run this in your terminal"),
+# not a word like "terminal" or "comando" in a question about something else.
+_ASKS = re.compile(r"\b(?:(?:can|could|would|will) you|please|pls|por favor|puedes|podr[ií]as)\s+(?:\w+\s+)?(?:run|execute|ejecutar|lanzar|correr)\b"
+                   r"|\b(?:run|execute) (?:this|these|it|that|the following)\b|\b(?:ejecuta|lanza|corre)(?:lo|la|los|las)?\b"
+                   r"|\b(?:run|ejecuta\w*|lanza\w*)\b[^.?!\n]{0,40}\b(?:your|tu|su) (?:terminal|consola|console|shell|mac)\b", re.I)
 def one_click(d, *texts):
     if d.get("as-is") is not None: return
     t = "\n".join(x for x in texts if isinstance(x, str))
@@ -110,108 +114,154 @@ def one_click(d, *texts):
            "no secrets, and say in plain words what it does. If this is not something for him to run, send it again adding --as-is \"\".")
     if m: sys.exit(f"not sent: it has a command that is not marked for his terminal ({(m.group(1) or 'a shell block')[:60]}). " + how)
     if _ASKS.search(t) and not _MARKED.search(t): sys.exit("not sent: it asks __OWNER__ to run something but gives him no Run button. " + how)
-LBL = re.compile(r"^\s*(?:[-*•]\s*)?\**\(?([A-Za-z]|\d{1,2})[:.)]\**\s+(\S.*)$")
-def choices(raw, body=""):
-    """The answer buttons of a request, from whatever the asker wrote: --options split by | ; or new lines, by letters
-    ("A: yes, B: no"), or by commas (never inside parentheses); with no --options, a list at the end of the body
-    ("A: ...", "B) ...", "1. ..."), which then moves out of the body. Returns (options, body)."""
-    raw = raw if isinstance(raw, str) else ""; body = body if isinstance(body, str) else ""; out = []
-    if raw.strip():
-        if re.search(r"[|\n;]", raw): out = re.split(r"\s*[|\n;]\s*", raw)
-        else:
-            lab = [x for x in re.split(r"(?:^|,)\s*(?=(?:[A-Z]|\d{1,2})[:.)]\s)", raw) if x.strip()]
-            out = lab if len(lab) > 1 else re.split(r",(?![^(]*\))", raw)
-    else:
-        lines = body.split("\n"); runs = []; cur = []
-        for i, l in enumerate(lines + [""]):
-            m = LBL.match(l) if i < len(lines) else None
-            k = m.group(1).upper() if m else None
-            nxt = (chr(ord(cur[-1][1]) + 1) if not cur[-1][1].isdigit() else str(int(cur[-1][1]) + 1)) if cur else None
-            if m and (k == nxt or (not cur and k in ("A", "1"))): cur.append((i, k, m.group(2)))
-            else:
-                if len(cur) > 1: runs.append(cur)
-                cur = [(i, k, m.group(2))] if m and k in ("A", "1") else []
-        if runs and len(runs[-1]) <= 8:
-            run = runs[-1]; out = [f"{k}: {t}" for _, k, t in run]
-            body = "\n".join(lines[:run[0][0]] + lines[run[-1][0] + 1:]).strip()
-    out = [re.sub(r"\*\*|`", "", o).strip() for o in out]
-    return [o for o in out if o][:8], body
+OPTS_HELP = 'give two or more answers separated by |, e.g. --options "Merge now|Wait for QA, then merge" (a comma is part of an answer)'
+LISTY = re.compile(r"^\s*(?:[-*•]\s*)?\**\(?(?:[A-Za-z]|\d{1,2})[:.)]\**\s+\S", re.M)
+def choices(raw, strict=True):
+    """The answer buttons of a request: only what --options says, split on |. The body is never touched."""
+    if isinstance(raw, list): out = [str(o) for o in raw]
+    elif isinstance(raw, str) and raw.strip(): out = raw.split("|")
+    else: return []
+    out = [re.sub(r"\*\*|`", "", o).strip() for o in out]; out = [o for o in out if o]
+    if strict and len(out) < 2: sys.exit(f"--options: {OPTS_HELP}")
+    if strict and len(out) > 8: sys.exit("--options: at most 8 answers; put the detail in --body")
+    return out[:8]
+def hint(d, c):
+    if c == "request" and not d.get("options") and len(LISTY.findall(str(d.get("body") or ""))) >= 2:
+        print(f"note: the body has a list; it is shown as written. If those are the answers you want as buttons, {OPTS_HELP}.", file=sys.stderr)
+def office_caller():
+    """True when this runs for __OWNER__: started by an office server (node .../server.mjs) or the Herdr app, not by an
+    agent's shell. An agent answers with --as <name>."""
+    try: args = subprocess.run(["ps", "-o", "args=", "-p", str(os.getppid())], capture_output=True, text=True, timeout=5).stdout.split()
+    except Exception: return False
+    if not args: return False
+    exe = os.path.basename(args[0])
+    return (exe == "node" and len(args) > 1 and args[1].endswith(("/server.mjs", "/peer-link.mjs"))) or "Herdr.app/" in args[0] or exe in ("Herdr", "herdr-app")
+def actor(d):
+    """Who is acting: __OWNER_ID__ or an agent's Herdr name."""
+    a = d.get("as")
+    if a in (OWNER, "owner"): return OWNER
+    if a:
+        if a not in NAMES: sys.exit(f"--as must be one of {sorted(NAMES)} (or {OWNER})")
+        return a
+    if office_caller(): return OWNER
+    sys.exit(f"--as <your Herdr name> is required (only __OWNER__'s office answers without it; from his own shell: --as {OWNER})")
+def usage(): sys.exit(f"usage: team-ask {c} <id>" + (' "answer text" --as <you>' if c == "answer" else " --as <you>" if c in ("read", "cancel", "escalate") else ""))
+def tell(name, msg):
+    """Deliver now or queue it (busy with a menu, or not running): never answers a menu."""
+    return L.deliver(name, msg, "team-ask")
 def line(x):
-    state = {"open": "OPEN", "answered": "answered", "read": "read", "cancelled": "cancelled"}[x["status"]]
-    return f'#{x["id"]} [{x["kind"]}/{state}] {x["from"]} -> {x.get("to", "__OWNER_ID__")}: {x["title"]}' + (f' ({x["ticket"]})' if x.get("ticket") else "") + (f'\n    -> {x.get("answeredBy", "__OWNER__")}: {x["answer"]}' if x.get("answer") else "")
+    state = {"open": "OPEN", "answered": "answered", "read": "read", "cancelled": "cancelled"}.get(x["status"], x["status"])
+    return f'#{x["id"]} [{x["kind"]}/{state}] {x["from"]} -> {x.get("to", OWNER)}: {x["title"]}' + (f' ({x["ticket"]})' if x.get("ticket") else "") + (f'\n    -> {x.get("answeredBy", "__OWNER__")}: {x["answer"]}' if x.get("answer") else "")
+def forward(x):
+    """__OWNER__ sits in another building (team-peer home): the request also lands in their own box there."""
+    r = subprocess.run([f"{L.BIN}/team-peer", "forward"], input=json.dumps({**x, "name": NAMES.get(x["from"], {}).get("name", x["from"])}), capture_output=True, text=True)
+    if (r.stdout + r.stderr).strip(): print((r.stdout + r.stderr).strip()[:200], file=sys.stderr)
 a = sys.argv[1:]
 if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
 c = a[0]; d, pos = opts(a[1:])
 if c in ("request", "note"):
     who = d.get("from") or sys.exit("--from <your Herdr name> is required")
-    if who not in NAMES: sys.exit(f"--from must be one of {list(NAMES)}")
+    if who not in NAMES: sys.exit(f"--from must be one of {sorted(NAMES)}")
     if not pos or len(pos[0]) > 140: sys.exit("give one short line (max 140 chars) as the question/message; put the rest in --body")
-    if who == LEAD[who] or (c == "request" and d.get("to") == "__OWNER_ID__"): one_click(d, pos[0], d.get("body"), d.get("options"))
+    lead, want = LEAD[who], d.get("to") or ""
+    if want == "owner": want = OWNER
+    if c == "note":
+        to = OWNER if who == lead else lead
+        if want and want != to: print(f"notes go to your team lead ({lead}); sent there", file=sys.stderr)
+    elif want == OWNER or (not want and who == lead): to = OWNER
+    elif not want: to = lead
+    elif want == who: sys.exit("that is you")
+    elif want in NAMES and NAMES[want]["dir"] == NAMES[who]["dir"]: to = want
+    elif want in NAMES: sys.exit(f"{want} is on another floor ({NAMES[want]['team']}); ask your lead ({lead}) instead")
+    else: sys.exit(f"--to: {want} is nobody here; use a teammate's Herdr name or {OWNER}")
+    if to == OWNER: one_click(d, pos[0], d.get("body"), d.get("options"))
+    ch = choices(d.get("options", "")) if c == "request" else []
+    hint(d, c)
+    body = d.get("body", "") if isinstance(d.get("body"), str) else ""
     with Box() as b:
-        lead = LEAD[who]
-        to = "__OWNER_ID__" if who == lead or (c == "request" and d.get("to") == "__OWNER_ID__") else lead
-        if d.get("to") == "__OWNER_ID__" and c == "note" and who != lead: print(f"notes go to your team lead ({lead}); sent there", file=sys.stderr)
-        dup = [x for x in b["items"] if x["status"] == "open" and x["from"] == who and x["title"] == pos[0]]
-        if dup: print(dup[0]["id"]); sys.exit()
-        ch, body = choices(d.get("options", ""), d.get("body", "")) if c == "request" else ([], d.get("body", ""))
+        dup = [x for x in b["items"] if x["status"] == "open" and x["kind"] == c and x["from"] == who and x["title"] == pos[0]
+               and x.get("ticket", "") == d.get("ticket", "") and x.get("body", "") == body and x.get("to", OWNER) == to]
+        if dup: print(f"already open as #{dup[0]['id']}: not sent again", file=sys.stderr); print(dup[0]["id"]); sys.exit()
         x = {"id": b["next"], "kind": c, "from": who, "title": pos[0], "body": body, "ticket": d.get("ticket", ""),
-             "options": ch,
-             "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to}
+             "options": ch, "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to}
         b["next"] += 1; b["items"].append(x); print(x["id"])
-    if to == "__OWNER_ID__":   # the owner sits in another building (team-peer home): the request also lands in their own box there
-        r = subprocess.run([os.path.expanduser("~/.local/bin/team-peer"), "forward"], input=json.dumps({**x, "name": NAMES[who]["name"]}), capture_output=True, text=True)
-        if (r.stdout + r.stderr).strip(): print((r.stdout + r.stderr).strip()[:200], file=sys.stderr)
+    if to == OWNER: forward(x)
     if c == "request" and x["ticket"]:   # the card waits on this request until it is answered (team-card)
-        subprocess.run([os.path.expanduser("~/.local/bin/team-card"), "wait", x["ticket"], "--as", who, "--req", str(x["id"]), f'request #{x["id"]} to {to}'], capture_output=True)
-    if to != "__OWNER_ID__" and c == "request":
-        subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", to, f'{who} left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to}) or escalate it to __OWNER__ only if it needs him.'], capture_output=True)
+        subprocess.run([f"{L.BIN}/team-card", "wait", x["ticket"], "--as", who, "--req", str(x["id"]), f'request #{x["id"]} to {to}'], capture_output=True)
+    if to != OWNER and c == "request":
+        r = tell(to, f'{who} left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to})'
+                 + (" or escalate it to __OWNER__ only if it needs him." if to == lead else "."))
+        print(L.said(r, to), file=sys.stderr)
 elif c == "external":   # from another building (written by team-peer): a request to a lead or the owner, or a note to the owner
     to = d.get("to") or "owner"
-    if to == "owner": to = "__OWNER_ID__"
+    if to == "owner": to = OWNER
     elif to not in NAMES: sys.exit("no such person here")
+    if not pos: sys.exit("the question is missing")
     with Box() as b:
-        ch, body = choices(d.get("options"), d.get("body")) if not d.get("note") else ([], d.get("body", "") if isinstance(d.get("body"), str) else "")
+        body = d.get("body", "") if isinstance(d.get("body"), str) else ""
+        ch = [] if d.get("note") else choices(d.get("options"), strict=False)
         x = {"id": b["next"], "kind": "note" if d.get("note") else "request", "from": d.get("name") or "another building", "title": pos[0][:140], "body": body, "ticket": "",
              "options": ch,
              "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to,
              "ext": {"peer": d.get("peer", ""), "connect": bool(d.get("connect")), "ref": json.loads(d["ref"]) if isinstance(d.get("ref"), str) else {}}}
         b["next"] += 1; b["items"].append(x); print(x["id"])
-    if to != "__OWNER_ID__":
-        subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", to, f'{x["from"]} (from another building) left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to}); your answer is sent back to them. They are not on your team: share only what your owner would share, and escalate with team-ask request if unsure.'], capture_output=True)
+    if to != OWNER:
+        tell(to, f'{x["from"]} (from another building) left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to}); your answer is sent back to them. They are not on your team: share only what your owner would share, and escalate with team-ask request if unsure.')
 elif c == "ls":
     with Box() as b:
-        items = [x for x in b["items"] if (d.get("all") or x["status"] == "open") and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", "__OWNER_ID__") == d["to"])]
+        items = [x for x in b["items"] if (d.get("all") or x["status"] == "open") and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", OWNER) == d["to"])]
     if d.get("all"):   # finished ones live in the history files (this month and the last)
         seen = {x["id"] for x in items}
-        items = sorted([x for x in history() if x["id"] not in seen and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", "__OWNER_ID__") == d["to"])] + items, key=lambda x: x["id"])
+        items = sorted([x for x in history() if x["id"] not in seen and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", OWNER) == d["to"])] + items, key=lambda x: x["id"])
     print("\n".join(line(x) for x in items) or "nothing open")
+elif c == "inbox":   # what was left for someone: open requests, then notes; the notes count as read once shown
+    me = d.get("as") or sys.exit("usage: team-ask inbox --as <you> [--keep]")
+    if me not in NAMES: sys.exit(f"--as must be one of {sorted(NAMES)}")
+    with Box() as b:
+        mine = [x for x in b["items"] if x["status"] == "open" and x.get("to") == me]
+        reqs, notes = [x for x in mine if x["kind"] == "request"], [x for x in mine if x["kind"] == "note"]
+        if not d.get("keep"):
+            for x in notes: x["status"], x["answeredAt"], x["by"] = "read", now(), me
+    if not mine: print("nothing open for you")
+    for head, xs in ((f'Requests to answer (team-ask answer <id> "..." --as {me}):', reqs), ("Notes" + ("" if d.get("keep") else " (now marked read)") + ":", notes)):
+        if not xs: continue
+        print(head)
+        for x in xs: print("  " + line(x).replace("\n", "\n  ") + ("\n      " + x["body"].replace("\n", "\n      ") if x.get("body") else ""))
 elif c == "show":
+    if not pos: usage()
     with Box() as b: x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None)
     x = x or archived(pos[0].lstrip("#")) or sys.exit("not found")
     print(line(x)); print(x["body"]) if x["body"] else None
+    if x.get("options"): print("Answers: " + " | ".join(x["options"]))
 elif c in ("answer", "read", "cancel"):
+    if not pos or (c == "answer" and (len(pos) < 2 or not pos[1].strip())): usage()
+    me = actor(d)
     with Box() as b:
-        x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None) or sys.exit("not found")
+        x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None) or archived(pos[0].lstrip("#")) or sys.exit(f"#{pos[0].lstrip('#')} not found")
+        if x["status"] != "open": sys.exit(f'#{x["id"]} is already {x["status"]}' + (f' ({x.get("answeredBy", "__OWNER__")}: {x["answer"]})' if x.get("answer") else "") + ": nothing changed")
+        to = x.get("to", OWNER)
+        if me != OWNER:
+            if c == "cancel" and me not in (x["from"], to): sys.exit(f'only {x["from"]} (who asked) or {to} can cancel #{x["id"]}')
+            if c != "cancel" and me != to: sys.exit(f'#{x["id"]} is addressed to {to}, not to you' + (": only __OWNER__ answers it" if to == OWNER else ""))
         if c == "answer":
-            if len(pos) < 2 or not pos[1].strip(): sys.exit("answer text is required")
             x["status"], x["answer"], x["answeredAt"] = "answered", pos[1].strip(), now()
-            x["answeredBy"] = NAMES[d["as"]]["name"].split(" ")[0] if d.get("as") in NAMES else "__OWNER__"
-        else: x["status"] = "read" if c == "read" else "cancelled"; x["answeredAt"] = now()
+            x["answeredBy"] = "__OWNER__" if me == OWNER else NAMES[me]["name"].split(" ")[0]
+        else: x["status"] = "read" if c == "read" else "cancelled"; x["answeredAt"] = now(); x["by"] = me
     if c in ("answer", "cancel") and x.get("ticket"):
-        subprocess.run([os.path.expanduser("~/.local/bin/team-card"), "resume", x["ticket"], "--req", str(x["id"])], capture_output=True)
+        subprocess.run([f"{L.BIN}/team-card", "resume", x["ticket"], "--req", str(x["id"])], capture_output=True)
     if c == "answer" and x.get("ext"):   # asked from another building: the answer travels back there
-        r = subprocess.run([os.path.expanduser("~/.local/bin/team-peer"), "answered"], input=json.dumps(x), capture_output=True, text=True)
+        r = subprocess.run([f"{L.BIN}/team-peer", "answered"], input=json.dumps(x), capture_output=True, text=True)
         print("answered; " + (r.stdout.strip() or r.stderr.strip()[:200]))
     elif c == "answer":
         msg = f'{x["answeredBy"]} answered request #{x["id"]} ("{x["title"]}"' + (f', {x["ticket"]}' if x.get("ticket") else "") + f'): {x["answer"]}'
-        r = subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", x["from"], msg], capture_output=True, text=True)
-        if x.get("via") and x["from"] != x["via"] and x["answeredBy"] == "__OWNER__":
-            subprocess.run([os.path.expanduser("~/.local/bin/hc"), "send", x["via"], "FYI, " + msg + f' (asked by {x["from"]}, already told)'], capture_output=True)
-        print("answered; " + ("delivered to " + x["from"] if r.returncode == 0 else f'{x["from"]} is not running, they will see it with: team-ask ls --from {x["from"]} --all'))
+        r = tell(x["from"], msg)
+        if x.get("via") and x["from"] != x["via"] and me == OWNER:
+            tell(x["via"], "FYI, " + msg + f' (asked by {x["from"]}, already told)')
+        print("answered; " + ("delivered to " + x["from"] if r == "delivered" else L.said(r, x["from"])))
     else: print("ok")
 elif c == "menu-log":   # a terminal menu (Claude/Codex permission prompt) __OWNER__ answered from the office: kept as an answered request
     who = d.get("from") or sys.exit("--from <agent> is required")
-    if who not in NAMES: sys.exit(f"--from must be one of {list(NAMES)}")
+    if who not in NAMES: sys.exit(f"--from must be one of {sorted(NAMES)}")
     title, answer = str(d.get("title") or "").strip()[:200], str(d.get("answer") or "").strip()[:200]
     if not title or not answer: sys.exit("--title and --answer are required")
     with Box() as b:
@@ -219,25 +269,26 @@ elif c == "menu-log":   # a terminal menu (Claude/Codex permission prompt) __OWN
         dup = [x for x in b["items"] if mid and x.get("menu") and x.get("menuId") == mid and x["from"] == who]
         if dup: print(dup[0]["id"]); sys.exit()   # the same menu answered once is logged once
         t = now()
-        x = {"id": b["next"], "kind": "request", "menu": True, "from": who, "to": "__OWNER_ID__", "title": title, "body": str(d.get("body") or "")[:1500],
+        x = {"id": b["next"], "kind": "request", "menu": True, "from": who, "to": OWNER, "title": title, "body": str(d.get("body") or "")[:1500],
              "ticket": "", "options": [], "status": "answered", "created": str(d.get("created") or t)[:19], "answer": answer, "answeredAt": t,
              "answeredBy": "__OWNER__", "answeredVia": str(d.get("via") or "office")[:20], "menuId": mid}
         b["next"] += 1; b["items"].append(x); print(x["id"])
 elif c == "escalate":
-    one_click(d, pos[1] if len(pos) > 1 else "", d.get("body"), d.get("options"))
+    if not pos: usage()
+    me = d.get("as")
+    if me and me not in NAMES: sys.exit(f"--as must be one of {sorted(NAMES)}")
+    ch = choices(d["options"]) if d.get("options") else None
     with Box() as b:
         x = next((x for x in b["items"] if str(x["id"]) == pos[0].lstrip("#")), None) or sys.exit("not found")
-        if x["status"] != "open": sys.exit("already closed")
-        x["to"], x["via"], x["escalatedAt"] = "__OWNER_ID__", LEAD.get(x["from"], "lucia"), now()
-        if len(pos) > 1: x["title"] = pos[1][:140]
-        if d.get("body"): x["body"] = d["body"]
-        if d.get("options"): x["options"] = choices(d["options"])[0]
-        elif not x.get("options"): x["options"], x["body"] = choices("", x.get("body", ""))
+        if x["status"] != "open": sys.exit(f'#{x["id"]} is already {x["status"]}')
+        if x.get("to", OWNER) == OWNER: sys.exit(f'#{x["id"]} is already with __OWNER__')
+        if me and me != x.get("to"): sys.exit(f'#{x["id"]} is addressed to {x.get("to")}, not to you')
+        title = pos[1][:140] if len(pos) > 1 else x["title"]; body = d["body"] if d.get("body") else x.get("body", "")
+        one_click(d, title, body, d.get("options") or "|".join(x.get("options") or []))   # what he will read, as he will read it
+        x["to"], x["via"], x["escalatedAt"], x["title"], x["body"] = OWNER, x.get("to") or LEAD.get(x["from"], ""), now(), title, body
+        if ch is not None: x["options"] = ch
+    forward(x)
     print("escalated to __OWNER__")
-elif c == "rechoose":   # open requests written before the buttons accepted other shapes
-    with Box() as b:
-        for x in b["items"]:
-            if x["status"] == "open" and x["kind"] == "request":
-                o, body = choices("|".join(x.get("options") or []), x.get("body", "")) if x.get("options") else choices("", x.get("body", ""))
-                if o != x.get("options"): x["options"], x["body"] = o, body; print(x["id"], o)
+elif c == "rechoose":   # kept so old scripts do not fail: buttons come only from --options now and bodies are never rewritten
+    print("nothing to do: answer buttons come only from --options")
 else: print(__doc__); sys.exit(1)

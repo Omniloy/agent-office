@@ -266,9 +266,15 @@ Run `python3 setup/install.py --check` one last time and give the user a short s
     office-restart all
 
 Team folders are never overwritten. If the installer says a `PROTOCOL.md.new` or `HANDBOOK.md.new` was left next
-to the user's file, show the user what changed and merge it only with their yes. Files it replaced in
-`~/.local/bin`, `~/.claude/agents`, the skills and the Herdr panels have a `.bak-<date>` copy next to them when
-they differed. People who are running keep their old instructions until their next session.
+to the user's file, show the user what changed and merge it only with their yes. The protocol sections that follow
+the repo are never changed without a yes either: the installer asks when run in a terminal, otherwise it leaves
+`PROTOCOL.md.proposed` next to the file (show the user the diff; `--protocol-sections` applies them).
+Every file it replaces is copied first to `~/.omniloy-office/backups/<date>/` (same path under the home folder).
+A live file that was edited by hand since the last install is not replaced: the run ends with exit code 1, the
+list, and a diff of each in that backups folder. Bring the edits worth keeping into the repo, then rerun; `--force`
+replaces them anyway (after the backup). The first update with this check counts every differing file as edited.
+npm dependencies are installed again when an app's `package.json` or `package-lock.json` changed.
+People who are running keep their old instructions until their next session.
 
 ## When something goes wrong
 

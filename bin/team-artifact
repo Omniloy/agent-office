@@ -12,7 +12,7 @@
 
 <you> is your Herdr name (lucia, daniel, sara, alma, irene, zeus, ...). Store: ~/.omniloy-team/artifacts
 __OWNER__ deletes pages himself from the office when he is done with them; do not delete other people's."""
-import sys, os, json, re, shutil, datetime, time, unicodedata
+import sys, os, json, re, shutil, datetime, time, unicodedata, fcntl
 HOME = os.path.expanduser("~"); ROOT = f"{HOME}/.omniloy-team/artifacts"; BASE = "http://127.0.0.1:4340"
 SAFE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,80}$")
 def names():
@@ -69,13 +69,27 @@ if c == "new":
     else:
         kind = {".html": "html", ".htm": "html", ".mdx": "mdx", ".md": "md"}.get(os.path.splitext(src)[1].lower()) or sys.exit("one file must be .html, .mdx or .md (or pass a folder)")
     dst = f"{ROOT}/{who}/{slug}"; old = {}
+    os.makedirs(f"{ROOT}/{who}", exist_ok=True)
+    lock = open(f"{ROOT}/{who}/.{slug}.lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)   # one publish of this page at a time
     try: old = json.load(open(f"{dst}/meta.json"))
     except Exception: pass
-    tmp = f"{ROOT}/{who}/.{slug}.new"; shutil.rmtree(tmp, ignore_errors=True); os.makedirs(os.path.dirname(tmp), exist_ok=True)
-    if os.path.isdir(src): shutil.copytree(src, tmp, ignore=shutil.ignore_patterns(".*", "node_modules", "meta.json"))
-    else: os.makedirs(tmp); shutil.copy(src, f"{tmp}/index.{kind}")
-    json.dump({"title": title[:140], "owner": who, "kind": kind, "created": old.get("created") or now(), "updated": now()}, open(f"{tmp}/meta.json", "w"), ensure_ascii=False, indent=1)
-    shutil.rmtree(dst, ignore_errors=True); os.replace(tmp, dst)
+    # B42: the new version is built aside; the old one leaves only once the new one is complete, and goes to the trash
+    # (kept 7 days) instead of being deleted first. If the swap fails, the old version is put back.
+    tmp = f"{ROOT}/{who}/.{slug}.new-{os.getpid()}"; shutil.rmtree(tmp, ignore_errors=True)
+    try:
+        if os.path.isdir(src): shutil.copytree(src, tmp, ignore=shutil.ignore_patterns(".*", "node_modules", "meta.json"))
+        else: os.makedirs(tmp); shutil.copy(src, f"{tmp}/index.{kind}")
+        json.dump({"title": title[:140], "owner": who, "kind": kind, "created": old.get("created") or now(), "updated": now()}, open(f"{tmp}/meta.json", "w"), ensure_ascii=False, indent=1)
+    except Exception as e: shutil.rmtree(tmp, ignore_errors=True); sys.exit(f"not published ({type(e).__name__}: {e}); the page as it was is unchanged")
+    prev = None
+    if os.path.isdir(dst): prev = f"{ROOT}/{who}/.{slug}.old-{os.getpid()}"; os.replace(dst, prev)
+    try: os.replace(tmp, dst)
+    except Exception as e:
+        if prev: os.replace(prev, dst)
+        shutil.rmtree(tmp, ignore_errors=True); sys.exit(f"not published ({type(e).__name__}); the page as it was is back")
+    if prev:
+        os.makedirs(f"{ROOT}/.trash", exist_ok=True); shutil.move(prev, f"{ROOT}/.trash/{int(time.time())}-{who}-{slug}-{os.getpid()}")
+    lock.close()
     url = f"{BASE}/{who}/{slug}/"
     print(url); print(f"{'updated' if old else 'published'}. Put this in your answer so __OWNER__ can open it:  [{title}]({url})", file=sys.stderr)
 elif c == "ls":

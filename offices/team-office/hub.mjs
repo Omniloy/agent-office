@@ -214,7 +214,7 @@ async function chatLog(name, pos, known, worker) {
       const m = /^<hc from="([^"]*)">([\s\S]*?)(<\/hc>)?\s*$/.exec(text);
       if (m) { from = m[1].split(' ').pop(); text = m[2].trim(); } else if (text.startsWith('<')) continue; // reminders, commands, notifications
       const mate = from && who[from] && from !== name ? who[from] : null;
-      const spoken = text.startsWith('(spoken by __OWNER__, transcribed)'); if (spoken) text = text.slice(32).trim();
+      const SPOKEN = '(spoken by __OWNER__, transcribed)', spoken = text.startsWith(SPOKEN); if (spoken) text = text.slice(SPOKEN.length).trim(); // the prefix's length depends on the owner's name
       if (side) out.push({ role: 'peer', from: 'Brief', color: '#9aa4bd', text: clipLong(text), ts }); // what a helper was asked to do
       else out.push(mate ? { role: 'peer', from: mate.name, color: mate.color, text: clipLong(text), ts } : { role: 'you', text: clipLong(text), ts, spoken });
     } else if (o.type === 'assistant' && Array.isArray(c)) {

@@ -1,44 +1,119 @@
 #!/usr/bin/env python3
 """office-restart status | all | <port> [--new-token]   restart office servers one at a time, keeping each page token so open
 phones keep working. A floor that is not running is started. Tokens stay in memory and are never printed.
-Only the office's own listener on 127.0.0.1 is touched: Tailscale listens on the same ports and must not be killed."""
-import sys, os, re, subprocess, time, urllib.request, signal
+Only the office's own listener on 127.0.0.1 is touched: Tailscale listens on the same ports and must not be killed.
+
+The floors are those of ~/.omniloy-team/floors.json (else Dev 4317, CRM 4319, Web 4320, Lab 4321).
+- A floor that does not answer is stopped (SIGTERM, then SIGKILL) only when the listener is an office server.
+- Each server starts with a clean environment (HOME, PATH, PORT, the token, TEAM_DIR for its team), never the
+  caller's terminal or agent session variables, and it counts as back only when the NEW process answers.
+- Run from a floor's own room terminal (a Run button), it restarts itself detached from that terminal first:
+  the terminal closes with the floor, the restart carries on. Log: ~/.omniloy-team/logs/office-restart.log
+`status` also says whether the watchdog runs and what the outbox holds."""
+import sys, os, re, subprocess, time, urllib.request, signal, json
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
 H = os.path.expanduser
-FLOORS = {'4317': ('Dev', H('~/.omniloy-office/team-office'), ''), '4319': ('CRM', H('~/.omniloy-office/team-office'), H('~/.omniloy-crm')), '4320': ('Web', H('~/.omniloy-office/team-office'), H('~/.omniloy-web')), '4321': ('Lab', H('~/.omniloy-office/team-office'), H('~/.omniloy-lab'))}
+APP = H('~/.omniloy-office/team-office')
+FLOORS = {str(f['port']): (f['name'], H(f['app']) if f.get('app') else APP, '' if f['path'] == L.SHARED else f['path']) for f in L.floors()}
+LSOF = '/usr/sbin/lsof' if os.path.exists('/usr/sbin/lsof') else 'lsof'
+LOGS = H('~/.omniloy-team/logs')
 def get(port, path): return urllib.request.urlopen(f'http://127.0.0.1:{port}{path}', timeout=5).read().decode()
 def up(port):
     try: return '"ok":true' in get(port, '/health')
     except Exception: return False
-def listener(port): return subprocess.run(['lsof', '-nP', f'-iTCP@127.0.0.1:{port}', '-sTCP:LISTEN', '-Fp'], capture_output=True, text=True).stdout.split('\n')[0].lstrip('p')
+def listener(port):
+    try: return subprocess.run([LSOF, '-nP', f'-iTCP@127.0.0.1:{port}', '-sTCP:LISTEN', '-Fp'], capture_output=True, text=True, timeout=10).stdout.split('\n')[0].lstrip('p')
+    except Exception: return ''
+def args(pid):
+    try: return subprocess.run(['/bin/ps', '-o', 'args=', '-p', str(pid)], capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception: return ''
+def ours(pid): return bool(re.search(r'\bnode\b.*server\.mjs\b', args(pid)))   # an office server, not Tailscale or something else
+def alive(pid):
+    try: os.kill(int(pid), 0); return True
+    except ProcessLookupError: return False
+    except PermissionError: return True
 def node():
     import glob, shutil
     for c in [shutil.which('node') or '', '/opt/homebrew/bin/node', '/usr/local/bin/node', *sorted(glob.glob(H('~/.nvm/versions/node/*/bin/node')), reverse=True)]:
         if c and os.path.exists(c): return c
     return 'node'
 NEW = '--new-token' in sys.argv  # give the floor a fresh page token (open pages need one reload)
-def restart(port):
-    name, cwd, team = FLOORS[port]; tok = ''
-    if up(port):
-        m = re.search(r"__TOKEN__ = '([0-9a-f]+)'", get(port, '/')); tok = m.group(1) if m else ''
-        pid = listener(port)
-        if pid: os.kill(int(pid), signal.SIGTERM)
-        for _ in range(40):
-            time.sleep(0.25)
-            if not listener(port): break
-    env = {**os.environ, 'PORT': port}
+KEEP = ('HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR', 'TZ', 'SSH_AUTH_SOCK', '__CF_USER_TEXT_ENCODING')
+def clean_env(port, tok, team):
+    """What a floor server gets: nothing of the caller's terminal (HC_*, CLAUDE*, HERDR_*, TEAM_DIR, OFFICE_*)."""
+    env = {k: os.environ[k] for k in KEEP if k in os.environ}
+    env['PATH'] = ':'.join(dict.fromkeys([os.path.dirname(node()), L.BIN, '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']))
+    env['PORT'] = port
     if tok and not NEW: env['OFFICE_TOKEN'] = tok
     if team: env['TEAM_DIR'] = team
-    logdir = H('~/.omniloy-team/logs'); os.makedirs(logdir, exist_ok=True)
-    log = open(os.path.join(logdir, f'office-{port}.log'), 'ab')  # why a floor died: its last errors are here
+    return env
+def stop(pid, name, port):
+    """SIGTERM; a server that is still there after 10 s gets SIGKILL."""
+    try: os.kill(int(pid), signal.SIGTERM)
+    except ProcessLookupError: return True
+    for i in range(80):
+        time.sleep(0.25)
+        if not alive(pid) and not listener(port): return True
+        if i == 39:
+            print(f'{name} ({port}): still running 10 s after SIGTERM, killing it')
+            try: os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError: pass
+    return not alive(pid) and not listener(port)
+def restart(port):
+    name, cwd, team = FLOORS[port]; tok = ''
+    pid = listener(port)
+    if pid:
+        if not ours(pid): print(f'{name} ({port}): the port is held by another program (pid {pid}: {args(pid)[:60]}); not touched'); return False
+        if up(port):
+            try: m = re.search(r"__TOKEN__ = '([0-9a-f]+)'", get(port, '/')); tok = m.group(1) if m else ''
+            except Exception: pass
+        else: print(f'{name} ({port}): not answering; stopping it')
+        if not stop(pid, name, port): print(f'{name} ({port}): could not be stopped (pid {pid}); nothing started'); return False
+    os.makedirs(LOGS, exist_ok=True)
+    log = open(os.path.join(LOGS, f'office-{port}.log'), 'ab')  # why a floor died: its last errors are here
     log.write(f'\n--- started {time.strftime("%Y-%m-%d %H:%M:%S")}\n'.encode()); log.flush()
-    subprocess.Popen([node(), os.path.join(cwd, 'server.mjs')], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, start_new_session=True)
+    p = subprocess.Popen([node(), os.path.join(cwd, 'server.mjs')], cwd=cwd, env=clean_env(port, tok, team), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log, start_new_session=True)
+    open(os.path.join(LOGS, f'office-{port}.pid'), 'w').write(str(p.pid))
     for i in range(60):
         time.sleep(0.5)
-        if up(port): print(f'{name} ({port}): back after {(i + 1) / 2:.1f}s'); return True
-    print(f'{name} ({port}): DID NOT COME BACK'); return False
+        if p.poll() is not None: print(f'{name} ({port}): DID NOT COME BACK (exited with {p.returncode}; see {L.short(LOGS)}/office-{port}.log)'); return False
+        if listener(port) == str(p.pid) and up(port): print(f'{name} ({port}): back after {(i + 1) / 2:.1f}s'); return True
+    print(f'{name} ({port}): DID NOT COME BACK (pid {p.pid} is not answering; see {L.short(LOGS)}/office-{port}.log)'); return False
+def ancestors():
+    out, pid = set(), os.getpid()
+    for _ in range(40):
+        try: pid = int(subprocess.run(['/bin/ps', '-o', 'ppid=', '-p', str(pid)], capture_output=True, text=True, timeout=5).stdout.strip() or 0)
+        except Exception: break
+        if pid <= 1: break
+        out.add(str(pid))
+    return out
+def hosting(ports):
+    """The floors among `ports` whose server is an ancestor of this process (we run in its room terminal)."""
+    mine = ancestors()
+    return [p for p in ports if listener(p) in mine]
+def watchdog():
+    st = L.read_quiet(f'{L.SHARED}/watch.json', {}) or {}
+    ago = time.time() - st.get('checkedAt', 0) / 1000
+    q = sum(L.pending().values())
+    return ('Watchdog: ' + (f'running (last check {int(ago)} s ago)' if ago < 300 else 'NOT RUNNING' + (f' (last check {int(ago // 60)} min ago)' if st.get('checkedAt') else ''))
+            + (f'; outbox: {q} message(s) waiting' if q else ''))
 a = sys.argv[1] if len(sys.argv) > 1 else ''
+ports = list(FLOORS) if a == 'all' else [a] if a in FLOORS else []
 if a == 'status':
     for p, (n, _, _) in FLOORS.items(): print(f'{n} ({p}): {"up" if up(p) else "DOWN"}')
-elif a == 'all': sys.exit(0 if all([restart(p) for p in FLOORS]) else 1)
-elif a in FLOORS: sys.exit(0 if restart(a) else 1)
+    print(watchdog())
+elif ports:
+    if os.environ.get('OFFICE_RESTART_DETACHED'): signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    else:
+        h = hosting(ports)
+        if h:   # the room terminal dies with its floor: go on in a new session that does not belong to it
+            os.makedirs(LOGS, exist_ok=True); out = open(os.path.join(LOGS, 'office-restart.log'), 'ab')
+            out.write(f'\n--- {time.strftime("%Y-%m-%d %H:%M:%S")} office-restart {" ".join(sys.argv[1:])} (detached from the room terminal of {", ".join(h)})\n'.encode()); out.flush()
+            subprocess.Popen([sys.executable, os.path.realpath(__file__), *sys.argv[1:]], env={**os.environ, 'OFFICE_RESTART_DETACHED': '1'},
+                             stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+            names = ', '.join(f'{FLOORS[p][0]} ({p})' for p in h)
+            print(f'{names} runs this terminal: the restart goes on in the background and this terminal closes with the floor. '
+                  f'Reload the page in a few seconds; the result is in {L.short(LOGS)}/office-restart.log'); sys.exit(0)
+    sys.exit(0 if all([restart(p) for p in ports]) else 1)
 else: print(__doc__); sys.exit(2)

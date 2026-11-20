@@ -29,7 +29,7 @@ text = ("Email round: run the email-triaje skill on __OWNER__'s inbox following 
 import shutil
 hc = shutil.which("hc") or os.path.expanduser("~/.local/bin/hc")
 if not os.path.exists(hc): print("not sent (Herdr's hc command was not found)"); sys.exit(1 if a == "--now" else 0)
-res = subprocess.run([hc, "send", "--if", "idle", lead, text], capture_output=True, text=True)
+res = subprocess.run([hc, "send", "--if", "idle", lead, "--", text], capture_output=True, text=True)
 if res.returncode == 0:
     json.dump({"last": now.isoformat(timespec="seconds")}, open(STATE, "w")); print(f"round sent to {lead}")
 else: print(f"not sent ({(res.stderr or res.stdout).strip()[:160] or 'the lead is busy or not running'})"); sys.exit(1 if a == "--now" else 0)

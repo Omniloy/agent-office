@@ -4,13 +4,24 @@
   python3 setup/install.py --config office.config.json            install / update
   python3 setup/install.py --config office.config.json --dry-run  say what would happen, change nothing
   python3 setup/install.py --check                                only check what is installed and working
+  ... --force              also replace live files that were edited by hand since the last install (see below)
+  ... --protocol-sections  apply the protocol sections that follow the repo without asking (you approved them)
 
 It copies the apps, tools, Herdr panels, skills and role instructions to their places, filling in the owner's
 name. It never overwrites a team folder that already exists (people, protocols, memory, requests): those are yours.
 It does not install Herdr, Node, Claude Code, Codex or Tailscale, and it never starts agents: setup/SETUP.md
 tells the installing agent how to do those with the user's go-ahead.
+
+Safe updates:
+- Every file it replaces is copied first to ~/.omniloy-office/backups/<date>/ (same path under the home folder).
+- It remembers what it wrote (~/.omniloy-office/installed.json). A live file that differs both from the repo and
+  from what the last install wrote was edited by hand: it is NOT replaced, the run ends with a list and a diff for
+  each, and only --force replaces them (after the backup). On the first update with this check every file that
+  differs counts as edited: read the diffs, bring wanted edits into the repo, then use --force.
+- npm dependencies are installed again when an app's package.json or package-lock.json changed.
+- The protocol sections that follow the repo are shown as a diff and applied only with a yes (or --protocol-sections).
 """
-import sys, os, json, re, shutil, subprocess, argparse, datetime, filecmp, glob
+import sys, os, json, re, shutil, subprocess, argparse, datetime, filecmp, glob, hashlib, difflib
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOME = os.path.expanduser("~")
@@ -18,9 +29,22 @@ APPS = f"{HOME}/.omniloy-office"
 BIN = f"{HOME}/.local/bin"
 HERDR = f"{HOME}/.config/herdr-app"
 LA = f"{HOME}/Library/LaunchAgents"
-TEAMS = {"dev": f"{HOME}/.omniloy-team", "biz": f"{HOME}/.omniloy-biz", "admin": f"{HOME}/.omniloy-admin"}
-RESERVED = {"lucia", "daniel", "marta", "kenji", "irene", "pablo", "elena", "zeus", "all", "team", "owner"}
+TEAMS = {"dev": f"{HOME}/.omniloy-team", "admin": f"{HOME}/.omniloy-admin"}   # Business (~/.omniloy-biz) is retired
+BIZ = f"{HOME}/.omniloy-biz"
+RESERVED = {"lucia", "daniel", "marta", "kenji", "irene", "pablo", "elena", "zeus", "val", "iker", "nora", "teo", "bruno", "lia",
+            "ines", "mateo", "kai", "olga", "all", "team", "owner"}
 STAMP = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+BACKUPS = f"{APPS}/backups/{STAMP}"
+MANIFEST = f"{APPS}/installed.json"
+sys.dont_write_bytecode = True; sys.path.insert(0, f"{REPO}/bin")
+import teamlib   # the floors list, as the tools read it
+def sha(b): return hashlib.sha256(b).hexdigest()
+# The protocol sections that follow the repo (applied only with the owner's yes, see carry_sections)
+SECTIONS = [("## Names outside the office", "the rule that nothing outside the office names the team"),
+            ("## Commands for ", "the section on commands for the owner's terminal")]
+# A new memory file: the two sections the protocol and team-memory ask for, never a dated log
+MEMORY = ("# {name}: memory\n\n## Open now\n(one line per thing in progress: its state and who you are waiting on; remove it when it closes)\n\n"
+          "## How things work here\n(reusable lessons only, at most about 25 short bullets; edit lines in place instead of appending)\n")
 
 def which(cmd, extra=()):
     p = shutil.which(cmd)
@@ -36,54 +60,107 @@ def herdr_app(): return which("herdr-app", ["~/Applications/Herdr.app/Contents/M
 def herdr_core(): return which("hc", ["~/.local/share/herdr-core/current/Contents/MacOS/herdr-core"]) or which("herdr-core")
 
 class Run:
-    def __init__(self, cfg, dry):
+    def __init__(self, cfg, dry, force=False, sections=False):
         self.cfg, self.dry, self.done, self.warn = cfg, dry, [], []
+        self.force, self.sections = force, sections
+        self.drift, self.wrote, self.changed, self.backed = [], {}, set(), 0
+        try: self.manifest = json.load(open(MANIFEST)).get("files", {})
+        except Exception: self.manifest = {}
         o = cfg["owner"]
         self.tokens = {"__OWNER_ID__": o["id"], "__OWNER__": o["name"], "__LANGUAGE__": cfg.get("language") or "English"}
     def say(self, s): self.done.append(s); print(("would: " if self.dry else "ok: ") + s)
     def render(self, text):
         for k, v in self.tokens.items(): text = text.replace(k, v)
         return text
-    def carry_section(self, src, dst, head, what="the section on commands for the owner's terminal"):
-        """One section of a protocol that is otherwise kept follows the repo: how to hand the owner a command must match
-        what the apps and tools do now, or every agent keeps describing commands in prose. The previous file is kept as a .bak."""
+    def carry_sections(self, src, dst, heads):
+        """Some sections of a protocol that is otherwise kept follow the repo (how to hand the owner a command, the rule
+        on names outside the office): they must match what the apps and tools do now. They change the agents' rules,
+        so the change is shown as a diff and applied only with a yes (asked here when someone is at the keyboard, or
+        --protocol-sections). Without it nothing changes and the proposal is left next to the file as .proposed."""
         if not (os.path.exists(src) and os.path.exists(dst)): return
-        def cut(t):
+        def cut(t, head):
             i = t.find("\n" + head)
             if i < 0: return None
             j = t.find("\n## ", i + 1); return (i + 1, len(t) if j < 0 else j + 1)
-        new = self.render(open(src, encoding="utf-8").read()); old = open(dst, encoding="utf-8").read()
-        a, b = cut(new), cut(old)
-        if not a: return
-        sec = new[a[0]:a[1]].rstrip("\n") + "\n"
-        out = old[:b[0]] + sec + ("\n" if b[1] < len(old) else "") + old[b[1]:] if b else old.rstrip("\n") + "\n\n" + sec
+        new = self.render(open(src, encoding="utf-8").read()); old = out = open(dst, encoding="utf-8").read(); whats = []
+        for head, what in heads:
+            a, b = cut(new, head), cut(out, head)
+            if not a: continue
+            sec = new[a[0]:a[1]].rstrip("\n") + "\n"
+            nxt = out[:b[0]] + sec + ("\n" if b[1] < len(out) else "") + out[b[1]:] if b else out.rstrip("\n") + "\n\n" + sec
+            if nxt != out: whats.append(what); out = nxt
         if out == old: return
-        if not self.dry:
-            shutil.copy2(dst, f"{dst}.bak-{STAMP}"); open(dst, "w", encoding="utf-8").write(out)
-        self.say(f"{dst}: {what} was brought up to date (the file as it was: {os.path.basename(dst)}.bak-{STAMP})")
-    def put(self, src, dst, mode=None, keep_existing=False, backup=False):
-        """Copy one file, filling in the placeholders when it is text. Returns True when dst changed."""
+        what = " and ".join(whats)
+        if self.dry: self.say(f"{dst}: {what} differs from the repo; it would be shown as a diff and applied only with a yes"); return
+        diff = "".join(difflib.unified_diff(old.splitlines(True), out.splitlines(True), f"{dst} (now)", f"{dst} (proposed)", n=2))
+        ok = self.sections
+        if not ok and sys.stdin.isatty():
+            print(f"\n{dst}: {what} differs from the repo. The change:\n{diff}")
+            ok = input("Apply it? [y/N] ").strip().lower() in ("y", "yes", "s", "si", "sí")
+        if not ok:
+            open(f"{dst}.proposed", "w", encoding="utf-8").write(out)
+            self.warn.append(f"{dst}: {what} differs from the repo and was NOT changed. The proposal is {os.path.basename(dst)}.proposed: "
+                             f"show the user `diff {dst} {dst}.proposed`, and with their yes copy it over (or rerun with --protocol-sections)")
+            return
+        self.backup(dst); open(dst, "w", encoding="utf-8").write(out)
+        self.say(f"{dst}: {what} brought up to date with your yes (the file as it was is in {BACKUPS})")
+    def backup(self, dst):
+        """A copy of a file about to be replaced, under ~/.omniloy-office/backups/<date>/ (never next to it: a .bak in an
+        app's public/ folder would be served, and one in ~/.local/bin is on the PATH)."""
+        if self.dry or not os.path.exists(dst): return
+        rel = os.path.relpath(dst, HOME) if dst.startswith(HOME + "/") else dst.lstrip("/")
+        os.makedirs(os.path.dirname(f"{BACKUPS}/{rel}"), exist_ok=True); shutil.copy2(dst, f"{BACKUPS}/{rel}"); self.backed += 1
+    def put(self, src, dst, mode=None, keep_existing=False, **_):
+        """Copy one file, filling in the placeholders when it is text. Returns True when dst changed.
+        A live file that was edited since the last install (it matches neither the repo nor what was installed) is
+        left alone and reported, unless --force."""
         raw = open(src, "rb").read()
         try: data = self.render(raw.decode("utf-8")).encode("utf-8")
         except UnicodeDecodeError: data = raw
         if os.path.exists(dst):
-            if open(dst, "rb").read() == data: return False
+            cur = open(dst, "rb").read()
+            if cur == data:
+                self.wrote[dst] = sha(data)
+                if mode and not self.dry and (os.stat(dst).st_mode & 0o777) != mode: os.chmod(dst, mode)
+                return False
             if keep_existing:
                 if not self.dry: open(dst + ".new", "wb").write(data)
                 self.warn.append(f"{dst} already exists and differs from the repo; yours was kept and the repo's version is next to it as {os.path.basename(dst)}.new")
                 return False
-            if backup and not self.dry: shutil.copy2(dst, f"{dst}.bak-{STAMP}")
+            if sha(cur) != self.manifest.get(dst) and not self.force:
+                self.drift.append((dst, cur, data)); return False
+            self.backup(dst)
         if not self.dry:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            open(dst, "wb").write(data)
-            if mode: os.chmod(dst, mode)
+            tmp = f"{dst}.installing"; open(tmp, "wb").write(data)
+            if mode: os.chmod(tmp, mode)
+            elif os.path.exists(dst): os.chmod(tmp, os.stat(dst).st_mode & 0o777)
+            os.replace(tmp, dst)
+        self.wrote[dst] = sha(data); self.changed.add(dst)
         return True
+    def report_drift(self):
+        """The live files that were edited by hand: listed, with a diff each, and left as they are."""
+        if not self.drift: return 0
+        out = f"{BACKUPS}/drift"
+        print(f"\n{len(self.drift)} live file(s) were edited since the last install and differ from the repo. They were NOT replaced:")
+        for dst, cur, data in self.drift:
+            rel = os.path.relpath(dst, HOME) if dst.startswith(HOME + "/") else dst.lstrip("/")
+            try:
+                d = "".join(difflib.unified_diff(cur.decode().splitlines(True), data.decode().splitlines(True), f"{dst} (live)", f"{dst} (repo)", n=2))
+                adds = sum(1 for l in d.splitlines() if l.startswith("+") and not l.startswith("+++")); dels = sum(1 for l in d.splitlines() if l.startswith("-") and not l.startswith("---"))
+            except UnicodeDecodeError: d, adds, dels = "(binary)\n", 0, 0
+            if not self.dry:
+                os.makedirs(os.path.dirname(f"{out}/{rel}"), exist_ok=True); open(f"{out}/{rel}.diff", "w").write(d)
+            print(f"  {dst}  (repo: +{adds} -{dels} lines)")
+        print(("Diffs (live -> repo) are in " + out if not self.dry else "Run without --dry-run to get a diff of each") +
+              ". Bring the live edits you want to keep into the repo, then run again; or rerun with --force to replace them (each is backed up first).")
+        return 1
     def tree(self, src, dst, **kw):
         n = 0
         for root, dirs, files in os.walk(src):
-            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git")]
+            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "__pycache__")]
             for f in files:
-                if f in (".DS_Store",) or f.endswith(".log"): continue
+                if f in (".DS_Store",) or f.endswith((".log", ".pyc")) or ".bak" in f: continue
                 s = os.path.join(root, f); n += self.put(s, os.path.join(dst, os.path.relpath(s, src)), **kw)
         return n
 
@@ -92,14 +169,15 @@ class Run:
         for name, src in (("team-office", "offices/team-office"), ("biz-office", "offices/biz-office"), ("artifacts", "services/artifacts")):
             n = self.tree(f"{REPO}/{src}", f"{APPS}/{name}")
             self.say(f"{name}: {n} file(s) written to {APPS}/{name}")
-            if not os.path.isdir(f"{APPS}/{name}/node_modules"):
+            deps = {f"{APPS}/{name}/package.json", f"{APPS}/{name}/package-lock.json"} & self.changed   # B38: new or changed dependencies
+            if not os.path.isdir(f"{APPS}/{name}/node_modules") or deps:
                 if not npm(): self.warn.append(f"npm was not found: run `npm install --omit=dev` in {APPS}/{name} after installing Node"); continue
                 if not self.dry:
                     r = subprocess.run([npm(), "install", "--omit=dev", "--no-audit", "--no-fund"], cwd=f"{APPS}/{name}", capture_output=True, text=True, env={**os.environ, "PATH": os.path.dirname(npm()) + ":" + os.environ.get("PATH", "")})
                     if r.returncode: self.warn.append(f"npm install failed in {APPS}/{name}: {r.stderr.strip()[-300:]}"); continue
                 self.say(f"{name}: dependencies installed")
     def tools(self):
-        n = self.tree(f"{REPO}/bin", BIN, mode=0o755, backup=True)
+        n = self.tree(f"{REPO}/bin", BIN, mode=0o755)
         self.say(f"tools: {n} file(s) written to {BIN}")
         for link, target in (("hc", herdr_core()), ("herdr-app", herdr_app())):
             dst = f"{BIN}/{link}"
@@ -117,8 +195,6 @@ class Run:
                 t["owner"] = c["owner"]
                 if c.get("jira") and c["jira"].get("site"): t["jira"] = {"keychainService": "herdr-jira", **c["jira"]}
                 if kind == "dev" and c.get("projects"): t["projects"] = c["projects"]
-                if kind == "biz": t["gmailAccount"] = c.get("gmailAccount") or ""
-                if kind == "biz" and c.get("mailRound"): t["mailRound"] = c["mailRound"]
                 for p in t["personas"]:
                     want = (c.get("assign") or {}).get(p["herdrName"]) or ("claude" if "claude" in have else have[0])
                     p["runtime"] = want if want in have else have[0]
@@ -127,16 +203,17 @@ class Run:
             else: self.say(f"{d}/team.json exists: kept as it is")
             for f in ("PROTOCOL.md", "HANDBOOK.md"):
                 if os.path.exists(f"{src}/{f}") and self.put(f"{src}/{f}", f"{d}/{f}", keep_existing=True): self.say(f"{d}/{f} written")
-            self.carry_section(f"{src}/PROTOCOL.md", f"{d}/PROTOCOL.md", "## Names outside the office", "the rule that nothing outside the office names the team")
-            self.carry_section(f"{src}/PROTOCOL.md", f"{d}/PROTOCOL.md", "## Commands for ")
+            self.carry_sections(f"{src}/PROTOCOL.md", f"{d}/PROTOCOL.md", SECTIONS)
             for p in json.load(open(f"{src}/team.json"))["personas"]:
                 m = f"{d}/memory/{p['slug']}.md"
-                if not os.path.exists(m) and not self.dry: open(m, "w").write(f"# {p['name']}: memory\n\nNotes that must survive between sessions. Newest first.\n")
+                if not os.path.exists(m) and not self.dry: open(m, "w").write(MEMORY.format(name=p["name"]))
+        for f in teamlib.floors():   # the other floors' protocols (CRM, Web, Lab...) get the same sections, with the same yes
+            if f["path"] not in TEAMS.values(): self.carry_sections(f"{REPO}/teams/dev/PROTOCOL.md", f"{f['path']}/PROTOCOL.md", SECTIONS)
         shared = TEAMS["dev"]
         for f, body in (("requests.json", {"next": 1, "items": []}),):
             if not os.path.exists(f"{shared}/{f}") and not self.dry: json.dump(body, open(f"{shared}/{f}", "w"))
-        sig = f"{TEAMS['biz']}/signature.json"
-        if not os.path.exists(sig):
+        sig = f"{BIZ}/signature.json"   # only where the retired Business floor's folder still exists (its mail tools read it)
+        if os.path.isdir(BIZ) and not os.path.exists(sig):
             s = c.get("signature") or {}
             body = {"_about": "The owner's email signature as the business team writes it. In emails prepared from this app the links are joined by appSeparator; the signature the owner types uses ownSeparator, so app emails are recognisable at a glance.",
                     "name": s.get("name") or c["owner"].get("fullName") or c["owner"]["name"], "title": s.get("title") or "", "links": s.get("links") or [], "appSeparator": "  ", "ownSeparator": " | "}
@@ -149,17 +226,17 @@ class Run:
     def people(self):
         n = 0
         for kind in TEAMS:
-            for f in glob.glob(f"{REPO}/teams/{kind}/agents/*.md"): n += self.put(f, f"{HOME}/.claude/agents/{os.path.basename(f)}", backup=True)
+            for f in glob.glob(f"{REPO}/teams/{kind}/agents/*.md"): n += self.put(f, f"{HOME}/.claude/agents/{os.path.basename(f)}")
         self.say(f"role instructions: {n} file(s) written to ~/.claude/agents (Codex people are sent the same text)")
     def skills(self):
         have = self.cfg.get("runtimes") or ["claude"]
         dests = [f"{HOME}/.claude/skills"] + ([f"{HOME}/.codex/skills", f"{HOME}/.agents/skills"] if "codex" in have else [])
         for d in dests:
-            n = self.tree(f"{REPO}/skills", d, backup=True)
+            n = self.tree(f"{REPO}/skills", d)
             self.say(f"skills: {n} file(s) written to {d}")
     def herdr(self):
         if not os.path.isdir(HERDR): self.warn.append("Herdr has not been opened yet on this Mac (no ~/.config/herdr-app): open it once, then run the installer again to add the panels"); return
-        n = self.tree(f"{REPO}/herdr/mods", f"{HERDR}/mods", backup=True) + self.tree(f"{REPO}/herdr/layouts", f"{HERDR}/layouts", backup=True)
+        n = self.tree(f"{REPO}/herdr/mods", f"{HERDR}/mods") + self.tree(f"{REPO}/herdr/layouts", f"{HERDR}/layouts")
         self.say(f"Herdr panels and layout: {n} file(s) written")
     def services(self):
         nd = node()
@@ -175,8 +252,11 @@ class Run:
                 # after a reboot: floors, watchdog, and the people who were running, each back in their own conversation
                 ("com.omniloy.office-up", ["/usr/bin/python3", f"{BIN}/office-up", "--wait", "600"], HOME, f"{TEAMS['dev']}/logs/office-up.log", False),
                 # other buildings: one link per computer to the offices on Herdr's other machines (idle when there are none)
-                ("com.omniloy.peer-link", [nd, f"{APPS}/team-office/peer-link.mjs"], f"{APPS}/team-office", f"{TEAMS['dev']}/logs/peer-link.log", True)]
-        if self.cfg.get("mailRound"): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{TEAMS['biz']}/mail-round.log", False))
+                ("com.omniloy.peer-link", [nd, f"{APPS}/team-office/peer-link.mjs"], f"{APPS}/team-office", f"{TEAMS['dev']}/logs/peer-link.log", True),
+                # the watchdog (team-watch run): nudges, the outbox of messages held for busy people, the memory check.
+                # Kept alive; a second copy (an old "watchdog" terminal) just waits for this one's lock.
+                ("com.omniloy.watchdog", ["/usr/bin/python3", f"{BIN}/team-watch", "run"], TEAMS["dev"], f"{TEAMS['dev']}/logs/watchdog.log", True)]
+        if self.cfg.get("mailRound") and os.path.isdir(BIZ): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{BIZ}/mail-round.log", False))
         if not self.dry and os.path.exists(f"{LA}/com.omniloy.offices.plist"):  # replaced by com.omniloy.office-up
             subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.omniloy.offices"], capture_output=True); os.remove(f"{LA}/com.omniloy.offices.plist")
         for label, args, cwd, log, keep in jobs:
@@ -201,6 +281,10 @@ class Run:
         if self.dry: return
         os.makedirs(APPS, exist_ok=True)
         json.dump({**self.cfg, "repo": REPO, "installed": datetime.datetime.now().isoformat(timespec="seconds")}, open(f"{APPS}/install.json", "w"), indent=2, ensure_ascii=False)
+        # what this install wrote (or found already equal): the next one replaces only files still like this
+        files = {**self.manifest, **self.wrote}
+        tmp = f"{MANIFEST}.tmp"; json.dump({"updated": STAMP, "repo": REPO, "files": files}, open(tmp, "w"), indent=1); os.replace(tmp, MANIFEST)
+        if self.backed: self.say(f"{self.backed} replaced file(s) backed up in {BACKUPS}")
 
 def check():
     """What is installed and whether it answers. Prints one line per item; exit code 1 when something needed is missing."""
@@ -215,8 +299,9 @@ def check():
     line(bool(herdr_core()), "herdr-core (hc)", herdr_core() or "installed by Herdr on first start")
     cl, cx = which("claude"), which("codex")
     line(bool(cl or cx), "an agent CLI", ", ".join(x for x in (cl and "claude", cx and "codex") if x) or "install Claude Code or Codex")
-    for name in ("team-office", "biz-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
-    for t in ("team-ask", "team-card", "team-person", "team-peer", "omniloy-team", "office-restart", "office-up", "team-artifact", "team-memory", "team-names"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
+    for name in ("team-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
+    for t in ("team-ask", "team-card", "team-person", "team-peer", "team-deliver", "team-watch", "omniloy-team", "office-restart", "office-up", "team-artifact", "team-memory", "team-names"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
+    line(os.path.exists(f"{BIN}/teamlib.py"), "tool library teamlib.py (the team-* tools import it)")
     for kind, d in TEAMS.items(): line(os.path.exists(f"{d}/team.json"), f"team folder {d}")
     line(os.path.isdir(f"{HERDR}/mods/team-requests"), "Herdr panels")
     try: on = subprocess.run(["/usr/bin/python3", f"{BIN}/team-names", "status"], capture_output=True, text=True).stdout
@@ -225,8 +310,13 @@ def check():
     def up(port, path="/health"):
         try: return urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=4).status == 200
         except Exception: return False
-    line(up(4317), "Dev floor answers on 4317", "" if up(4317) else "office-restart all")
-    for port, name in ((4319, "CRM"), (4320, "Web"), (4321, "Lab")): opt(up(port), f"{name} floor answers on {port}")  # Business (4318) is retired
+    fl = teamlib.floors()   # floors.json, else Dev, CRM, Web, Lab (Business is retired)
+    for i, f in enumerate(fl):
+        has = os.path.exists(f"{f['path']}/team.json")
+        (line if i == 0 else opt)(up(f["port"]), f"{f['name']} floor answers on {f['port']}", "" if up(f["port"]) else ("office-restart all" if has else f"no team folder {f['path']}"))
+    try: w = json.load(open(f"{TEAMS['dev']}/watch.json")); ago = __import__("time").time() - w.get("checkedAt", 0) / 1000
+    except Exception: ago = 1e9
+    line(ago < 300, "watchdog runs (team-watch: nudges, held messages, memory check)", "" if ago < 300 else f"launchctl kickstart gui/{os.getuid()}/com.omniloy.watchdog (log: ~/.omniloy-team/logs/watchdog.log)")
     line(up(4340, "/"), "artifacts server answers on 4340")
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
@@ -247,6 +337,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config"); ap.add_argument("--dry-run", action="store_true"); ap.add_argument("--check", action="store_true")
     ap.add_argument("--no-services", action="store_true", help="do not install the background services (for tests)")
+    ap.add_argument("--force", action="store_true", help="also replace live files edited since the last install (backed up first)")
+    ap.add_argument("--protocol-sections", action="store_true", help="apply the protocol sections that follow the repo without asking")
     a = ap.parse_args()
     if a.check: sys.exit(check())
     if not a.config: ap.error("--config is required (see setup/office.config.example.json)")
@@ -256,11 +348,13 @@ def main():
     if o["id"] in RESERVED: sys.exit(f'config: owner id "{o["id"]}" is the name of someone on the team; pick another (for example add a surname initial)')
     bad = [r for r in cfg.get("runtimes") or [] if r not in ("claude", "codex")]
     if bad or not cfg.get("runtimes"): sys.exit('config: runtimes must list what is installed: ["claude"], ["codex"] or ["claude", "codex"]')
-    r = Run(cfg, a.dry_run)
+    r = Run(cfg, a.dry_run, force=a.force, sections=a.protocol_sections)
     r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
     if not a.no_services: r.services()
     r.record()
     for w in r.warn: print("NOTE: " + w)
+    drift = r.report_drift()
     print("\nNext: python3 setup/install.py --check   (then continue with setup/SETUP.md)")
+    sys.exit(drift)
 
 if __name__ == "__main__": main()

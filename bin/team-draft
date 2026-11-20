@@ -32,6 +32,8 @@ __OWNER__ (the Drafts panel calls these; agents never do):
   team-draft ask <id> "question"                            goes to the author's terminal; the answer comes back with `note`
 """
 import sys, os, json, fcntl, subprocess, datetime, urllib.parse, re
+sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import teamlib as L
 D = os.path.expanduser("~/.omniloy-biz"); F = D + "/drafts.json"; HC = os.path.expanduser("~/.local/bin/hc")
 CHANNELS = ("gmail", "whatsapp", "slack", "calendar")
 CAL = os.path.expanduser("~/.local/bin/team-cal")
@@ -65,9 +67,7 @@ def tidy(x):
     else: x["to"] = ", ".join(x["guests"]) or "your calendar only, nobody is invited"
     return x
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
-def load():
-    try: return json.load(open(F))
-    except Exception: return {"next": 1, "drafts": []}
+def load(): return L.load(F, None) or {"next": 1, "drafts": []}   # unreadable: stop, never write an empty list over it
 def save(d):
     tmp = F + ".tmp"; json.dump(d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, F)
 def opts(args):
@@ -128,7 +128,7 @@ def push(x):
     ok, out = gmail("update", x["draftId"], tmpfile(x["body"]), x.get("subject") or "")
     return ok, out
 def nudge(who, msg):
-    if who in people(): subprocess.run([HC, "send", who, msg], capture_output=True, timeout=20)
+    if who in people(): L.deliver(who, msg, "team-draft")
 def line(x):
     flag = "" if x.get("synced", True) else "  [edited by __OWNER__, external draft not updated yet]"
     q = sum(1 for t in x.get("talk", []) if t["who"] == "__OWNER_ID__" and not t.get("answered"))
