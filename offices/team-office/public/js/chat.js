@@ -148,6 +148,7 @@ html:not(.phone).chat-person #panel { visibility: hidden; pointer-events: none; 
 #chat .log .m.you { max-width: 82%; margin-top: 16px; } #chat .log .m.you + .m.you { margin-top: 6px; } #chat .log .m.you + :not(.you) { margin-top: 16px; }
 #chat .log .m.them, #chat .log .st, #chat .log .typing { position: relative; align-self: stretch; max-width: none; box-sizing: border-box; }
 #chat .log .m.them { background: none; border-radius: 0; padding: 0 2px 0 22px; line-height: 1.55; }
+#chat .log .m.them.new { animation: chatIn .25s ease-out; } @keyframes chatIn { from { opacity: 0; transform: translateY(4px); } } @media (prefers-reduced-motion: reduce) { #chat .log .m.them.new { animation: none; } }
 #chat .log .st { padding: 0 2px 0 22px; font: 11.5px/1.5 ui-monospace, Menlo, monospace; letter-spacing: .01em; }
 #chat .log .typing { padding: 0 2px 0 22px; align-items: flex-start; }
 #chat .log .m.them::before, #chat .log .st::before, #chat .log .typing::before { content: ''; position: absolute; left: 5px; top: 0; bottom: 0; width: 2px; border-radius: 2px; background: color-mix(in srgb, var(--wc, #8e9bff) 42%, transparent); }
@@ -267,7 +268,7 @@ body.embed #chat { display: none !important; }`;
     const el = document.createElement('div'); el.className = `m ${m.role}`;
     el.innerHTML = m.role === 'peer' ? `<b style="color:${esc(m.color)}">${esc(m.from)}</b>${esc(m.text.length > 600 ? `${m.text.slice(0, 600)}…` : m.text)}` : m.role === 'them' ? rich(m.text) : `${m.spoken ? '🎙 ' : ''}${shots(esc(m.text))}`;
     log.append(el);
-    if (live && m.role === 'them' && m.text.length > 40) reveal(el, m.text);
+    if (live && m.role === 'them') el.classList.add('new'); // arrives whole (the log holds finished paragraphs): a short fade, no typing out
     if (!wk) for (const x of pending) log.append(x.el); // what has not arrived yet stays last
   }
   async function poll(me) {
@@ -361,19 +362,6 @@ body.embed #chat { display: none !important; }`;
   wkBar.onclick = () => (workers.length === 1 ? setWorker(workers[0].id) : setWorker('', true));
   wkHead.onclick = () => (wk && workers.length > 1 ? setWorker('', true) : setWorker(''));
   wkList.onclick = (e) => { const b = e.target.closest('[data-w]'); if (b) setWorker(b.dataset.w); };
-  // new text is written out instead of dropping in whole (the session log only holds finished paragraphs, so this is
-  // the closest to seeing them write)
-  function reveal(el, text) {
-    const t0 = performance.now(), dur = Math.min(1500, 200 + text.length * 3); let last = 0;
-    const step = (t) => {
-      if (!el.isConnected) return;
-      const k = (t - t0) / dur;
-      if (k >= 1) { el.innerHTML = rich(text); if (near()) log.scrollTop = log.scrollHeight; return; }
-      if (t - last > 45) { last = t; const stick = near(); let n = text.lastIndexOf(' ', Math.floor(text.length * k)); if (n < 0) n = 0; let part = text.slice(0, n); const o = part.lastIndexOf('['); if (o >= 0 && !/^\[[^\]]*\]\([^)]*\)/.test(part.slice(o)) && /^\[[^\]\n]*\]\(/.test(text.slice(o))) part = part.slice(0, o); /* a link appears whole, never as half-written markup */ el.innerHTML = rich(part); if (stick) log.scrollTop = log.scrollHeight; }
-      requestAnimationFrame(step);
-    };
-    el.textContent = ''; requestAnimationFrame(step);
-  }
   async function loadWorkers() { // everyone on the floor: the room shows each helper as a tiny copy of the person
     const o = office(); if (!o.world || !o.world.setWorkers || !o.agents || document.hidden) return;
     let r; try { r = await api('/api/workers'); } catch { return; }
