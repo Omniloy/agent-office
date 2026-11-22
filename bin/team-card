@@ -89,11 +89,12 @@ elif cmd == "log":
     except FileNotFoundError: pass
 elif cmd == "take":
     me = who(o, owner=True); key = key_ok(pos[0])
+    by = who(o, "by", owner=True) if o.get("by") else me   # --by: the lead or __OWNER__ giving the card to someone (team-temp)
     with Box() as d:
         prev = d.get(key, {})
-        may({**prev, "key": key}, me, "take")   # a card someone else holds is taken only by them, their lead or __OWNER__
+        may({**prev, "key": key}, by, "take")   # a card someone else holds is taken only by them, their lead or __OWNER__
         d[key] = {"owner": me, "team": (NAMES.get(me) or {}).get("team") or prev.get("team", ""), "since": now(), "title": " ".join(pos[1:]) or prev.get("title", ""), "waiting": None}
-    log(key, "take", by=me, prev=prev.get("owner", "")); print(f"{key} is yours.")
+    log(key, "take", by=by, to=me, prev=prev.get("owner", "")); print(f"{key} is yours." if by == me else f"{key} is {me}'s now.")
 elif cmd == "pass":
     if len(pos) < 3: sys.exit('usage: team-card pass KEY <to> --from <you> "what you need from them"')
     me = who(o, "from", owner=True); key, to, msg = key_ok(pos[0]), pos[1], " ".join(pos[2:])

@@ -83,6 +83,8 @@ await test('connected: an answer only to an open request that went to that build
   assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 403, 'forwarded to another building');
   peers('on', { home: 'aaaa1111', sent: { 1: 'aaaa1111' } });
   assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 200);
+  peers('on', { home: 'bbbb2222', sent: { 1: 'aaaa1111' } });
+  assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 200, 'home changed after it was forwarded');
 });
 await test('an answer for one of our people or for the owner: only against a message that went to that building', async () => {
   peers('on');

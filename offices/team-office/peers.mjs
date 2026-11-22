@@ -174,13 +174,14 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
       return { ...x, name: m ? `${m[1]} ${m[2]}` : (a.name || x.from).split(' ')[0], color: a.color || '#888' };
     });
   }
-  // An answer from a building must fit what went there: a request of ours to the owner (team-ask forwards those only to
-  // the "home" building, team-peer forward) that is still open, or a message from one of our people on a floor
+  // An answer from a building must fit what went there: a request of ours to the owner that was forwarded to that
+  // building (team-peer forward, to whatever was the home building then) and is still open, or a message from one of our people on a floor
   // that is switched on for that building.
   async function answerFits(peer, b) {
     const ref = (b && b.ref) || {}, d = await peersFile();
     if (ref.local) {
-      if (d.home !== peer.id || (d.sent || {})[String(Number(ref.local))] !== peer.id) return 'that request was not sent to your building'; // team-peer forward records where each one went
+      // team-peer forward records where each one went: that record decides, even if the owner's home building changed since
+      if ((d.sent || {})[String(Number(ref.local))] !== peer.id) return 'that request was not sent to your building';
       const x = ((await readJson(path.join(SHARED, 'requests.json'), { items: [] })).items || []).find((y) => String(y.id) === String(Number(ref.local)));
       if (!x || x.ext || x.status !== 'open' || (x.to || '__OWNER_ID__') !== '__OWNER_ID__') return 'there is no open request with that number for your building';
       return '';

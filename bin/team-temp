@@ -150,7 +150,11 @@ elif cmd == "hire":
     if res.returncode != 0: sys.exit("could not start the temp: " + res.stderr.strip()[:300])
     cur.append(x); save(d, cur)
     time.sleep(2); sh("herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": f"{first} {n} · temp"}))
-    sh(f"{HOME}/.local/bin/team-card", "take", o["ticket"], "--as", name)   # the card is the temp's to move
+    tc = sh(f"{HOME}/.local/bin/team-card", "take", o["ticket"], "--as", name, "--by", lead)   # the card is the temp's to move, given by the lead
+    if tc.returncode:   # the temp cannot work a card it does not hold: undo the hire instead of leaving it half done
+        sh(HC, "kill", name); sh(HC, "rm", name)
+        save(d, [y for y in temps(d) if y["herdrName"] != name])   # still under the hire's lock
+        sys.exit(f"not hired: {o['ticket']} could not be given to {name} ({(tc.stderr or tc.stdout).strip()[:200]})")
     tell(who, f"FYI from {lead}: {o['ticket']} is being done by a temp copy of you, `{name}`. Leave that card alone unless {lead} says otherwise; if `{name}` asks you something, answer briefly.")
     print(f"hired {name} (copy of {who}) for {o['ticket']}. Talk to it with: hc send {name} -- \"...\". Let it go with: team-temp release {name} --as {lead}")
 
@@ -181,7 +185,9 @@ elif cmd == "release":
     x["handover"] = short(hpath(d, x))
     tell(x["of"], f'Your temp {x["herdrName"]} has finished {x.get("ticket")} and is leaving. Its handover is at {x["handover"]}: read it now and copy into your memory file what you will need later (what it created, where credentials are kept, what is left). The card is yours again.')
     held = json.loads(sh(f"{HOME}/.local/bin/team-card", "ls", "--owner", x["herdrName"], "--json").stdout or "{}")
-    for k in held: sh(f"{HOME}/.local/bin/team-card", "take", k, "--as", x["of"])   # anything the temp still held goes back to the owner
+    for k in held:   # anything the temp still held goes back to whoever it is a copy of; the temp does not leave holding cards
+        tc = sh(f"{HOME}/.local/bin/team-card", "take", k, "--as", x["of"], "--by", o["as"])
+        if tc.returncode: sys.exit(f'not released: {k} could not go back to {x["of"]} ({(tc.stderr or tc.stdout).strip()[:200]}). Move it with team-card, then run this again.')
     k = sh(HC, "kill", x["herdrName"]); time.sleep(1)
     if k.returncode != 0 and still_live(x["herdrName"]):   # its session did not end: it stays listed, marked leaving
         lock = locked(d); cur = temps(d)
