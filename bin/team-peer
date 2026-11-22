@@ -194,12 +194,14 @@ elif c == "forward":   # called by team-ask for a request or note to the owner; 
     if not p: sys.exit(0)
     if p.get("status") != "on": sys.exit(f'not sent to {p["name"]} ({status_line(p)}): it waits here until the owner looks in this building')
     port, fl, me_p = person(x["from"])
+    with Box() as d:   # what went where, written BEFORE it goes: only that building may answer it (peers.mjs answerFits)
+        sent = d.setdefault("sent", {}); sent[str(x["id"])] = p["id"]
+        while len(sent) > 500: sent.pop(next(iter(sent)))
     r = call(p["id"], "/peer/message", {"to": "owner", "text": x["title"], "body": x.get("body", ""), "options": x.get("options") or [], "note": x.get("kind") == "note",
                                         "agent": x["from"], "name": str(x.get("name") or x["from"]).split(" ")[0], "building": me["name"], "fromFloor": fl["name"] if fl else "", "fromPort": int(port) if port else 0, "local": x["id"]})
-    if r.get("ok"):   # what went where: only that building may answer this request (peers.mjs answerFits)
+    if not r.get("ok") and not r.get("unreached"):   # refused there: no answer can come from there (unreached: it may have arrived)
         with Box() as d:
-            sent = d.setdefault("sent", {}); sent[str(x["id"])] = p["id"]
-            while len(sent) > 500: sent.pop(next(iter(sent)))
+            if (d.get("sent") or {}).get(str(x["id"])) == p["id"]: d["sent"].pop(str(x["id"]))
     err = str(r.get("error", "no answer"))
     try: err = json.loads(err).get("error", err)
     except Exception: pass
@@ -215,10 +217,13 @@ elif c == "send":
     q = pos[1].lower(); tf = [f for f in floors_of(p["id"]) if str(f["port"]) == q or f["name"].lower().startswith(q)]
     if len(tf) != 1: sys.exit("which floor? " + ", ".join(f'{f["port"]} {f["name"]}' for f in floors_of(p["id"])))
     tf = tf[0]; text = pos[2].strip()
+    with Box() as d: asked_add(d, p["id"], who)   # its answer is taken only against this: written before it goes
     r = call(p["id"], "/peer/message", {"floor": tf["port"], "text": text, "agent": who, "name": me_p["name"].split(" ")[0], "color": me_p.get("color", "#888"),
                                         "fromFloor": fl["name"], "fromPort": int(port), "building": me["name"]}, floor=tf["port"])
-    if not r.get("ok"): sys.exit("not delivered: " + str(r.get("error", "no answer")))
-    with Box() as d: asked_add(d, p["id"], who)   # its answer will be taken when it comes back
+    if not r.get("ok"):
+        if not r.get("unreached"):   # refused there; when the link failed it may still have arrived, so its answer stays welcome
+            with Box() as d: asked_take(d, p["id"], who)
+        sys.exit("not delivered: " + str(r.get("error", "no answer")))
     lead = (tf.get("lead") or {}).get("name", "the lead").split(" ")[0]
     visit({"kind": "out", "floor": int(port), "who": who, "label": f'At {p["name"]} · with {lead}', "text": text[:160], "until": int(time.time() * 1000) + 14000})
     print(f'left with {lead} ({p["name"]}, {tf["name"]}) as request #{r.get("id")}. Their answer will arrive in your terminal.')

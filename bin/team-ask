@@ -247,18 +247,32 @@ elif c in ("answer", "read", "cancel"):
             x["status"], x["answer"], x["answeredAt"] = "answered", pos[1].strip(), now()
             x["answeredBy"] = "__OWNER__" if me == OWNER else NAMES[me]["name"].split(" ")[0]
         else: x["status"] = "read" if c == "read" else "cancelled"; x["answeredAt"] = now(); x["by"] = me
-    if c in ("answer", "cancel") and x.get("ticket"):
-        subprocess.run([f"{L.BIN}/team-card", "resume", x["ticket"], "--req", str(x["id"])], capture_output=True)
-    if c == "answer" and x.get("ext"):   # asked from another building: the answer travels back there
-        r = subprocess.run([f"{L.BIN}/team-peer", "answered"], input=json.dumps(x), capture_output=True, text=True)
-        print("answered; " + (r.stdout.strip() or r.stderr.strip()[:200]))
+    def reopen(why):   # the answer could be neither typed in nor kept for later: the request is open again, nothing is lost
+        with Box() as b:
+            y = next((y for y in b["items"] if y["id"] == x["id"]), None)
+            if y is None:   # an answered request not for __OWNER__ goes to the archive at once: it comes back as open
+                y = dict(x); b["items"].append(y); b["items"].sort(key=lambda z: z["id"])
+            if y.get("status") == "answered" and y.get("answer") == x["answer"]:
+                y["status"] = "open"
+                for k in ("answer", "answeredAt", "answeredBy"): y.pop(k, None)
+        sys.exit(f'#{x["id"]} is still open: the answer could not be delivered or kept ({why}). Try again in a moment.')
+    out = "ok"
+    if c == "answer" and x.get("ext"):   # asked from another building: the answer travels back there (team-peer keeps it until it arrives)
+        try: r = subprocess.run([f"{L.BIN}/team-peer", "answered"], input=json.dumps(x), capture_output=True, text=True, timeout=120)
+        except Exception as e: reopen(type(e).__name__)
+        if r.returncode: reopen((r.stderr or r.stdout).strip()[-200:] or f"team-peer exit {r.returncode}")
+        out = "answered; " + (r.stdout.strip() or r.stderr.strip()[:200])
     elif c == "answer":
         msg = f'{x["answeredBy"]} answered request #{x["id"]} ("{x["title"]}"' + (f', {x["ticket"]}' if x.get("ticket") else "") + f'): {x["answer"]}'
-        r = tell(x["from"], msg)
+        try: r = tell(x["from"], msg)   # typed in, or written to their outbox first (teamlib.deliver)
+        except Exception as e: reopen(f"{type(e).__name__}: {str(e)[:120]}")
         if x.get("via") and x["from"] != x["via"] and me == OWNER:
-            tell(x["via"], "FYI, " + msg + f' (asked by {x["from"]}, already told)')
-        print("answered; " + ("delivered to " + x["from"] if r == "delivered" else L.said(r, x["from"])))
-    else: print("ok")
+            try: tell(x["via"], "FYI, " + msg + f' (asked by {x["from"]}, already told)')
+            except Exception: pass   # a courtesy copy; the answer itself is safe
+        out = "answered; " + ("delivered to " + x["from"] if r == "delivered" else L.said(r, x["from"]))
+    if c in ("answer", "cancel") and x.get("ticket"):   # only once the answer is safe: the card stops waiting on it
+        subprocess.run([f"{L.BIN}/team-card", "resume", x["ticket"], "--req", str(x["id"])], capture_output=True)
+    print(out)
 elif c == "menu-log":   # a terminal menu (Claude/Codex permission prompt) __OWNER__ answered from the office: kept as an answered request
     who = d.get("from") or sys.exit("--from <agent> is required")
     if who not in NAMES: sys.exit(f"--from must be one of {sorted(NAMES)}")

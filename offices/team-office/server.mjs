@@ -906,6 +906,23 @@ async function liveMenu(name) {
   return r.ok ? { ok: true, menu: parsed ? menuInstance(t, parsed) : null, terminalId: terminalId(t) } : { ok: false, menu: null };
 }
 const menuAnswers = new Map();
+// Every floor server can answer any floor's menu (Dev lists them all), so the "one answer at a time" guard is also a
+// file shared by all of them: push/menu-answer/<name>.lock, made with O_EXCL. A lock of a server that is gone, or
+// older than 60 s (an answer takes ~4 s), is taken over.
+const MENU_LOCKS = path.join(SHARED, 'push', 'menu-answer');
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+async function menuLock(name) {
+  const f = path.join(MENU_LOCKS, `${name.replace(/[^\w.-]/g, '_')}.lock`), me = `${process.pid} ${Date.now()} ${crypto.randomBytes(4).toString('hex')}`;
+  await fs.mkdir(MENU_LOCKS, { recursive: true, mode: 0o700 }).catch(() => {});
+  for (let i = 0; i < 2; i++) {
+    try { await fs.writeFile(f, me, { flag: 'wx', mode: 0o600 }); return async () => { if ((await fs.readFile(f, 'utf8').catch(() => '')) === me) await fs.unlink(f).catch(() => {}); }; }
+    catch (e) { if (e.code !== 'EEXIST') return null; }
+    const [pid, ts] = (await fs.readFile(f, 'utf8').catch(() => '')).split(' ').map(Number);
+    if (pid && pidAlive(pid) && Date.now() - ts < 60_000) return null; // another floor is answering this person now
+    await fs.unlink(f).catch(() => {}); // left by a server that stopped: take it over
+  }
+  return null;
+}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Answer a terminal menu: press its digit once (never twice), then watch the screen for up to ~4 s. The menu gone,
 // or another one in its place (Claude often asks the next permission right away), is a success; only the same menu
@@ -914,6 +931,8 @@ async function answerMenu(body) {
   const id = String(body.id || ''), name = id.slice('menu:'.length);
   if (menuAnswers.has(name)) return { code: 409, body: { error: 'Another answer to this person is already on its way.' } };
   const lock = Symbol(name); menuAnswers.set(name, lock);
+  const unlock = await menuLock(name);
+  if (!unlock) { menuAnswers.delete(name); return { code: 409, body: { error: 'Another answer to this person is already on its way (from another floor).' } }; }
   try {
     const live = await liveMenu(name), menu = live.menu;
     if (!live.ok || !menu || menu.id !== String(body.menuId || '') || live.terminalId !== String(body.terminalId || '')) return { code: 409, body: { error: 'That question is no longer on the screen (already answered, or it changed).', stale: true } };
@@ -956,6 +975,7 @@ async function answerMenu(body) {
       next: next ? menuItem({ ...p, herdrName: name }, next, { said: a ? saidOf(a) : '', created: Date.now() }) : null } };
   } finally {
     if (menuAnswers.get(name) === lock) menuAnswers.delete(name);
+    await unlock();
   }
 }
 
