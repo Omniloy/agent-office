@@ -122,7 +122,11 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
         if (!share) return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s). ${owner} did not share it or what it printed (it may have been changed before running). If you need it, ask ${owner} with team-ask what you need to know from it.`);
         return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s): ${short}\n\nIt printed${out.length > 3500 ? ' (the last part; all of it: `team-term last`)' : ''}:\n${out ? out.slice(-3500) : '(nothing)'}\n\nDo not ask for the output to be pasted.`);
       }
-      if (!warned && age > 5 * 60000) { warned = true; tell(`${owner} ran the command you marked, in the office terminal on ${where}, ${Math.round(age / 60000)} minutes ago and it is still running (it may be waiting for input from ${owner}): ${short}\nYou will be told when it finishes. \`team-term last\` shows what it has printed so far.`); }
+      if (!warned && age > 5 * 60000) {
+        warned = true;
+        tell(share ? `${owner} ran the command you marked, in the office terminal on ${where}, ${Math.round(age / 60000)} minutes ago and it is still running (it may be waiting for input from ${owner}): ${short}\nYou will be told when it finishes. \`team-term last\` shows what it has printed so far.`
+          : `${owner} ran the command you marked, in the office terminal on ${where}, ${Math.round(age / 60000)} minutes ago and it is still running (it may be waiting for input from ${owner}). ${owner} did not share it; you will be told when it finishes.`);
+      }
       if (age < 2 * 3600000) setTimeout(tick, 500).unref();
       else { s.logging = false; s.done = true; } // two hours: stop logging and stop waiting
     };

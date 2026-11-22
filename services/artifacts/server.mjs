@@ -6,15 +6,20 @@
 // ~/.omniloy-team/remote.json get in from there, the same door as the offices.
 // Pages are written by agents and often hold health data, so:
 //   - every answer carries a Content-Security-Policy: a page runs its own inline code but cannot load anything from
-//     the internet nor send anything there (connect-src 'self', no external scripts, images or forms);
+//     the internet nor fetch or post to it (connect-src 'self', no external scripts, images or forms; see the limit below);
 //   - and it is sandboxed (CSP `sandbox` without allow-same-origin): each page runs in an origin of its own, so its
 //     scripts cannot read the index, the list or any other page here (they are all on this one origin), nor storage
 //     or cookies. A page still loads its own files with <script src>, <img>, <link> (no fetch of them: no CORS here);
 //   - .md is rendered as plain Markdown (nothing runs); .mdx, which is a program, is rendered in a separate Node
-//     process that may read only this app and the document's folder, with no environment and a 10 s limit (render-mdx.mjs).
+//     process that may read only this app and the document's folder, with no network (macOS sandbox), no environment
+//     and a 10 s limit (render-mdx.mjs).
+// What this does NOT stop: a page's own script can still navigate its own tab (or open a window) to an outside
+// address carrying what the page itself shows. Browsers offer no switch against that short of turning scripts off.
+// It only ever reaches what its author put in the page: the author is an agent of this office, which already has
+// that data and its own network access, so it is not a door for them; and the page cannot read anything else here.
 import http from 'node:http';
 import fs from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { realpathSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
@@ -75,10 +80,14 @@ ${extra}</style></head><body><main>${body}</main></body></html>`;
 
 // .mdx in its own process (see the top of this file); the same document is rendered once per change
 const mdxCache = new Map(); // file -> { key, out }
+// Node 22's permission model does not cover the network, so the renderer also runs inside macOS's sandbox with every
+// network access denied (sandbox-exec). Where that is not available, .mdx is not run: its source is shown instead.
+const SANDBOX = '/usr/bin/sandbox-exec', NO_NET = '(version 1)(allow default)(deny network*)';
 function renderMdx(file) {
   return new Promise((resolve) => {
-    const args = ['--permission', ...READ, `--allow-fs-read=${path.dirname(file)}${path.sep}`, path.join(APP, 'render-mdx.mjs'), file];
-    execFile(process.execPath, args, { cwd: APP, env: {}, timeout: 10_000, maxBuffer: 8e6, killSignal: 'SIGKILL' }, (err, stdout) => {
+    if (!existsSync(SANDBOX)) return resolve({ error: 'this computer cannot run documents without network access (no sandbox-exec), so the .mdx is shown as text' });
+    const args = ['-p', NO_NET, process.execPath, '--permission', ...READ, `--allow-fs-read=${path.dirname(file)}${path.sep}`, path.join(APP, 'render-mdx.mjs'), file];
+    execFile(SANDBOX, args, { cwd: APP, env: {}, timeout: 10_000, maxBuffer: 8e6, killSignal: 'SIGKILL' }, (err, stdout) => {
       let d = null; try { d = JSON.parse(String(stdout)); } catch { /* killed or crashed */ }
       resolve(d || { error: err && err.killed ? 'it took longer than 10 seconds' : 'it stopped before finishing' });
     });
