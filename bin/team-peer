@@ -280,9 +280,10 @@ elif c == "incoming":   # called by the office server for what arrives from anot
         ref = b.get("ref") or {}; who = b.get("lead") or "The lead"; nm = (load(F, {}).get("peers", {}).get(pid) or {}).get("name", "the other building")
         if ref.get("local"):   # it was a request to the owner opened here: closing it tells the agent and frees their card
             r = ask("answer", str(int(ref["local"])), str(b.get("text", "")), "--as", "__OWNER_ID__")
-            if r.returncode == 0:
-                with Box() as d: (d.get("sent") or {}).pop(str(int(ref["local"])), None)
-            print(json.dumps({"ok": r.returncode == 0, **({} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[:200]})})); sys.exit()
+            if r.returncode:   # not saved here: plain text, so the other building keeps the answer and tries again (503)
+                sys.exit("could not save the answer now: " + ((r.stderr or r.stdout).strip()[:200] or f"team-ask exit {r.returncode}"))
+            with Box() as d: (d.get("sent") or {}).pop(str(int(ref["local"])), None)
+            print(json.dumps({"ok": True})); sys.exit()
         ag = str(ref.get("agent") or "")
         with Box() as d: fits = asked_take(d, pid, ag)
         if not fits: sys.exit(json.dumps({"error": "nothing from here is waiting for an answer from your building"}))
@@ -298,9 +299,11 @@ elif c == "incoming":   # called by the office server for what arrives from anot
             sys.exit(f"could not take the answer now ({type(e).__name__}: {str(e)[:160]}); try again later")   # plain text: a 503 for the sender
         print(json.dumps({"ok": True}))
     else: sys.exit(json.dumps({"error": "unknown"}))
-elif c == "asked":   # called by peer-link when the owner, visiting that building, left a message there
+elif c == "asked":   # called by peer-link before the owner's message to a visited building goes out (--undo: it did not)
     with Box() as d:
-        if pos and pos[0] in d["peers"]: asked_add(d, pos[0], "")
+        if not pos or pos[0] not in d["peers"]: sys.exit("unknown building")
+        if o.get("undo"): asked_take(d, pos[0], "")
+        else: asked_add(d, pos[0], "")
 elif c == "answered":   # called by team-ask when one of ours answers an external request; JSON of the item on stdin
     x = json.load(sys.stdin); e = x.get("ext") or {}
     if e.get("connect"):
