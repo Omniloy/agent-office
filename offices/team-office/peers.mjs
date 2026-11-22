@@ -41,7 +41,11 @@ const readBody = (req, max = 60_000) => new Promise((resolve) => { let s = '', n
 const tool = (name, args, input) => new Promise((resolve) => {
   const c = execFile(path.join(BIN, name), args, { timeout: 30_000, maxBuffer: 4e6, env: { ...process.env, PATH: `${BIN}:${process.env.PATH || ''}` } }, (err, stdout, stderr) => {
     let d = null; try { d = JSON.parse(String(stdout).trim().split('\n').pop()); } catch { /* plain text */ }
-    resolve({ ok: !err, out: String(stdout).trim(), err: String(stderr).trim(), json: d });
+    // a refusal is the tool's own JSON {error} (on stdout, or on stderr through sys.exit); a timeout, a crash or anything
+    // else is a failure here that the other building may try again later (503), not an answer
+    let e = null; if (err) { try { e = JSON.parse(String(stderr).trim().split('\n').pop()); } catch { /* not a refusal */ } }
+    const refused = !!err && !err.killed && !err.signal && ((d && d.error) || (e && e.error));
+    resolve({ ok: !err, out: String(stdout).trim(), err: String(stderr).trim(), json: d || e, retry: !!err && !refused });
   });
   if (input !== undefined) c.stdin.end(typeof input === 'string' ? input : JSON.stringify(input)); else c.stdin.end();
 });
@@ -226,6 +230,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
         if (kind === 'answer') { const why = await answerFits(peer, b); if (why) return json(res, 403, { error: why }); }
         if (kind === 'answer' && typeof b.text === 'string') b.text = argText(b.text.trim());
         const r = await tool('team-peer', ['incoming', kind], { ...b, peer: peer.id });
+        if (r.retry) return json(res, 503, { error: 'this building could not take it right now; try again later' });
         return json(res, r.ok ? 200 : 400, r.json || (r.ok ? { ok: true } : { error: r.err || r.out || 'refused' }));
       }
       // -- the page, for a person looking in from another building

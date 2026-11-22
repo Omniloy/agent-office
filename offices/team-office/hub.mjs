@@ -339,9 +339,10 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
     try {
       await writeLocal();
       const items = await attention(), keyOf = (x) => x.push || x.id;
-      if (!known) { // only what arrives from now on, plus what an office left half-sent
+      if (!known) { // only what arrives from now on, plus what an office left half-sent: a pending claim (it may be
+        // this office's own, from just before a restart) is watched until it is sent or goes stale, then sent from here
         known = new Set();
-        for (const x of items) if ((await claimState(claimOf(keyOf(x)))) !== 'stale') known.add(keyOf(x));
+        for (const x of items) if (!['stale', 'pending'].includes(await claimState(claimOf(keyOf(x))))) known.add(keyOf(x));
         return;
       }
       for (const x of items) {

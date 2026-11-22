@@ -16,6 +16,8 @@ tar -C ~ -czf "$B/team-config.tgz" $(cd ~ && ls .omniloy-{team,crm,web,lab,admin
 # there now and puts back the ones that existed (a link stays a link), so something new the install made goes away too.
 : > "$B/paths.txt"
 for p in "$HOME/.omniloy-team/remote.json"; do echo "$p" >> "$B/paths.txt"; done
+for t in team crm web lab admin; do for f in PROTOCOL.md HANDBOOK.md; do for x in new proposed; do   # proposals left next to them
+  echo "$HOME/.omniloy-$t/$f.$x" >> "$B/paths.txt"; done; done; done
 for n in $(ls "$REPO/skills"); do
   for d in "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.codex/skills" ${SK:+"$SK"}; do echo "$d/$n" >> "$B/paths.txt"; done
 done
@@ -32,6 +34,7 @@ for app in team-office artifacts; do   # the apps as the install left them, set 
   mv ~/.omniloy-office/$app ~/.omniloy-office/$app.failed-$T; mkdir ~/.omniloy-office/$app
   mv ~/.omniloy-office/$app.failed-$T/node_modules ~/.omniloy-office/$app/ 2>/dev/null || true
 done
+rm -f ~/.omniloy-office/installed.json   # the install's record goes back to the one in the copy (or none, if it had none)
 tar -C ~ -xzf "$B/omniloy-office.tgz"
 rm -rf ~/.local/bin.rollback && mv ~/.local/bin ~/.local/bin.rollback && tar -C ~ -xzf "$B/local-bin.tgz"
 for x in hc herdr-app; do [ -e ~/.local/bin/$x ] || { [ -e ~/.local/bin.rollback/$x ] && cp -P ~/.local/bin.rollback/$x ~/.local/bin/; }; done
@@ -39,7 +42,6 @@ tar -C ~ -xzf "$B/herdr-app.tgz"; tar -C ~ -xzf "$B/claude-agents.tgz"; tar -C ~
 A="$B/set-aside-$(date +%H%M%S)"   # the skills and the phone door as the install left them, moved out of the way
 while IFS= read -r p; do if [ -e "$p" ] || [ -L "$p" ]; then mkdir -p "$A$(dirname "$p")"; mv "$p" "$A$p"; fi; done < "$B/paths.txt"
 tar -C / -xzf "$B/paths.tgz"
-rm -f ~/.omniloy-office/installed.json
 for l in watchdog office-up; do
   if [ -e ~/Library/LaunchAgents/com.omniloy.$l.plist ] && ! tar -tzf "$B/launchagents.tgz" | grep -q "com.omniloy.$l.plist"; then
     launchctl bootout gui/$U/com.omniloy.$l 2>/dev/null || true; rm -f ~/Library/LaunchAgents/com.omniloy.$l.plist; fi

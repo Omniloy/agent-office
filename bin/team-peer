@@ -60,10 +60,14 @@ def call(pid, path, body=None, floor=None, timeout=8):
                                          headers={"content-type": "application/json", "x-peer-id": d["me"]["id"], "x-peer-key": p.get("key", "")})
             return json.load(urllib.request.urlopen(req, timeout=timeout))
         except urllib.error.HTTPError as e:
-            try: return json.load(e)
-            except Exception: err = f"HTTP {e.code}"
+            try: r = json.load(e)
+            except Exception: r = None
+            if e.code in (408, 429) or e.code >= 500:   # the building is there but could not take it now: try again later
+                return {**(r if isinstance(r, dict) else {}), "error": (r or {}).get("error") if isinstance(r, dict) and r.get("error") else f"HTTP {e.code}", "unreached": True}
+            if isinstance(r, dict): return r
+            err = f"HTTP {e.code}"
         except Exception as e: err = str(e)[:120]
-    return {"error": err, "unreached": True}   # no answer from the building at all (link down): worth trying again later
+    return {"error": err, "unreached": True}   # no answer from the building at all (link down), or it failed: try again later
 # Answers to another building's requests that could not travel yet (link down): kept here until that building takes
 # them, tried again by `team-peer flush` (the watchdog runs it with its outbox). Never dropped silently.
 POUT = D + "/peer-outbox.json"

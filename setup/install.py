@@ -123,7 +123,9 @@ class Run:
             if nxt != out: whats.append(what); out = nxt
         if out == old: return
         what = " and ".join(whats)
-        if self.dry: self.say(f"{dst}: {what} differs from the repo; it would be shown as a diff and applied only with a yes"); return
+        if self.dry:   # looking first: the .proposed it would leave must not replace one edited by hand
+            self.side_write(f"{dst}.proposed", out.encode("utf-8"))
+            self.say(f"{dst}: {what} differs from the repo; it would be shown as a diff and applied only with a yes"); return
         diff = "".join(difflib.unified_diff(old.splitlines(True), out.splitlines(True), f"{dst} (now)", f"{dst} (proposed)", n=2))
         ok = self.sections
         if not ok and sys.stdin.isatty():
@@ -137,22 +139,32 @@ class Run:
             self.warn.append(f"{dst}: {what} differs from the repo and was NOT changed. The proposal is {os.path.basename(dst)}.proposed: "
                              f"show the user `diff {dst} {dst}.proposed`, and with their yes copy it over (or rerun with --protocol-sections)")
             return
-        if not self.side_write(dst, out.encode("utf-8")): return
+        if not self.side_write(dst, out.encode("utf-8"), check=False): return
         self.say(f"{dst}: {what} brought up to date with your yes (the file as it was is in {BACKUPS})")
-    def side_write(self, dst, data):
-        """Write a file the install does not track (a .proposed or .new next to the user's file, or a protocol change
-        approved with a yes): never through a symbolic link, the file it replaces backed up first, written atomically.
+    def side_write(self, dst, data, check=True):
+        """Write a file next to the user's own (a .proposed or .new proposal, or a protocol change approved with a
+        yes): never through a symbolic link, the file it replaces backed up first, written atomically. A proposal
+        that was edited since the install wrote it counts as edited by hand, like any installed file: the run stops
+        before writing anything unless --force (check=False: the user's own file, changed only with their yes).
         Returns False when it was left alone."""
         ln = self.link_in(dst)
         if ln:
             if (dst, ln) not in self.linked: self.linked.append((dst, ln))
             return False
-        if self.dry: return True
         if os.path.exists(dst):
-            if open(dst, "rb").read() == data: return True
+            cur = open(dst, "rb").read()
+            if cur == data:
+                if check: self.wrote[dst] = sha(data)
+                return True
+            if os.path.abspath(dst) in self.keep: self.kept.append(dst); return False
+            if check and sha(cur) != self.manifest.get(dst) and not self.force:
+                self.drift.append((dst, cur, data)); return False
+            if self.dry: return True
             self.backup(dst)
+        if self.dry: return True
         mode = os.stat(dst).st_mode & 0o777 if os.path.exists(dst) else 0o644
         os.replace(fresh(dst, data, mode), dst)
+        if check: self.wrote[dst] = sha(data)
         return True
     def backup(self, dst):
         """A copy of a file about to be replaced, under ~/.omniloy-office/backups/<date>/ (never next to it: a .bak in an
