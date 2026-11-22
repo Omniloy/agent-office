@@ -118,7 +118,7 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
     for (const [id, p] of panes) p.el.hidden = id !== cur;
     const ask = $('#term-ask');
     ask.hidden = !ctx;
-    if (ctx) ask.innerHTML = `${ctx.name ? `<b>${esc(ctx.name)}</b> marked this command.` : 'This command comes from a message.'} It runs on <b>${esc(where(cur))}</b>${cur === 'local' && info ? ` as ${esc(info.user)}` : ''} when you press Run. Read it first; you can change it.${ctx.from ? `<label class="tell"><input type="checkbox" id="term-tell" checked> When it finishes, send ${esc(ctx.name || 'them')} what it prints (tokens and passwords masked)</label>` : ''}`;
+    if (ctx) ask.innerHTML = `${ctx.name ? `<b>${esc(ctx.name)}</b> marked this command.` : 'This command comes from a message.'} It runs on <b>${esc(where(cur))}</b>${cur === 'local' && info ? ` as ${esc(info.user)}` : ''} when you press Run. Read it first; you can change it.${ctx.from ? `<label class="tell"><input type="checkbox" id="term-tell"> When it finishes, also send ${esc(ctx.name || 'them')} what it prints (tokens and passwords are masked; patient or personal data is not: leave it off if the output may hold any)</label>` : ''}`;
     const p = panes.get(cur); if (p) requestAnimationFrame(() => resize(p));
     if (ctx && ctx.answer) ask.insertAdjacentHTML('afterbegin', `<b>Run also answers “${esc(ctx.answer)}”.</b> `); // an option of a request: running it is the answer
   }
@@ -140,7 +140,7 @@ html.phone #term-line textarea { font-size: 16px; } html.phone #term header { fl
     try {
       const p = pane(cur); if (!p.es) p.connect();
       const tell = $('#term-tell'); // the owner decides, before Run, whether the output goes back to whoever marked it
-      await api('/api/term/run', { id: cur, cmd, from: mine ? mine.from || '' : '', share: tell ? tell.checked : true });
+      await api('/api/term/run', { id: cur, cmd, from: mine ? mine.from || '' : '', share: !!(tell && tell.checked) });   // nothing ticked: the output is neither sent nor kept
       $('#term-in').value = ''; grow(); ctx = null; $('#term-ask').hidden = true;
       let said = '';
       if (mine && mine.answer && mine.reqId) { // the option that carried the command: running it is the answer

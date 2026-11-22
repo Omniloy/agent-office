@@ -119,7 +119,7 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
         s.done = true; s.flush(true); s.logging = false;
         const out = maskSecrets(printed(s.since, cmd)), secs = Math.round(age / 1000);
         logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} finished after ${secs}s${s.alive ? '' : ' (the terminal ended)'}\n`);
-        if (!share) return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s): ${short}\n\n${owner} chose not to share what it printed. If you need it, ask ${owner} with team-ask what you need to know from it.`);
+        if (!share) return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s). ${owner} did not share it or what it printed (it may have been changed before running). If you need it, ask ${owner} with team-ask what you need to know from it.`);
         return tell(`${owner} ran the command you marked, in the office terminal on ${where}, and it has finished (${secs}s): ${short}\n\nIt printed${out.length > 3500 ? ' (the last part; all of it: `team-term last`)' : ''}:\n${out ? out.slice(-3500) : '(nothing)'}\n\nDo not ask for the output to be pasted.`);
       }
       if (!warned && age > 5 * 60000) { warned = true; tell(`${owner} ran the command you marked, in the office terminal on ${where}, ${Math.round(age / 60000)} minutes ago and it is still running (it may be waiting for input from ${owner}): ${short}\nYou will be told when it finishes. \`team-term last\` shows what it has printed so far.`); }
@@ -185,11 +185,11 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
         // typed into whatever holds the terminal: a password prompt, psql, vim or a command still running would take it
         // as its input. A local shell says when it is back at its prompt; over ssh nobody can tell, so it goes ahead.
         if (!fresh && id === 'local' && !old.idle) return json(res, 409, { error: 'The terminal is busy: a program is running or waiting for input (maybe a password). Finish it or press Ctrl+C there, then press Run again.', busy: true }), true;
-        const s = live(id), share = body.share !== false;
+        const s = live(id), share = body.share === true; // what it prints is shared only when the owner ticked it
         const who = String(body.from || ''), person = who ? (await personas()).find((x) => x.herdrName === who || x.slug === who) : null;
         const where = id === 'local' ? os.hostname().replace(/\.local$/, '') : id;
         s.flush(true); // what was on screen before this command stays out of its log
-        logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${owner} ran on ${where}${person ? ` (marked by ${person.herdrName})` : ''}: ${maskSecrets(cmd)}\n${share ? '' : '(what it prints is not shared)\n'}`);
+        logText(`\n### ${new Date().toISOString().slice(0, 19).replace('T', ' ')} ${owner} ran on ${where}${person ? ` (marked by ${person.herdrName})` : ''}: ${share ? maskSecrets(cmd) : '(a command whose output is not shared: neither it nor what it prints is kept)'}\n`);
         s.done = false; s.logging = share; s.logged = 0;
         setTimeout(() => { s.since = ''; s.cmd = cmd; if (s.alive) s.child.stdin.write(`${cmd.replace(/\n/g, '\r')}\r`); watch(s, cmd, person, where, share); }, fresh ? (id === 'local' ? 700 : 2500) : 0); // a new shell needs a moment before it listens
         return json(res, 200, { ok: true, told: person ? person.name : '', shared: share }), true;

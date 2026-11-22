@@ -242,7 +242,7 @@ class Run:
         for root, dirs, files in os.walk(src):
             dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "__pycache__")]
             for f in files:
-                if f in (".DS_Store",) or f.endswith((".log", ".pyc")) or ".bak" in f: continue
+                if f in (".DS_Store",) or f.endswith((".log", ".pyc")) or ".bak" in f or f.startswith(".token"): continue   # .token*: a floor's page token, never copied
                 s = os.path.join(root, f); n += self.put(s, os.path.join(dst, os.path.relpath(s, src)), **kw)
         return n
 

@@ -122,10 +122,21 @@ elif cmd == "approval":
         c["waiting"] = {"on": on, "since": now(), "req": None, "kind": "approval"}; d[key] = c
     log(key, "approval", by=me, on=on); print(f"{key} marked as waiting for __OWNER__'s approval. He sees it in the office; the watchdog leaves it alone. When he approves or merges: team-card resume {key} --as {me}.")
 elif cmd == "resume":
-    key = pos[0]
+    if not pos: sys.exit("usage: team-card resume KEY --as <you>")
+    key = key_ok(pos[0])
+    if o.get("req") is not None:   # team-ask, once the request the card waited on is answered or cancelled
+        reqs = (L.read_quiet(f"{L.SHARED}/requests.json", {}) or {}).get("items") or []
+        x = next((x for x in reqs if str(x.get("id")) == str(o["req"])), None)
+        if x is not None and x.get("status") == "open": sys.exit(f"request #{o['req']} is still open: {key} keeps waiting on it")
+        me = o.get("as", "")
+    else: me = who(o, owner=True)
     with Box() as d:
-        if key in d and (o.get("req") is None or (d[key].get("waiting") or {}).get("req") == o["req"]): d[key]["waiting"] = None; d[key]["since"] = now()
-    log(key, "resume", by=o.get("as", "")); print(f"{key} active again.")
+        if key in d:
+            w = d[key].get("waiting") or {}
+            if o.get("req") is None: may({**d[key], "key": key}, me, "resume")   # only the holder, their lead or __OWNER__
+            elif str(w.get("req")) != str(o["req"]): sys.exit(f"{key} is not waiting on request #{o['req']}: nothing changed")
+            d[key]["waiting"] = None; d[key]["since"] = now()
+    log(key, "resume", by=me); print(f"{key} active again.")
 elif cmd == "done":
     key = pos[0]; me = who(o, owner=True)
     with Box() as d:
