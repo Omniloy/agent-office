@@ -91,6 +91,7 @@ elif cmd == "take":
     me = who(o); key = key_ok(pos[0])
     with Box() as d:
         prev = d.get(key, {})
+        may({**prev, "key": key}, me, "take")   # a card someone else holds is taken only by them, their lead or __OWNER__
         d[key] = {"owner": me, "team": NAMES[me]["team"], "since": now(), "title": " ".join(pos[1:]) or prev.get("title", ""), "waiting": None}
     log(key, "take", by=me, prev=prev.get("owner", "")); print(f"{key} is yours.")
 elif cmd == "pass":

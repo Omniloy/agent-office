@@ -283,12 +283,19 @@ elif c == "incoming":   # called by the office server for what arrives from anot
             if r.returncode == 0:
                 with Box() as d: (d.get("sent") or {}).pop(str(int(ref["local"])), None)
             print(json.dumps({"ok": r.returncode == 0, **({} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[:200]})})); sys.exit()
-        with Box() as d: fits = asked_take(d, pid, str(ref.get("agent") or ""))
+        ag = str(ref.get("agent") or "")
+        with Box() as d: fits = asked_take(d, pid, ag)
         if not fits: sys.exit(json.dumps({"error": "nothing from here is waiting for an answer from your building"}))
         msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
-        if ref.get("agent") and ref["agent"] in L.people(admin=True):   # typed in now, or held until they are off their menu
-            L.deliver(ref["agent"], msg, "team-peer"); print(json.dumps({"ok": True})); sys.exit()
-        ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])
+        try:
+            if ag and ag in L.people(admin=True):   # typed in now, or held in the outbox until they are off their menu
+                L.deliver(ag, msg, "team-peer")
+            else:
+                r = ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])
+                if r.returncode: raise RuntimeError((r.stderr or r.stdout).strip()[:200] or f"team-ask exit {r.returncode}")
+        except BaseException as e:   # not delivered and not saved: the answer is still expected, and the other building tries again
+            with Box() as d: asked_add(d, pid, ag)
+            sys.exit(f"could not take the answer now ({type(e).__name__}: {str(e)[:160]}); try again later")   # plain text: a 503 for the sender
         print(json.dumps({"ok": True}))
     else: sys.exit(json.dumps({"error": "unknown"}))
 elif c == "asked":   # called by peer-link when the owner, visiting that building, left a message there

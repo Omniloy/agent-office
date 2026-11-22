@@ -991,11 +991,14 @@ setTimeout(() => requeueOrphans().catch(() => {}), 5000).unref(); setInterval(()
 async function deliver(name, text) {
   const started = Date.now();
   const p = run(HC, ['send', '--json', name, '--', text], { timeout: 120_000 });
-  const first = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), 12_000))]);
-  if (!first) { // still typing after 12 s: the page hears "queued" now, so the text is on disk until the send ends
-    const file = path.join(INFLIGHT, `${process.pid}-${started}-${crypto.randomBytes(4).toString('hex')}.json`);
-    await fs.mkdir(INFLIGHT, { recursive: true, mode: 0o700 }).catch(() => {});
-    await fs.writeFile(file, JSON.stringify({ pid: process.pid, port: PORT, name, text, at: started }), { mode: 0o600 }).catch(() => {});
+  let first = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), 12_000))]);
+  const file = path.join(INFLIGHT, `${process.pid}-${started}-${crypto.randomBytes(4).toString('hex')}.json`);
+  if (!first) { // still typing after 12 s: the page hears "queued" only once the text is on disk until the send ends
+    const saved = await fs.mkdir(INFLIGHT, { recursive: true, mode: 0o700 })
+      .then(() => fs.writeFile(file, JSON.stringify({ pid: process.pid, port: PORT, name, text, at: started }), { mode: 0o600, flag: 'wx' })).then(() => true, () => false);
+    if (!saved) first = await p; // could not be saved (disk full?): no "queued", wait for the real result
+  }
+  if (!first) {
     p.then(async (late) => {
       if (!late.ok && !(await run(bin('team-deliver'), [name, text, '--source', 'office'], { timeout: 30_000 })).ok) return; // left on disk: retried
       await fs.unlink(file).catch(() => {});
