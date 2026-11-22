@@ -215,6 +215,10 @@ def flush_outbox():
     """Type in what the outbox holds for people who were on a menu or not running; report once what waited 2 days."""
     try:
         for n, r in L.flush().items(): print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {r}", flush=True)
+        if os.path.exists(f"{L.SHARED}/peer-outbox.json"):   # answers to another building that waited for the link
+            r = subprocess.run([f"{BIN}/team-peer", "flush"], capture_output=True, text=True, timeout=120)
+            for ln in (r.stdout + r.stderr).strip().splitlines():
+                if "still waiting" not in ln: print(f"{datetime.datetime.now():%H:%M:%S} peer answer {ln}", flush=True)
         RUN["flushedAt"] = int(time.time() * 1000)
         for n, (k, since) in L.overdue().items():   # held for days (the person is not running): __OWNER__ hears it once
             lead = (L.people(admin=True).get(n) or {}).get("lead") or n

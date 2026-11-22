@@ -11,6 +11,8 @@
                            only with the owner's yes. A normal run never touches them.
   ... --login-resume       with --only-services: also com.omniloy.office-up (replaces com.omniloy.offices), which at
                            login restarts the people who were running: paid sessions, so only with the owner's yes
+  ... --skills-home DIR    write each skill once to DIR/<name> (a skills repo you keep) and link it into the runtimes'
+                           skills folders, instead of copying it into each; a name already taken there is left alone
   ... --no-services        accepted for older instructions; a normal run already leaves the services alone
 
 It copies the apps, tools, Herdr panels, skills and role instructions to their places, filling in the owner's
@@ -85,8 +87,9 @@ def fresh(dst, data, mode):
         except OSError: pass
         raise
 class Run:
-    def __init__(self, cfg, dry, force=False, sections=False, keep=(), quiet=False, resume=False):
+    def __init__(self, cfg, dry, force=False, sections=False, keep=(), quiet=False, resume=False, skills_home=None):
         self.cfg, self.dry, self.done, self.warn = cfg, dry, [], []
+        self.skills_home = os.path.abspath(os.path.expanduser(skills_home)) if skills_home else None   # --skills-home
         self.resume = resume   # --login-resume: com.omniloy.office-up replaces com.omniloy.offices (it resumes people at login)
         self.force, self.sections, self.quiet = force, sections, quiet
         self.keep = {os.path.abspath(os.path.expanduser(k)) for k in keep}
@@ -297,10 +300,29 @@ class Run:
         self.say(f"role instructions: {n} file(s) written to ~/.claude/agents (Codex people are sent the same text)")
     def skills(self):
         have = self.cfg.get("runtimes") or ["claude"]
+        if self.skills_home: return self.linked_skills(have)
         dests = [f"{HOME}/.claude/skills"] + ([f"{HOME}/.codex/skills", f"{HOME}/.agents/skills"] if "codex" in have else [])
         for d in dests:
             n = self.tree(f"{REPO}/skills", d)
             self.say(f"skills: {n} file(s) written to {d}")
+    def linked_skills(self, have):
+        """--skills-home DIR: each skill is written once, to DIR/<name> (e.g. a skills repo the owner keeps), and the
+        runtimes' skills folders get a link to it. A skill whose name is already taken there by something else (another
+        link, a folder of the owner's) is left alone entirely: neither written nor linked."""
+        home = self.skills_home
+        dests = [f"{HOME}/.claude/skills"] + [d for d in (f"{HOME}/.agents/skills", f"{HOME}/.codex/skills") if "codex" in have and os.path.isdir(d)]
+        n, made = 0, 0
+        for name in sorted(os.listdir(f"{REPO}/skills")):
+            src = f"{REPO}/skills/{name}"
+            if not os.path.isdir(src): continue
+            taken = [f"{d}/{name}" for d in dests if os.path.lexists(f"{d}/{name}") and os.path.realpath(f"{d}/{name}") != os.path.realpath(f"{home}/{name}")]
+            if taken: self.say(f"skills: {name} left alone ({taken[0]} is not a link to {home}/{name})"); continue
+            n += self.tree(src, f"{home}/{name}")
+            for d in dests:
+                if os.path.lexists(f"{d}/{name}"): continue
+                made += 1
+                if not self.dry: os.makedirs(d, exist_ok=True); os.symlink(f"{home}/{name}", f"{d}/{name}")
+        self.say(f"skills: {n} file(s) written to {home}" + (f", {made} new link(s) in {', '.join(dests)}" if made else f", linked from {', '.join(dests)}"))
     def herdr(self):
         if not os.path.isdir(HERDR): self.warn.append("Herdr has not been opened yet on this Mac (no ~/.config/herdr-app): open it once, then run the installer again to add the panels"); return
         n = self.tree(f"{REPO}/herdr/mods", f"{HERDR}/mods") + self.tree(f"{REPO}/herdr/layouts", f"{HERDR}/layouts")
@@ -433,6 +455,7 @@ def main():
     ap.add_argument("--force", action="store_true", help="also replace live files edited since the last install (backed up first)")
     ap.add_argument("--keep", action="append", default=[], metavar="PATH", help="never replace this live file, even with --force (repeatable)")
     ap.add_argument("--protocol-sections", action="store_true", help="apply the protocol sections that follow the repo without asking")
+    ap.add_argument("--skills-home", metavar="DIR", help="write skills once to DIR/<name> and link them into the runtimes' skills folders")
     a = ap.parse_args()
     if a.check: sys.exit(check())
     if not a.config: ap.error("--config is required (see setup/office.config.example.json)")
@@ -448,14 +471,14 @@ def main():
         else: r.apps(); r.tools(); r.teams(); r.people(); r.skills(); r.herdr(); r.names()
     # 1. look: every destination is compared first, nothing is written
     if a.login_resume and not a.only_services: ap.error("--login-resume goes with --only-services")
-    look = Run(cfg, True, force=a.force, sections=a.protocol_sections, keep=a.keep, quiet=True, resume=a.login_resume)
+    look = Run(cfg, True, force=a.force, sections=a.protocol_sections, keep=a.keep, quiet=True, resume=a.login_resume, skills_home=a.skills_home)
     steps(look)
     if look.drift and not a.force:
         look.dry = a.dry_run; look.report_drift(); look.report_links()
         print("\nNothing was changed: the install stops before writing anything while live files differ like this.")
         sys.exit(1)
     # 2. do it (or say it, with --dry-run)
-    r = Run(cfg, a.dry_run, force=a.force, sections=a.protocol_sections, keep=a.keep, resume=a.login_resume)
+    r = Run(cfg, a.dry_run, force=a.force, sections=a.protocol_sections, keep=a.keep, resume=a.login_resume, skills_home=a.skills_home)
     steps(r)
     r.record()
     for w in r.warn: print("NOTE: " + w)

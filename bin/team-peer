@@ -15,6 +15,8 @@
   team-peer home [<building>|none]               the building where your owner reads requests. With it set, every request or
                                                  note to the owner (team-ask ... --to __OWNER_ID__) also lands in their box there,
                                                  and their answer comes back and closes it here. Only the owner sets this.
+  team-peer flush                                send again the answers that could not reach another building (link down);
+                                                 the watchdog does this on its own
   team-peer forget <building>                    remove a building that is not connected (its key, name and switches), so it
                                                  can introduce itself again with a new key. Only the owner does this.
 
@@ -61,7 +63,20 @@ def call(pid, path, body=None, floor=None, timeout=8):
             try: return json.load(e)
             except Exception: err = f"HTTP {e.code}"
         except Exception as e: err = str(e)[:120]
-    return {"error": err}
+    return {"error": err, "unreached": True}   # no answer from the building at all (link down): worth trying again later
+# Answers to another building's requests that could not travel yet (link down): kept here until that building takes
+# them, tried again by `team-peer flush` (the watchdog runs it with its outbox). Never dropped silently.
+POUT = D + "/peer-outbox.json"
+class Pout:
+    def __enter__(self):
+        self.l = open(POUT + ".lock", "w"); fcntl.flock(self.l, fcntl.LOCK_EX)
+        self.q = L.load(POUT, []) if os.path.exists(POUT) else []
+        if not isinstance(self.q, list): sys.exit(f"{POUT} cannot be read: left as it is")
+        return self.q
+    def __exit__(self, *a):
+        if a[0] is None or a[0] is SystemExit:
+            tmp = POUT + f".{os.getpid()}.tmp"; json.dump(self.q, open(tmp, "w"), indent=1, ensure_ascii=False); os.chmod(tmp, 0o600); os.replace(tmp, POUT)
+        fcntl.flock(self.l, fcntl.LOCK_UN)
 def visit(v):   # shown in the rooms: someone teleports out, or a visitor arrives (see travel.js)
     l = open(VISITS + ".lock", "w"); fcntl.flock(l, fcntl.LOCK_EX)
     now = int(time.time() * 1000); items = [x for x in load(VISITS, []) if x.get("until", 0) > now - 60000]
@@ -262,6 +277,22 @@ elif c == "answered":   # called by team-ask when one of ours answers an externa
     if e.get("connect"):
         v = "accept" if str(x.get("answer", "")).strip().lower().startswith("acc") else "decline"
         print(subprocess.run([sys.argv[0], v, e["peer"]], capture_output=True, text=True).stdout.strip()); sys.exit()
-    r = call(e.get("peer"), "/peer/answer", {"ref": e.get("ref") or {}, "text": x.get("answer", ""), "title": x.get("title", ""), "lead": x.get("answeredBy", "")})
-    print("sent back" if r.get("ok") else "could not be sent back now: " + str(r.get("error")))
+    body = {"ref": e.get("ref") or {}, "text": x.get("answer", ""), "title": x.get("title", ""), "lead": x.get("answeredBy", "")}
+    with Pout() as q:   # on disk before the call: a crash or a dead link leaves it queued, never lost
+        item = {"peer": e.get("peer"), "path": "/peer/answer", "body": body, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "req": x.get("id")}
+        q.append(item)
+    r = call(e.get("peer"), "/peer/answer", body)
+    if not r.get("unreached"):
+        with Pout() as q: q[:] = [i for i in q if i != item]
+    if r.get("ok"): print("sent back")
+    elif r.get("unreached"): print("could not be sent back now (" + str(r.get("error")) + "): it is kept and sent again when the link is back (team-peer flush)")
+    else: print("the other building refused it: " + str(r.get("error")))
+elif c == "flush":   # try again the answers that could not travel (the watchdog runs this)
+    if not os.path.exists(POUT): sys.exit()
+    with Pout() as q: todo = list(q)
+    for item in todo:
+        r = call(item.get("peer"), item.get("path", "/peer/answer"), item.get("body") or {})
+        if r.get("unreached"): print(f'#{item.get("req")} to {item.get("peer")}: still waiting ({r.get("error")})'); continue
+        with Pout() as q: q[:] = [i for i in q if i != item]
+        print(f'#{item.get("req")} to {item.get("peer")}: ' + ("sent back" if r.get("ok") else "refused by the other building: " + str(r.get("error"))))
 else: print(__doc__)
