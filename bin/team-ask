@@ -244,33 +244,32 @@ elif c in ("answer", "read", "cancel"):
             if c == "cancel" and me not in (x["from"], to): sys.exit(f'only {x["from"]} (who asked) or {to} can cancel #{x["id"]}')
             if c != "cancel" and me != to: sys.exit(f'#{x["id"]} is addressed to {to}, not to you' + (": only __OWNER__ answers it" if to == OWNER else ""))
         if c == "answer":
-            x["status"], x["answer"], x["answeredAt"] = "answered", pos[1].strip(), now()
-            x["answeredBy"] = "__OWNER__" if me == OWNER else NAMES[me]["name"].split(" ")[0]
+            ans = pos[1].strip(); by = "__OWNER__" if me == OWNER else NAMES[me]["name"].split(" ")[0]
+            # the answer is safe on disk for whoever waits on it BEFORE the request says answered: if that cannot be
+            # written (disk full), nothing changes and the command fails, so it can simply be answered again
+            msg = f'{by} answered request #{x["id"]} ("{x["title"]}"' + (f', {x["ticket"]}' if x.get("ticket") else "") + f'): {ans}'
+            try:
+                if x.get("ext") and not (x.get("ext") or {}).get("connect"):   # it travels back to the other building (team-peer keeps it until it arrives)
+                    r = subprocess.run([f"{L.BIN}/team-peer", "answered", "--queue"], input=json.dumps({**x, "answer": ans, "answeredBy": by}), capture_output=True, text=True, timeout=60)
+                    if r.returncode: raise RuntimeError((r.stderr or r.stdout).strip()[-200:] or f"team-peer exit {r.returncode}")
+                elif not x.get("ext"): queued = L.enqueue(x["from"], msg, "team-ask")
+            except Exception as e: sys.exit(f'#{x["id"]} is still open: the answer could not be kept ({type(e).__name__}: {str(e)[:160]}). Nothing changed; try again.')
+            x["status"], x["answer"], x["answeredAt"], x["answeredBy"] = "answered", ans, now(), by
         else: x["status"] = "read" if c == "read" else "cancelled"; x["answeredAt"] = now(); x["by"] = me
-    def reopen(why):   # the answer could be neither typed in nor kept for later: the request is open again, nothing is lost
-        with Box() as b:
-            y = next((y for y in b["items"] if y["id"] == x["id"]), None)
-            if y is None:   # an answered request not for __OWNER__ goes to the archive at once: it comes back as open
-                y = dict(x); b["items"].append(y); b["items"].sort(key=lambda z: z["id"])
-            if y.get("status") == "answered" and y.get("answer") == x["answer"]:
-                y["status"] = "open"
-                for k in ("answer", "answeredAt", "answeredBy"): y.pop(k, None)
-        sys.exit(f'#{x["id"]} is still open: the answer could not be delivered or kept ({why}). Try again in a moment.')
     out = "ok"
-    if c == "answer" and x.get("ext"):   # asked from another building: the answer travels back there (team-peer keeps it until it arrives)
-        try: r = subprocess.run([f"{L.BIN}/team-peer", "answered"], input=json.dumps(x), capture_output=True, text=True, timeout=120)
-        except Exception as e: reopen(type(e).__name__)
-        if r.returncode: reopen((r.stderr or r.stdout).strip()[-200:] or f"team-peer exit {r.returncode}")
+    if c == "answer" and (x.get("ext") or {}).get("connect"):   # a request to connect buildings: the answer is the accept/decline
+        r = subprocess.run([f"{L.BIN}/team-peer", "answered"], input=json.dumps(x), capture_output=True, text=True)
         out = "answered; " + (r.stdout.strip() or r.stderr.strip()[:200])
+    elif c == "answer" and x.get("ext"):   # already kept in the peer outbox: send it now (the watchdog retries if the link is down)
+        r = subprocess.run([f"{L.BIN}/team-peer", "flush"], capture_output=True, text=True, timeout=120)
+        out = "answered; " + ("sent back" if "sent back" in r.stdout else "kept, and sent back as soon as the other building can take it (team-peer flush)")
     elif c == "answer":
-        msg = f'{x["answeredBy"]} answered request #{x["id"]} ("{x["title"]}"' + (f', {x["ticket"]}' if x.get("ticket") else "") + f'): {x["answer"]}'
-        try: r = tell(x["from"], msg)   # typed in, or written to their outbox first (teamlib.deliver)
-        except Exception as e: reopen(f"{type(e).__name__}: {str(e)[:120]}")
+        r = L.send_queued(x["from"], queued)   # typed in now, or left queued (it is already on disk)
         if x.get("via") and x["from"] != x["via"] and me == OWNER:
             try: tell(x["via"], "FYI, " + msg + f' (asked by {x["from"]}, already told)')
             except Exception: pass   # a courtesy copy; the answer itself is safe
         out = "answered; " + ("delivered to " + x["from"] if r == "delivered" else L.said(r, x["from"]))
-    if c in ("answer", "cancel") and x.get("ticket"):   # only once the answer is safe: the card stops waiting on it
+    if c in ("answer", "cancel") and x.get("ticket"):
         subprocess.run([f"{L.BIN}/team-card", "resume", x["ticket"], "--req", str(x["id"])], capture_output=True)
     print(out)
 elif c == "menu-log":   # a terminal menu (Claude/Codex permission prompt) __OWNER__ answered from the office: kept as an answered request

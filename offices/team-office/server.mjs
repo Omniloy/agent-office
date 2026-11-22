@@ -5,7 +5,7 @@ import http from 'node:http';
 import { createTerm } from './term.mjs';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { existsSync, createReadStream } from 'node:fs';
+import { existsSync, createReadStream, constants as fsc } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -907,21 +907,17 @@ async function liveMenu(name) {
 }
 const menuAnswers = new Map();
 // Every floor server can answer any floor's menu (Dev lists them all), so the "one answer at a time" guard is also a
-// file shared by all of them: push/menu-answer/<name>.lock, made with O_EXCL. A lock of a server that is gone, or
-// older than 60 s (an answer takes ~4 s), is taken over.
+// lock shared by all of them: push/menu-answer/<name>.lock opened with O_EXLOCK|O_NONBLOCK (macOS). The kernel holds
+// it while the file is open and drops it when the server closes it or dies, so it never goes stale.
 const MENU_LOCKS = path.join(SHARED, 'push', 'menu-answer');
-const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const O_EXLOCK = 0x20; // <fcntl.h> on macOS; Node does not name it
 async function menuLock(name) {
-  const f = path.join(MENU_LOCKS, `${name.replace(/[^\w.-]/g, '_')}.lock`), me = `${process.pid} ${Date.now()} ${crypto.randomBytes(4).toString('hex')}`;
+  if (process.platform !== 'darwin') return async () => {}; // the offices run on macOS; elsewhere only the in-process guard
   await fs.mkdir(MENU_LOCKS, { recursive: true, mode: 0o700 }).catch(() => {});
-  for (let i = 0; i < 2; i++) {
-    try { await fs.writeFile(f, me, { flag: 'wx', mode: 0o600 }); return async () => { if ((await fs.readFile(f, 'utf8').catch(() => '')) === me) await fs.unlink(f).catch(() => {}); }; }
-    catch (e) { if (e.code !== 'EEXIST') return null; }
-    const [pid, ts] = (await fs.readFile(f, 'utf8').catch(() => '')).split(' ').map(Number);
-    if (pid && pidAlive(pid) && Date.now() - ts < 60_000) return null; // another floor is answering this person now
-    await fs.unlink(f).catch(() => {}); // left by a server that stopped: take it over
-  }
-  return null;
+  try {
+    const h = await fs.open(path.join(MENU_LOCKS, `${name.replace(/[^\w.-]/g, '_')}.lock`), fsc.O_RDWR | fsc.O_CREAT | fsc.O_NONBLOCK | O_EXLOCK, 0o600);
+    return async () => { await h.close().catch(() => {}); };
+  } catch { return null; } // EAGAIN: another floor is answering this person now
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Answer a terminal menu: press its digit once (never twice), then watch the screen for up to ~4 s. The menu gone,

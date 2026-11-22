@@ -318,6 +318,7 @@ elif c == "answered":   # called by team-ask when one of ours answers an externa
     with Pout() as q:   # on disk before the call: a crash or a dead link leaves it queued, never lost
         item = {"peer": e.get("peer"), "path": "/peer/answer", "body": body, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "req": x.get("id")}
         q.append(item)
+    if o.get("queue"): print("kept"); sys.exit()   # --queue (team-ask): only kept; `team-peer flush` sends it
     r = call(e.get("peer"), "/peer/answer", body)
     if not r.get("unreached"):
         with Pout() as q: q[:] = [i for i in q if i != item]

@@ -176,16 +176,24 @@ def _drain(name, items, path=None):
         keep = keep[n:]
         if path: _write_q(path, keep + bad)
     return keep + bad, why
-def deliver(name, text, source=""):
-    """Type `text` into <name>'s terminal, or queue it. Returns 'delivered' or 'queued: <why>'."""
+def enqueue(name, text, source=""):
+    """Write `text` to <name>'s outbox without sending it (raises if it cannot be written). Returns the record, for
+    send_queued. Used by whoever must have the message safe on disk before changing anything else."""
     os.makedirs(OUTBOX, mode=0o700, exist_ok=True)
     q = _q(name); me = {"ts": time.time(), "at": now(), "to": name, "text": text, "source": source}
+    with Locked(q): _write_q(q, _read_q(q) + [me])
+    return me
+def send_queued(name, me=None):
+    """Send what <name>'s outbox holds, in order. Returns 'delivered' or 'queued: <why>' for record `me` (or the queue)."""
+    q = _q(name)
     with Locked(q):
-        items = _read_q(q) + [me]
-        _write_q(q, items)   # on disk before the first `hc send`: a crash mid-send leaves it queued, not lost
-        left, why = _drain(name, items, q)
-        _write_q(q, left)
-    return "delivered" if not any(x.get("ts") == me["ts"] and x.get("text") == text for x in left) else f"queued: {why}"
+        items = _read_q(q); left, why = _drain(name, items, q); _write_q(q, left)
+    still = [x for x in left if "_raw" not in x] if me is None else [x for x in left if x.get("ts") == me["ts"] and x.get("text") == me["text"]]
+    return f"queued: {why}" if still else "delivered"
+def deliver(name, text, source=""):
+    """Type `text` into <name>'s terminal, or queue it. Returns 'delivered' or 'queued: <why>'.
+    On disk before the first `hc send`: a crash mid-send leaves it queued, not lost."""
+    return send_queued(name, enqueue(name, text, source))
 def said(result, name):
     """A short sentence for a tool's output."""
     if result == "delivered": return f"{name} was told"
