@@ -43,7 +43,11 @@ function door(port) {
     const home = ((await readJson(path.join(SHARED, 'building.json'), {})).floors || [])[0]; // "back to mine": this building's ground floor, same host
     const headers = { ...req.headers, host: `127.0.0.1:${d.target}`, 'x-peer-id': me.id, 'x-peer-key': (peers[d.id] || {}).key || '', 'x-peer-user': me.owner || '', 'x-peer-back': home ? String(home.port) : '' };
     delete headers['tailscale-user-login']; delete headers['tailscale-user-name'];
-    const up = http.request({ host: '127.0.0.1', port: d.target, method: req.method, path: req.url, headers }, (r) => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); });
+    const up = http.request({ host: '127.0.0.1', port: d.target, method: req.method, path: req.url, headers }, (r) => {
+      // the owner left a message with that floor's lead: its answer may come back here (team-peer takes it only then)
+      if (req.method === 'POST' && String(req.url).split('?')[0] === '/api/guest/message' && r.statusCode >= 200 && r.statusCode < 300 && d.id) run(path.join(BIN, 'team-peer'), ['asked', d.id]);
+      res.writeHead(r.statusCode || 502, r.headers); r.pipe(res);
+    });
     up.on('error', () => { if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }); res.end('That building is not reachable right now.'); });
     req.pipe(up);
   }).listen(port, '127.0.0.1').on('error', (e) => log(`door ${port}: ${e.message}`));

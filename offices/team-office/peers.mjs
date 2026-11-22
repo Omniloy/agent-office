@@ -190,6 +190,9 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
       if (!w) return 'nobody here by that name';
       if (((peer.my || {})[w.floor.port] || {}).on === false) return 'that floor is not taking messages from your building';
     }
+    // only against something that left from here for that building (team-peer send, or the owner's visit), still waiting
+    const cut = Date.now() / 1000 - 30 * 86400;
+    if (!(d.asked || []).some((x) => x.peer === peer.id && (x.agent || '') === String(ref.agent || '') && x.ts > cut)) return 'nothing from here is waiting for an answer from your building';
     return '';
   }
   async function serve(res, root, rel) {

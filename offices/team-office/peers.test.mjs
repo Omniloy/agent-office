@@ -84,6 +84,26 @@ await test('connected: an answer only to an open request that went to that build
   peers('on', { home: 'aaaa1111', sent: { 1: 'aaaa1111' } });
   assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 200);
 });
+await test('an answer for one of our people or for the owner: only against a message that went to that building', async () => {
+  peers('on');
+  assert.equal((await call('/peer/answer', { body: { ref: {}, text: 'hi' }, headers: P })).code, 403, 'empty ref, nothing sent there');
+  assert.equal((await call('/peer/answer', { body: { ref: { agent: 'ana' }, text: 'hi' }, headers: P })).code, 403, 'ana sent nothing there');
+  const ts = Date.now() / 1000;
+  peers('on', { asked: [{ peer: 'bbbb2222', agent: 'ana', ts }, { peer: 'aaaa1111', agent: 'ana', ts: ts - 40 * 86400 }] });
+  assert.equal((await call('/peer/answer', { body: { ref: { agent: 'ana' }, text: 'hi' }, headers: P })).code, 403, 'sent to another building, or too long ago');
+  peers('on', { asked: [{ peer: 'aaaa1111', agent: 'ana', ts }, { peer: 'aaaa1111', agent: '', ts }] });
+  assert.equal((await call('/peer/answer', { body: { ref: { agent: 'ana' }, text: 'hi' }, headers: P })).code, 200);
+  assert.equal((await call('/peer/answer', { body: { ref: {}, text: 'hi' }, headers: P })).code, 200, 'the owner wrote there');
+});
+await test('a tool that fails here is "try again" (503); only its own refusal is a 400', async () => {
+  peers('on', { asked: [{ peer: 'aaaa1111', agent: 'ana', ts: Date.now() / 1000 }] });
+  fs.writeFileSync(path.join(BIN, 'team-peer'), '#!/bin/sh\ncat > /dev/null\necho "Traceback: boom" >&2\nexit 1\n', { mode: 0o755 });
+  assert.equal((await call('/peer/answer', { body: { ref: { agent: 'ana' }, text: 'hi' }, headers: P })).code, 503);
+  fs.writeFileSync(path.join(BIN, 'team-peer'), '#!/bin/sh\ncat > /dev/null\necho \'{"error": "nothing waiting"}\' >&2\nexit 1\n', { mode: 0o755 });
+  const r = await call('/peer/answer', { body: { ref: { agent: 'ana' }, text: 'hi' }, headers: P });
+  assert.equal(r.code, 400); assert.equal(r.body.error, 'nothing waiting');
+  stub('team-peer', '{"ok":true}');
+});
 await test('a building that was connected once cannot be re-keyed by a hello', async () => {
   fs.writeFileSync(path.join(T, 'peers.json'), JSON.stringify({ me: { id: 'cccc3333', name: 'Here' }, peers: { aaaa1111: { id: 'aaaa1111', name: 'There', status: 'none', met: true, key: 'k1', my: {} } } }));
   const r = await call('/peer/hello', { body: { from: { id: 'aaaa1111', name: 'Evil' }, key: 'REPLACED' } });

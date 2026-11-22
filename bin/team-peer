@@ -108,6 +108,18 @@ def opts(a):
 def ungrant(p):   # a connection that ends takes its grants with it: a new one starts with nothing shared
     p["chats"] = False; p["ask"] = False
     for m in (p.get("my") or {}).values(): m["share"] = False
+# What left from here and is waiting for an answer from that building: (building, agent; "" for the owner, who
+# writes from the visitor page). An answer from a building is taken only against one of these, and uses it up.
+ASKED_DAYS = 30
+def asked_add(d, pid, agent):
+    cut = time.time() - ASKED_DAYS * 86400
+    d["asked"] = [x for x in d.get("asked") or [] if x.get("ts", 0) > cut] + [{"peer": pid, "agent": agent or "", "ts": time.time()}]
+def asked_take(d, pid, agent):
+    cut = time.time() - ASKED_DAYS * 86400; lst = [x for x in d.get("asked") or [] if x.get("ts", 0) > cut]
+    i = next((i for i, x in enumerate(lst) if x.get("peer") == pid and x.get("agent", "") == (agent or "")), None)
+    if i is not None: lst.pop(i)
+    d["asked"] = lst
+    return i is not None
 def status_line(p): return {"none": "not connected", "out": "request sent", "in": "wants to connect", "on": "connected", "paused": "paused"}.get(p.get("status", "none"), p.get("status"))
 
 a = sys.argv[1:]; c = a[0] if a else ""; o, pos = opts(a[1:])
@@ -206,6 +218,7 @@ elif c == "send":
     r = call(p["id"], "/peer/message", {"floor": tf["port"], "text": text, "agent": who, "name": me_p["name"].split(" ")[0], "color": me_p.get("color", "#888"),
                                         "fromFloor": fl["name"], "fromPort": int(port), "building": me["name"]}, floor=tf["port"])
     if not r.get("ok"): sys.exit("not delivered: " + str(r.get("error", "no answer")))
+    with Box() as d: asked_add(d, p["id"], who)   # its answer will be taken when it comes back
     lead = (tf.get("lead") or {}).get("name", "the lead").split(" ")[0]
     visit({"kind": "out", "floor": int(port), "who": who, "label": f'At {p["name"]} · with {lead}', "text": text[:160], "until": int(time.time() * 1000) + 14000})
     print(f'left with {lead} ({p["name"]}, {tf["name"]}) as request #{r.get("id")}. Their answer will arrive in your terminal.')
@@ -270,12 +283,17 @@ elif c == "incoming":   # called by the office server for what arrives from anot
             if r.returncode == 0:
                 with Box() as d: (d.get("sent") or {}).pop(str(int(ref["local"])), None)
             print(json.dumps({"ok": r.returncode == 0, **({} if r.returncode == 0 else {"error": (r.stderr or r.stdout).strip()[:200]})})); sys.exit()
+        with Box() as d: fits = asked_take(d, pid, str(ref.get("agent") or ""))
+        if not fits: sys.exit(json.dumps({"error": "nothing from here is waiting for an answer from your building"}))
         msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
         if ref.get("agent") and ref["agent"] in L.people(admin=True):   # typed in now, or held until they are off their menu
             L.deliver(ref["agent"], msg, "team-peer"); print(json.dumps({"ok": True})); sys.exit()
         ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])
         print(json.dumps({"ok": True}))
     else: sys.exit(json.dumps({"error": "unknown"}))
+elif c == "asked":   # called by peer-link when the owner, visiting that building, left a message there
+    with Box() as d:
+        if pos and pos[0] in d["peers"]: asked_add(d, pos[0], "")
 elif c == "answered":   # called by team-ask when one of ours answers an external request; JSON of the item on stdin
     x = json.load(sys.stdin); e = x.get("ext") or {}
     if e.get("connect"):

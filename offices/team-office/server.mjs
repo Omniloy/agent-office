@@ -967,12 +967,39 @@ function notSent(name, stderr) {
   if (a && a.status === 'blocked') return `${who} is waiting on a question in the terminal${a.menu ? ` ("${clip(oneLine(a.menu.title || a.menu.question), 80)}")` : ''}: answer it first (For you or Live screen), then send again`;
   return clip(oneLine(stderr) || `could not send to ${who}`, 240);
 }
+// A send still under way after 12 s is answered "queued" at once, so it is first written to disk (outbox/inflight):
+// if it fails later it goes to the outbox; if this server stops before it ends (a restart), whichever floor server
+// starts next finds the file of a process that is gone and queues it. It may then arrive twice, never zero times.
+const INFLIGHT = path.join(SHARED, 'outbox', 'inflight');
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+async function requeueOrphans() {
+  let files = []; try { files = await fs.readdir(INFLIGHT); } catch { return; }
+  for (const f of files) { // taken by a server that stopped before it finished: free again
+    const m = /^(.*\.json)\.(\d+)$/.exec(f); if (m && !alive(Number(m[2]))) await fs.rename(path.join(INFLIGHT, f), path.join(INFLIGHT, m[1])).catch(() => {});
+  }
+  try { files = await fs.readdir(INFLIGHT); } catch { return; }
+  for (const f of files.filter((x) => x.endsWith('.json'))) {
+    const file = path.join(INFLIGHT, f), x = await fs.readFile(file, 'utf8').then(JSON.parse).catch(() => null);
+    if (!x || (alive(x.pid) && Date.now() - x.at < 180_000)) continue; // its server is still sending it (hc gives up at 120 s)
+    const mine = `${file}.${process.pid}`; // one floor server takes it: the rename fails for the others
+    try { await fs.rename(file, mine); } catch { continue; }
+    const q = await run(bin('team-deliver'), [x.name, x.text, '--source', 'office'], { timeout: 30_000 });
+    if (q.ok) await fs.unlink(mine).catch(() => {}); else await fs.rename(mine, file).catch(() => {});
+  }
+}
+setTimeout(() => requeueOrphans().catch(() => {}), 5000).unref(); setInterval(() => requeueOrphans().catch(() => {}), 60_000).unref();
 async function deliver(name, text) {
   const started = Date.now();
   const p = run(HC, ['send', '--json', name, '--', text], { timeout: 120_000 });
   const first = await Promise.race([p, new Promise((r) => setTimeout(() => r(null), 12_000))]);
-  if (!first) { // still typing after 12 s: the page hears "queued" now, so a late failure must not lose the text
-    p.then((late) => { if (!late.ok) run(bin('team-deliver'), [name, text, '--source', 'office'], { timeout: 30_000 }).catch(() => {}); }).catch(() => {});
+  if (!first) { // still typing after 12 s: the page hears "queued" now, so the text is on disk until the send ends
+    const file = path.join(INFLIGHT, `${process.pid}-${started}-${crypto.randomBytes(4).toString('hex')}.json`);
+    await fs.mkdir(INFLIGHT, { recursive: true, mode: 0o700 }).catch(() => {});
+    await fs.writeFile(file, JSON.stringify({ pid: process.pid, port: PORT, name, text, at: started }), { mode: 0o600 }).catch(() => {});
+    p.then(async (late) => {
+      if (!late.ok && !(await run(bin('team-deliver'), [name, text, '--source', 'office'], { timeout: 30_000 })).ok) return; // left on disk: retried
+      await fs.unlink(file).catch(() => {});
+    }).catch(() => {});
   }
   if (first && !first.ok) {
     const a = state.agents.find((x) => x.herdrName === name);
