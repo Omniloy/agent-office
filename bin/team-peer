@@ -72,11 +72,27 @@ def call(pid, path, body=None, floor=None, timeout=8):
 # them, tried again by `team-peer flush` (the watchdog runs it with its outbox). Never dropped silently.
 POUT = D + "/peer-outbox.json"
 def flush_all(only=None):
-    """Send what the peer outbox holds, oldest first; after one that cannot go, nothing more to that building this
-    time (a connection change must not overtake an earlier one). Returns one line per item tried."""
-    if not os.path.exists(POUT): return []
-    with Pout() as q: todo = list(q)
+    """Tell each building the connection change waiting for it (peers.json "tell"), then send what the peer outbox
+    holds, oldest first; after one that cannot go, nothing more to that building this time. One flush at a time on
+    this computer (a lock held across the network calls), so nothing sent later overtakes something sent earlier.
+    Returns one line per item tried."""
+    lk = open(D + "/peer-flush.lock", "w"); fcntl.flock(lk, fcntl.LOCK_EX)
+    try: return _flush(only)
+    finally: fcntl.flock(lk, fcntl.LOCK_UN); lk.close()
+def _flush(only):
     out, stuck = [], set()
+    d = L.load(F, {}) or {}
+    for pid, p in (d.get("peers") or {}).items():
+        t = p.get("tell")
+        if not t or (only and pid != only): continue
+        r = call(pid, "/peer/state", {"status": t.get("status"), "verb": t.get("verb"), "from": d.get("me") or {}})
+        if r.get("unreached"): stuck.add(pid); out.append(f'{t.get("verb")} to {pid}: still waiting ({r.get("error")})'); continue
+        with Box() as d2:   # sent (or refused for good): clear it, unless a newer change replaced it meanwhile
+            q = (d2["peers"].get(pid) or {})
+            if (q.get("tell") or {}).get("seq") == t.get("seq"): q.pop("tell", None)
+        out.append(f'{t.get("verb")} to {pid}: ' + ("sent back" if r.get("ok") else "refused by the other building: " + str(r.get("error"))))
+    if not os.path.exists(POUT): return out
+    with Pout() as q: todo = list(q)
     for item in todo:
         pid = item.get("peer")
         if (only and pid != only) or pid in stuck: continue
@@ -181,8 +197,9 @@ elif c in ("request", "accept", "decline", "disconnect", "pause", "resume"):
             p["status"] = "on"; p.pop("pausedBy", None)
         if p["status"] == "on": p["met"] = True   # once connected, its key is kept (forget removes it)
         new = p["status"]; me = d["me"]
-        with Pout() as q:   # the other building is told through the peer outbox: kept, in order, until it takes it
-            q.append({"peer": pid, "path": "/peer/state", "body": {"status": new, "verb": c, "from": me}, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "req": c})
+        # what the other building must hear is saved WITH the new state (one write): the latest change is kept until
+        # it takes it (team-peer flush, also the watchdog's); a newer change replaces an older one not yet sent
+        p["tell"] = {"verb": c, "status": new, "seq": time.time()}
     r = flush_peer(pid)
     print(f'{p["name"]}: {status_line(p)}' + ("" if r == "sent" else f' (they will be told as soon as they can take it: {r})'))
 elif c == "floor":
@@ -356,6 +373,5 @@ elif c == "answered":   # called by team-ask when one of ours answers an externa
     elif r.get("unreached"): print("could not be sent back now (" + str(r.get("error")) + "): it is kept and sent again when the link is back (team-peer flush)")
     else: print("the other building refused it: " + str(r.get("error")))
 elif c == "flush":   # try again what could not travel (answers, connection changes); the watchdog runs this
-    if not os.path.exists(POUT): sys.exit()
     for line in flush_all(): print(line)
 else: print(__doc__)
