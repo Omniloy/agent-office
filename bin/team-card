@@ -103,9 +103,14 @@ elif cmd == "pass":
     with Box() as d:
         prev = d.get(key, {})
         may({**prev, "key": key}, me, "pass")
+        # the message to the new holder is on disk (their outbox) BEFORE the card changes hands: if it cannot be
+        # written, nothing changes and the pass can simply be tried again
+        try: queued = L.enqueue(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card")
+        except Exception as e: sys.exit(f"{key} was not passed: the message to {to} could not be kept ({type(e).__name__}). Nothing changed; try again.")
         d[key] = {"owner": to, "team": NAMES[to]["team"], "since": now(), "title": o.get("title") or prev.get("title", ""), "waiting": None}
-    log(key, "pass", by=me, to=to, msg=msg)
-    r = L.deliver(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card")
+    try: log(key, "pass", by=me, to=to, msg=msg)
+    except Exception: pass   # the history line is a convenience
+    r = L.send_queued(to, queued)
     print(f"{key} passed to {to}; " + L.said(r, to) + ("." if r == "delivered" else " (it is also in `team-card mine`)."))
 elif cmd == "wait":
     me = who(o); key = key_ok(pos[0]); on = " ".join(pos[1:]) or sys.exit("say what or who outside the team you are waiting for")

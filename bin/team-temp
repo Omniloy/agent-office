@@ -33,8 +33,17 @@ def jira_key(t, key):
     """Only a key of a Jira project this floor has gets the handover posted (CRM-1 on a floor without Jira does not)."""
     return any(p.get("jiraProject") and key.startswith(p["jiraProject"] + "-") for p in t.get("projects", []))
 def still_live(name):
-    try: return json.loads(sh(HC, "get", name, "--json").stdout).get("state") == "live"
-    except Exception: return False
+    """False only when Herdr says the terminal is gone or not live; if it cannot be asked, it may still be running."""
+    r = sh(HC, "get", name, "--json")
+    try: j = json.loads((r.stdout or r.stderr).strip().splitlines()[-1])
+    except Exception: return True
+    if (j.get("error") or {}).get("kind") == "not_found": return False
+    return j.get("state") == "live" if "state" in j else True
+def end_session(name):
+    """Stop a temp's terminal; True only once it is confirmed gone."""
+    sh(HC, "kill", name); time.sleep(1)
+    if still_live(name): return False
+    sh(HC, "rm", name); return True
 def log(d, x): open(f"{d}/temps-log.jsonl", "a").write(json.dumps(x, ensure_ascii=False) + "\n")
 def opts(args):
     o, pos, i = {}, [], 0
@@ -146,15 +155,24 @@ elif cmd == "hire":
     labels = ["--label", f"herdr.tab={prefix}{name}", "--label", f'team.persona={base["slug"]}', "--label", "team.temp=1"]
     if sp: labels = ["--label", f'herdr.space={sp[0]["id"]}'] + labels
     os.makedirs(f"{d}/work/temps", exist_ok=True)
+    x["state"] = "starting"; cur.append(x); save(d, cur)   # recorded BEFORE a paid session starts: never one nobody tracks
     res = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", d, *labels, "--", *argv)
-    if res.returncode != 0: sys.exit("could not start the temp: " + res.stderr.strip()[:300])
-    cur.append(x); save(d, cur)
+    if res.returncode != 0:
+        if still_live(name): sys.exit(f"{name} may have started but did not say so ({res.stderr.strip()[:200]}); it stays listed: check it, then team-temp release {name} --as {lead} --no-handover \"failed start\"")
+        save(d, [y for y in temps(d) if y["herdrName"] != name]); sys.exit("could not start the temp: " + res.stderr.strip()[:300])
+    for y in cur:
+        if y["herdrName"] == name: y["state"] = "working"
+    save(d, cur)
     time.sleep(2); sh("herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": f"{first} {n} · temp"}))
     tc = sh(f"{HOME}/.local/bin/team-card", "take", o["ticket"], "--as", name, "--by", lead)   # the card is the temp's to move, given by the lead
     if tc.returncode:   # the temp cannot work a card it does not hold: undo the hire instead of leaving it half done
-        sh(HC, "kill", name); sh(HC, "rm", name)
+        why = (tc.stderr or tc.stdout).strip()[:200]
+        if not end_session(name):   # still running: it stays listed (leaving), so it is never a paid session nobody tracks
+            for y in cur:
+                if y["herdrName"] == name: y["state"] = "leaving"
+            save(d, cur); sys.exit(f"not hired: {o['ticket']} could not be given to {name} ({why}), and its session did not stop; it is listed as leaving: team-temp release {name} --as {lead} --no-handover \"failed hire\"")
         save(d, [y for y in temps(d) if y["herdrName"] != name])   # still under the hire's lock
-        sys.exit(f"not hired: {o['ticket']} could not be given to {name} ({(tc.stderr or tc.stdout).strip()[:200]})")
+        sys.exit(f"not hired: {o['ticket']} could not be given to {name} ({why})")
     tell(who, f"FYI from {lead}: {o['ticket']} is being done by a temp copy of you, `{name}`. Leave that card alone unless {lead} says otherwise; if `{name}` asks you something, answer briefly.")
     print(f"hired {name} (copy of {who}) for {o['ticket']}. Talk to it with: hc send {name} -- \"...\". Let it go with: team-temp release {name} --as {lead}")
 
@@ -189,7 +207,7 @@ elif cmd == "release":
         tc = sh(f"{HOME}/.local/bin/team-card", "take", k, "--as", x["of"], "--by", o["as"])
         if tc.returncode: sys.exit(f'not released: {k} could not go back to {x["of"]} ({(tc.stderr or tc.stdout).strip()[:200]}). Move it with team-card, then run this again.')
     k = sh(HC, "kill", x["herdrName"]); time.sleep(1)
-    if k.returncode != 0 and still_live(x["herdrName"]):   # its session did not end: it stays listed, marked leaving
+    if still_live(x["herdrName"]):   # its session did not end (or Herdr cannot say): it stays listed, marked leaving
         lock = locked(d); cur = temps(d)
         for y in cur:
             if y["herdrName"] == x["herdrName"]: y["state"] = "leaving"
