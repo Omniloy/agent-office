@@ -254,14 +254,17 @@ elif c in ("answer", "read", "cancel"):
                 if x.get("ext") and not (x.get("ext") or {}).get("connect"):   # it travels back to the other building (team-peer keeps it until it arrives)
                     r = subprocess.run([f"{L.BIN}/team-peer", "answered", "--queue"], input=json.dumps({**x, "answer": ans, "answeredBy": by}), capture_output=True, text=True, timeout=60)
                     if r.returncode: raise RuntimeError((r.stderr or r.stdout).strip()[-200:] or f"team-peer exit {r.returncode}")
-                elif not x.get("ext"): queued = L.enqueue(x["from"], msg, "team-ask")
+                elif x.get("ext"):   # a request to connect buildings: the accept/decline is applied (and queued for them) first
+                    r = subprocess.run([f"{L.BIN}/team-peer", "answered"], input=json.dumps({**x, "answer": ans, "answeredBy": by}), capture_output=True, text=True, timeout=120)
+                    if r.returncode: raise RuntimeError((r.stderr or r.stdout).strip()[-200:] or f"team-peer exit {r.returncode}")
+                    connected = r.stdout.strip()
+                else: queued = L.enqueue(x["from"], msg, "team-ask")
             except Exception as e: sys.exit(f'#{x["id"]} is still open: the answer could not be kept ({type(e).__name__}: {str(e)[:160]}). Nothing changed; try again.')
             x["status"], x["answer"], x["answeredAt"], x["answeredBy"] = "answered", ans, now(), by
         else: x["status"] = "read" if c == "read" else "cancelled"; x["answeredAt"] = now(); x["by"] = me
     out = "ok"
-    if c == "answer" and (x.get("ext") or {}).get("connect"):   # a request to connect buildings: the answer is the accept/decline
-        r = subprocess.run([f"{L.BIN}/team-peer", "answered"], input=json.dumps(x), capture_output=True, text=True)
-        out = "answered; " + (r.stdout.strip() or r.stderr.strip()[:200])
+    if c == "answer" and (x.get("ext") or {}).get("connect"):   # already applied above
+        out = "answered; " + connected
     elif c == "answer" and x.get("ext"):   # already kept in the peer outbox: send it now (the watchdog retries if the link is down)
         r = subprocess.run([f"{L.BIN}/team-peer", "flush"], capture_output=True, text=True, timeout=120)
         out = "answered; " + ("sent back" if "sent back" in r.stdout else "kept, and sent back as soon as the other building can take it (team-peer flush)")

@@ -71,6 +71,23 @@ def call(pid, path, body=None, floor=None, timeout=8):
 # Answers to another building's requests that could not travel yet (link down): kept here until that building takes
 # them, tried again by `team-peer flush` (the watchdog runs it with its outbox). Never dropped silently.
 POUT = D + "/peer-outbox.json"
+def flush_all(only=None):
+    """Send what the peer outbox holds, oldest first; after one that cannot go, nothing more to that building this
+    time (a connection change must not overtake an earlier one). Returns one line per item tried."""
+    if not os.path.exists(POUT): return []
+    with Pout() as q: todo = list(q)
+    out, stuck = [], set()
+    for item in todo:
+        pid = item.get("peer")
+        if (only and pid != only) or pid in stuck: continue
+        r = call(pid, item.get("path", "/peer/answer"), item.get("body") or {})
+        if r.get("unreached"): stuck.add(pid); out.append(f'#{item.get("req")} to {pid}: still waiting ({r.get("error")})'); continue
+        with Pout() as q: q[:] = [i for i in q if i != item]
+        out.append(f'#{item.get("req")} to {pid}: ' + ("sent back" if r.get("ok") else "refused by the other building: " + str(r.get("error"))))
+    return out
+def flush_peer(pid):
+    lines = flush_all(pid)
+    return "sent" if lines and all("still waiting" not in l and "refused" not in l for l in lines) else (lines[-1].split(": ", 1)[-1] if lines else "sent")
 class Pout:
     def __enter__(self):
         self.l = open(POUT + ".lock", "w"); fcntl.flock(self.l, fcntl.LOCK_EX)
@@ -164,8 +181,10 @@ elif c in ("request", "accept", "decline", "disconnect", "pause", "resume"):
             p["status"] = "on"; p.pop("pausedBy", None)
         if p["status"] == "on": p["met"] = True   # once connected, its key is kept (forget removes it)
         new = p["status"]; me = d["me"]
-    r = call(pid, "/peer/state", {"status": new, "verb": c, "from": me})
-    print(f'{p["name"]}: {status_line(p)}' + ("" if r.get("ok") else f' (they could not be told now: {r.get("error", "no answer")})'))
+        with Pout() as q:   # the other building is told through the peer outbox: kept, in order, until it takes it
+            q.append({"peer": pid, "path": "/peer/state", "body": {"status": new, "verb": c, "from": me}, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "req": c})
+    r = flush_peer(pid)
+    print(f'{p["name"]}: {status_line(p)}' + ("" if r == "sent" else f' (they will be told as soon as they can take it: {r})'))
 elif c == "floor":
     with Box() as d:
         p = find(d, pos[0]); port = str(pos[1]); m = p.setdefault("my", {}).setdefault(port, {"on": True, "share": False})
@@ -253,8 +272,11 @@ elif c == "incoming":   # called by the office server for what arrives from anot
             elif verb == "resume" and st == "paused" and p.get("pausedBy") == "them": p["status"] = "on"; p.pop("pausedBy", None); note = f'{p["name"]} resumed the connection.'
             if p["status"] == "on": p["met"] = True
             name, owner = p["name"], p.get("owner") or "Someone"
-        if note == "ASK": ask("external", "--to", "owner", "--name", f"{owner} · {name}", "--peer", pid, "--connect", "--options", "Accept|Decline", f"{name} wants to connect its agents with yours. Accept?")
-        elif note: ask("external", "--to", "owner", "--note", "--name", name, "--peer", pid, note)
+            # what the owner must see is saved before the new state is: if it cannot be, nothing changes and the
+            # other building tries again (plain text: a 503); its request is kept in its peer outbox
+            if note == "ASK": r = ask("external", "--to", "owner", "--name", f"{owner} · {name}", "--peer", pid, "--connect", "--options", "Accept|Decline", f"{name} wants to connect its agents with yours. Accept?")
+            elif note: r = ask("external", "--to", "owner", "--note", "--name", name, "--peer", pid, note)
+            if note and r.returncode: raise RuntimeError("could not save it for the owner now: " + ((r.stderr or r.stdout).strip()[:160] or f"team-ask exit {r.returncode}"))
         print(json.dumps({"ok": True}))
     elif kind == "message":   # a person or an agent of another building writes to the lead of one of our floors
         d = load(F, {}); p = d.get("peers", {}).get(pid)
@@ -320,7 +342,8 @@ elif c == "answered":   # called by team-ask when one of ours answers an externa
     x = json.load(sys.stdin); e = x.get("ext") or {}
     if e.get("connect"):
         v = "accept" if str(x.get("answer", "")).strip().lower().startswith("acc") else "decline"
-        print(subprocess.run([sys.argv[0], v, e["peer"]], capture_output=True, text=True).stdout.strip()); sys.exit()
+        r = subprocess.run([sys.argv[0], v, e["peer"]], capture_output=True, text=True)
+        print(r.stdout.strip() or r.stderr.strip()[:200]); sys.exit(r.returncode)
     body = {"ref": e.get("ref") or {}, "text": x.get("answer", ""), "title": x.get("title", ""), "lead": x.get("answeredBy", "")}
     with Pout() as q:   # on disk before the call: a crash or a dead link leaves it queued, never lost
         item = {"peer": e.get("peer"), "path": "/peer/answer", "body": body, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "req": x.get("id")}
@@ -332,12 +355,7 @@ elif c == "answered":   # called by team-ask when one of ours answers an externa
     if r.get("ok"): print("sent back")
     elif r.get("unreached"): print("could not be sent back now (" + str(r.get("error")) + "): it is kept and sent again when the link is back (team-peer flush)")
     else: print("the other building refused it: " + str(r.get("error")))
-elif c == "flush":   # try again the answers that could not travel (the watchdog runs this)
+elif c == "flush":   # try again what could not travel (answers, connection changes); the watchdog runs this
     if not os.path.exists(POUT): sys.exit()
-    with Pout() as q: todo = list(q)
-    for item in todo:
-        r = call(item.get("peer"), item.get("path", "/peer/answer"), item.get("body") or {})
-        if r.get("unreached"): print(f'#{item.get("req")} to {item.get("peer")}: still waiting ({r.get("error")})'); continue
-        with Pout() as q: q[:] = [i for i in q if i != item]
-        print(f'#{item.get("req")} to {item.get("peer")}: ' + ("sent back" if r.get("ok") else "refused by the other building: " + str(r.get("error"))))
+    for line in flush_all(): print(line)
 else: print(__doc__)
