@@ -32,6 +32,13 @@ import teamlib as L
 HOME = L.HOME; STORE = f"{L.SHARED}/cards.json"; LOG = f"{L.SHARED}/cards-log.jsonl"
 NAMES = {n: {"team": p["team"], "name": p["name"], "lead": p.get("lead") or n} for n, p in L.people().items()}   # everyone on the floors, and their temps
 LEAVING = {n for n, p in L.people().items() if p.get("temp") and p.get("state") == "leaving"}   # temps being released: no new cards
+def can_hold(n):
+    """Checked again inside the cards lock, right before the write: someone on the floors now (a temp being released,
+    or already gone, is not). team-temp release lists the temp's cards under this same lock after marking it leaving,
+    so a card written before that is handed back, and one written after is refused here."""
+    if n == "__OWNER_ID__": return True
+    p = L.people().get(n)
+    return bool(p) and not (p.get("temp") and p.get("state") == "leaving")
 KEY = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 def key_ok(k):
     if not KEY.fullmatch(k): sys.exit(f'"{k}" is not a card key: letters and digits, a dash, a number (APP-123)')
@@ -95,6 +102,7 @@ elif cmd == "take":
     with Box() as d:
         prev = d.get(key, {})
         may({**prev, "key": key}, by, "take")   # a card someone else holds is taken only by them, their lead or __OWNER__
+        if not can_hold(me): sys.exit(f"{me} is not on the floors any more (a temp being released?): {key} was not taken.")
         d[key] = {"owner": me, "team": (NAMES.get(me) or {}).get("team") or prev.get("team", ""), "since": now(), "title": " ".join(pos[1:]) or prev.get("title", ""), "waiting": None}
     log(key, "take", by=by, to=me, prev=prev.get("owner", "")); print(f"{key} is yours." if by == me else f"{key} is {me}'s now.")
 elif cmd == "pass":
@@ -110,6 +118,7 @@ elif cmd == "pass":
             may({**prev, "key": key}, me, "pass")
             # the message to the new holder is on disk (their outbox) BEFORE the card changes hands; it is only ever typed
             # in while the card really is theirs (ifCard), and taken back if the card cannot be saved
+            if not can_hold(to): sys.exit(f"{to} is not on the floors any more (a temp being released?): {key} was not passed.")
             queued = L.enqueue(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card", if_card=(key, to))
             d[key] = {"owner": to, "team": NAMES[to]["team"], "since": now(), "title": o.get("title") or prev.get("title", ""), "waiting": None}
     except SystemExit: raise
