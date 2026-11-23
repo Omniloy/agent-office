@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install or update the agent office on this Mac from this repo.
+"""Install or update the agent office on this computer (macOS or Linux) from this repo.
 
   python3 setup/install.py --config office.config.json            install / update
   python3 setup/install.py --config office.config.json --dry-run  say what would happen, change nothing
@@ -37,7 +37,7 @@ Safe updates:
 - The retired Business floor (biz-office, ~/.omniloy-biz) is not installed or touched.
 - The protocol sections that follow the repo are shown as a diff and applied only with a yes (or --protocol-sections).
 """
-import sys, os, json, re, shutil, subprocess, argparse, datetime, filecmp, glob, hashlib, difflib
+import sys, os, json, re, shutil, subprocess, argparse, datetime, filecmp, glob, hashlib, difflib, shlex, stat
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOME = os.path.expanduser("~")
@@ -46,6 +46,8 @@ BIN = f"{HOME}/.local/bin"
 HERDR = f"{HOME}/.config/herdr-app"
 LA = f"{HOME}/Library/LaunchAgents"
 TEAMS = {"dev": f"{HOME}/.omniloy-team", "admin": f"{HOME}/.omniloy-admin"}   # Business (~/.omniloy-biz) is retired
+SU = f"{HOME}/.config/systemd/user"
+LINUX = sys.platform.startswith("linux")
 BIZ = f"{HOME}/.omniloy-biz"
 RESERVED = {"lucia", "daniel", "marta", "kenji", "irene", "pablo", "elena", "zeus", "val", "iker", "nora", "teo", "bruno", "lia",
             "ines", "mateo", "kai", "olga", "all", "team", "owner"}
@@ -266,7 +268,7 @@ class Run:
             if target and not os.path.lexists(dst) and os.path.abspath(target) != dst:
                 if not self.dry: os.symlink(target, dst)
                 self.say(f"{link} linked to {target}")
-        if BIN not in os.environ.get("PATH", "").split(":"): self.warn.append(f"{BIN} is not on PATH: add `export PATH=\"$HOME/.local/bin:$PATH\"` to ~/.zshrc (agents need the team-* tools)")
+        if BIN not in os.environ.get("PATH", "").split(":"): self.warn.append(f"{BIN} is not on PATH: add `export PATH=\"$HOME/.local/bin:$PATH\"` to your shell startup file (~/.zshrc or ~/.bashrc) (agents need the team-* tools)")
     def teams(self):
         c = self.cfg; have = c.get("runtimes") or ["claude"]
         for kind, d in TEAMS.items():
@@ -336,7 +338,7 @@ class Run:
                 if not self.dry: os.makedirs(d, exist_ok=True); os.symlink(f"{home}/{name}", f"{d}/{name}")
         self.say(f"skills: {n} file(s) written to {home}" + (f", {made} new link(s) in {', '.join(dests)}" if made else f", linked from {', '.join(dests)}"))
     def herdr(self):
-        if not os.path.isdir(HERDR): self.warn.append("Herdr has not been opened yet on this Mac (no ~/.config/herdr-app): open it once, then run the installer again to add the panels"); return
+        if not os.path.isdir(HERDR): self.warn.append("Herdr has not been opened yet on this computer (no ~/.config/herdr-app): open it once, then run the installer again to add the panels"); return
         n = self.tree(f"{REPO}/herdr/mods", f"{HERDR}/mods") + self.tree(f"{REPO}/herdr/layouts", f"{HERDR}/layouts")
         self.say(f"Herdr panels and layout: {n} file(s) written")
     def services(self):
@@ -366,6 +368,7 @@ class Run:
                                  f"(paid sessions). Left as it is; to stop it: launchctl bootout gui/{os.getuid()}/com.omniloy.office-up and delete the file")
             self.say("com.omniloy.office-up not set up (it resumes people at login: --login-resume, with the owner's yes); "
                      + ("com.omniloy.offices still starts the floors at login" if os.path.exists(f"{LA}/com.omniloy.offices.plist") else "nothing starts the floors at login"))
+        if LINUX: return self.systemd(jobs, path)
         old = f"{LA}/com.omniloy.offices.plist"   # replaced by com.omniloy.office-up: backed up, then unloaded
         if self.resume and os.path.exists(old):
             if not self.dry:
@@ -388,6 +391,27 @@ class Run:
                 r = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", f], capture_output=True, text=True)
                 if r.returncode: self.warn.append(f"{label} could not be loaded: {r.stderr.strip()[:200]}")
             self.say(f"{label} {'installed' if changed else 'loaded'} (starts at login{', kept alive' if keep else ''})")
+    def systemd(self, jobs, path):
+        for label, args, cwd, log, keep in jobs:
+            unit = "omniloy-" + label.rsplit(".", 1)[1]; f = f"{SU}/{unit}.service"; up = unit == "omniloy-office-up"
+            run = "Restart=always\n" if keep else "Type=oneshot\n" + ("RemainAfterExit=yes\n" if up else "")
+            body = (f"[Unit]\nDescription={unit}\n\n[Service]\n{run}ExecStart={' '.join(shlex.quote(x) for x in args)}\nWorkingDirectory={cwd}\nEnvironment=PATH={path}\n"
+                    f"StandardOutput=append:{log}\nStandardError=append:{log}\n" + ("\n[Install]\nWantedBy=default.target\n" if keep or up else ""))
+            if not self.dry: os.makedirs(SU, exist_ok=True); os.makedirs(os.path.dirname(log), exist_ok=True)
+            changed = self.put_data(body.encode(), f, 0o644)
+            if f in [d for d, _, _ in self.drift] or (not changed and not os.path.exists(f)): continue   # left as it is (reported)
+            def sc(*a): return subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True)
+            if up:   # it may restart agents: enabled so it runs at the next login, never started from here
+                self.say(f"{unit} {'written' if changed else 'unchanged'}: it runs at the next login (start it now only with the owner's yes: systemctl --user start {unit}.service)")
+                if not self.dry and changed:
+                    sc("daemon-reload"); r = sc("enable", f"{unit}.service")
+                    if r.returncode: self.warn.append(f"{unit} could not be enabled: {r.stderr.strip()[:200]}")
+                continue
+            if not changed and not self.dry and sc("is-active", f"{unit}.service").returncode == 0: self.say(f"{unit} unchanged and running"); continue
+            if not self.dry:
+                sc("daemon-reload"); r = sc("enable", "--now", f"{unit}.service")
+                if r.returncode: self.warn.append(f"{unit} could not be loaded: {r.stderr.strip()[:200]}")
+            self.say(f"{unit} {'installed' if changed else 'loaded'} (starts at login{', kept alive' if keep else ''})")
     def names(self):
         """Nothing that leaves the office names the team: the check runs before every outgoing write in Claude Code."""
         if "claude" not in (self.cfg.get("runtimes") or ["claude"]): self.warn.append("Codex has no check before each write: there the rule on team names rests on the protocol and on team-jira and team-draft"); return
@@ -411,10 +435,11 @@ def check():
     def line(ok, name, detail=""):
         nonlocal bad; print(f"{'ok ' if ok else 'NO '} {name}{': ' + detail if detail else ''}"); bad += 0 if ok else 1
     def opt(ok, name, detail=""): print(f"{'ok ' if ok else '-- '} {name}{': ' + detail if detail else ''}")
-    line(sys.platform == "darwin", "macOS", "" if sys.platform == "darwin" else "this system is built for macOS (launchd, Keychain)")
+    line(sys.platform in ("darwin", "linux"), "macOS or Linux", "" if sys.platform in ("darwin", "linux") else "this system is built for macOS (launchd, Keychain) or Linux (systemd, token file)")
     line(bool(node()), "node", node() or "install Node 20 or newer")
     line(bool(herdr_app()), "Herdr app", herdr_app() or "curl -fsSL https://releases.herdr.dev/app/install.sh | sh")
     line(bool(herdr_core()), "herdr-core (hc)", herdr_core() or "installed by Herdr on first start")
+    line(bool(shutil.which("lsof")), "lsof (office-restart finds the ports' owners)", "" if shutil.which("lsof") else "sudo pacman -S lsof" if LINUX else "built into macOS")
     cl, cx = which("claude"), which("codex")
     line(bool(cl or cx), "an agent CLI", ", ".join(x for x in (cl and "claude", cx and "codex") if x) or "install Claude Code or Codex")
     for name in ("team-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
@@ -441,11 +466,11 @@ def check():
     alive = bool(w and w.returncode == 0)
     line(alive and ago < 300, "watchdog runs (team-watch: nudges, held messages, memory check)",
          "" if alive and ago < 300 else (f"{w.stdout.strip()}, but its last check was {int(ago // 60)} min ago (log: ~/.omniloy-team/logs/watchdog.log)" if alive else "team-watch start")
-         + ("" if os.path.exists(f"{LA}/com.omniloy.watchdog.plist") else "; its login job is not installed: run the installer with --only-services"))
+         + ("" if os.path.exists(f"{SU}/omniloy-watchdog.service" if LINUX else f"{LA}/com.omniloy.watchdog.plist") else "; its login job is not installed: run the installer with --only-services"))
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
-    opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
-    opt(os.path.exists(f"{LA}/com.omniloy.peer-link.plist"), "link to other buildings installed (optional, see setup/SETUP.md step 11)")
+    if not LINUX: opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
+    opt(os.path.exists(f"{SU}/omniloy-peer-link.service" if LINUX else f"{LA}/com.omniloy.peer-link.plist"), "link to other buildings installed (optional, see setup/SETUP.md step 11)")
     g = (fl[0]["port"] if fl else 4317) + 1000
     opt(up(g), f"{fl[0]['name'] if fl else 'Dev'} floor's guest listener answers on {g} (what another building reaches)")
     opt(os.path.exists(f"{TEAMS['dev']}/remote.json"), "phone door remote.json (optional)")
@@ -453,8 +478,12 @@ def check():
         t = json.load(open(f"{TEAMS['dev']}/team.json")); j = t.get("jira") or {}
         opt(bool(j.get("site")), "Jira configured (optional)", j.get("site", ""))
         if j.get("site"):
-            r = subprocess.run(["security", "find-generic-password", "-s", j.get("keychainService", "herdr-jira"), "-a", j.get("email", "")], capture_output=True)
-            line(r.returncode == 0, "Jira token in the Keychain", "" if r.returncode == 0 else "see setup/SETUP.md, step Jira")
+            if LINUX:
+                tf = f"{TEAMS['dev']}/jira-token"; ok = os.path.isfile(tf) and stat.S_IMODE(os.stat(tf).st_mode) == 0o600
+                line(ok, "Jira token file (mode 0600)", "" if ok else f"install -m 600 /dev/null {tf}, then put the token in it")
+            else:
+                r = subprocess.run(["security", "find-generic-password", "-s", j.get("keychainService", "herdr-jira"), "-a", j.get("email", "")], capture_output=True)
+                line(r.returncode == 0, "Jira token in the Keychain", "" if r.returncode == 0 else "see setup/SETUP.md, step Jira")
     except Exception: pass
     return 1 if bad else 0
 
@@ -499,7 +528,8 @@ def main():
     if not a.only_services:
         print("\nThe background services (LaunchAgents: floors at login, watchdog, artifacts, phone link) were not touched."
               "\nThey are a separate step, only with the owner's yes: the same command with --only-services.")
-    print("\nNext: python3 setup/install.py --check   (then continue with setup/SETUP.md)")
+    guide = "setup/SETUP-linux.md" if LINUX else "setup/SETUP.md"
+    print(f"\nNext: python3 setup/install.py --check   (then continue with {guide})")
     sys.exit(drift)
 
 if __name__ == "__main__": main()

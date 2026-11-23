@@ -35,11 +35,12 @@ You do not install this by hand. Clone the repo, open it with your coding agent 
 
 > Set up the agent office from this repo.
 
-The agent follows [`setup/SETUP.md`](setup/SETUP.md): it checks your Mac, asks you the decisions (your name and
-language, Claude Code or Codex or both, Jira or not, phone access, voice, a second machine), installs what is
-missing with your go-ahead, and verifies each step.
+The agent follows [`setup/SETUP.md`](setup/SETUP.md) on a Mac, or [`setup/SETUP-linux.md`](setup/SETUP-linux.md) on
+Linux (it lists only what differs and points back to `SETUP.md` for the rest). It checks your computer, asks you the
+decisions (your name and language, Claude Code or Codex or both, Jira or not, phone access, voice, a second machine),
+installs what is missing with your go-ahead, and verifies each step.
 
-Requirements: a Mac (Apple Silicon recommended), a Claude or ChatGPT subscription for the agent CLI you choose, and
+Requirements: a Mac (Apple Silicon recommended) or a Linux computer, a Claude or ChatGPT subscription for the agent CLI you choose, and
 about 15 minutes. Everything else is installed during setup.
 
 ## Update

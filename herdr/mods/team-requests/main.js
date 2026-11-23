@@ -3,6 +3,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextView } from "gpui-base";
 import { exec, readTextFile, theme, home, run, setShared } from "herdr";
+const openUrl = (u) => exec("sh", ["-c", 'if command -v xdg-open >/dev/null 2>&1; then xdg-open "$1"; else open "$1"; fi', "sh", u]);
 
 // Text the person can select and copy (plain divs are not selectable).
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -21,7 +22,7 @@ const linked = (s) => {
     .replace(/https?:\/\/[^\s<)\]]*[^\s<)\].,;:!?]/g, (url) => a(url, refOf(url) || url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "")))
     .replace(/\u0000(\d+)\u0000/g, (_m, i) => held[i]).replace(/\n/g, "<br>");
 };
-const sel = (id, s, color) => { const el = TextView.html(id, `<span>${linked(s)}</span>`).selectable(true).on_link_click((url) => { exec("open", [url]); }); return color ? el.text_color(color) : el; };
+const sel = (id, s, color) => { const el = TextView.html(id, `<span>${linked(s)}</span>`).selectable(true).on_link_click((url) => { openUrl(url); }); return color ? el.text_color(color) : el; };
 
 const FLOORS = [".omniloy-team", ".omniloy-crm", ".omniloy-web", ".omniloy-lab"]; // when floors.json does not say otherwise
 const ago = (iso) => {
@@ -106,7 +107,7 @@ export default class TeamRequests extends View {
         .child(div().flex_none().text_size(12).font_semibold().child(p.name.split(" ")[0]))
         .child(div().flex_1().min_w(0).truncate().text_size(10).text_color(t.dim).child(`${p.role}${x.via ? ` · via ${this.persona(x.via).name.split(" ")[0]}` : ""} · ${ago(x.created)}`))
         .when(Boolean(x.ticket), (e) => e.child(div().id(`rq-t-${x.id}`).flex_none().px(5).h(16).flex().items_center().rounded(4).bg(t.raised).text_size(10).text_color(t.accent).cursor_pointer()
-          .on_click(() => { if (site) exec("open", [`${site}/browse/${x.ticket}`]); }).child(x.ticket)))
+          .on_click(() => { if (site) openUrl(`${site}/browse/${x.ticket}`); }).child(x.ticket)))
         .child(div().flex_none().px(5).h(16).flex().items_center().rounded(4).text_size(10)
           .bg(isReq && open ? t.blocked + "33" : t.raised).text_color(isReq && open ? t.blocked : t.muted)
           .child(x.menu ? `terminal · ${x.status}${x.answeredVia ? ` in ${x.answeredVia}` : ""}` : isReq ? (open ? "needs you" : x.status) : open ? "message" : x.status)))
