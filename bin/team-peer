@@ -81,10 +81,12 @@ class Pout:
         if a[0] is None or a[0] is SystemExit:
             tmp = POUT + f".{os.getpid()}.tmp"; json.dump(self.q, open(tmp, "w"), indent=1, ensure_ascii=False); os.chmod(tmp, 0o600); os.replace(tmp, POUT)
         fcntl.flock(self.l, fcntl.LOCK_UN)
-def visit(v):   # shown in the rooms: someone teleports out, or a visitor arrives (see travel.js)
-    l = open(VISITS + ".lock", "w"); fcntl.flock(l, fcntl.LOCK_EX)
-    now = int(time.time() * 1000); items = [x for x in load(VISITS, []) if x.get("until", 0) > now - 60000]
-    items.append({"id": secrets.token_hex(5), "ts": now, **v}); save(VISITS, items); fcntl.flock(l, fcntl.LOCK_UN)
+def visit(v):   # shown in the rooms: someone teleports out, or a visitor arrives (see travel.js); only a picture, never fatal
+    try:
+        l = open(VISITS + ".lock", "w"); fcntl.flock(l, fcntl.LOCK_EX)
+        now = int(time.time() * 1000); items = [x for x in load(VISITS, []) if x.get("until", 0) > now - 60000]
+        items.append({"id": secrets.token_hex(5), "ts": now, **v}); save(VISITS, items); fcntl.flock(l, fcntl.LOCK_UN)
+    except Exception: pass
 def teams():
     out = {}
     for b in load(D + "/building.json", {}).get("floors") or []:

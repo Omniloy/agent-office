@@ -267,6 +267,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
         const b = await readBody(req);
         if (!on(peer)) return json(res, 403, { error: 'Your buildings are not connected (or the connection is paused): you can look, but not write. The owners connect them from the city view.' });
         const r = await tool('team-peer', ['incoming', 'message'], { peer: peer.id, floor: port, text: String(b.text || '').slice(0, 4000), name: String(req.headers['x-peer-user'] || peer.owner || 'Someone'), building: peer.name, color: '#fbbf24' });
+        if (r.retry) return json(res, 503, { error: 'this building could not take it right now; try again later' }); // not a refusal: it may be saved
         return json(res, r.ok ? 200 : 400, r.json || { error: r.err || r.out || 'not delivered' });
       }
       if (p === '/api/requests') { // this floor's open questions, only while connected and while its owner shares them with that building

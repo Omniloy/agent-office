@@ -48,10 +48,11 @@ function door(port) {
     const asks = req.method === 'POST' && String(req.url).split('?')[0] === '/api/guest/message' && d.id;
     if (asks && !(await run(path.join(BIN, 'team-peer'), ['asked', d.id])).ok) { res.writeHead(503, { 'content-type': 'application/json' }); return res.end('{"error":"could not note the message here; try again"}'); }
     const up = http.request({ host: '127.0.0.1', port: d.target, method: req.method, path: req.url, headers }, (r) => {
-      if (asks && !(r.statusCode >= 200 && r.statusCode < 300)) run(path.join(BIN, 'team-peer'), ['asked', d.id, '--undo']);
+      // taken back only when that floor refused it for good (4xx); a 5xx or a broken link may have saved it there
+      if (asks && r.statusCode >= 400 && r.statusCode < 500 && ![408, 429].includes(r.statusCode)) run(path.join(BIN, 'team-peer'), ['asked', d.id, '--undo']);
       res.writeHead(r.statusCode || 502, r.headers); r.pipe(res);
     });
-    up.on('error', () => { if (asks) run(path.join(BIN, 'team-peer'), ['asked', d.id, '--undo']); if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }); res.end('That building is not reachable right now.'); });
+    up.on('error', () => { if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' }); res.end('That building is not reachable right now.'); });
     req.pipe(up);
   }).listen(port, '127.0.0.1').on('error', (e) => log(`door ${port}: ${e.message}`));
 }
