@@ -22,7 +22,8 @@ sentences, and only about what they need to decide or do.
    Never say "should work".
 6. **Stop on anything surprising**: an existing install you did not expect, a port in use by something else, a
    refusal from a security tool. Say what you found and ask.
-7. This package is built for **macOS** (it uses launchd and the Keychain). On Linux or Windows, tell the user it
+7. This package is built for **macOS** (it uses launchd and the Keychain). On Linux, follow `setup/SETUP-linux.md`
+   instead: it lists only the steps that differ and points back here for the rest. On Windows, tell the user it
    is not supported yet and stop, unless they only want a second machine (step 11).
 
 ## Step 1. Look, change nothing

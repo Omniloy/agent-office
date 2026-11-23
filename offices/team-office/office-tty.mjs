@@ -197,7 +197,7 @@ const stopCast = async () => { if (casting) { casting = false; latest = null; aw
 async function openPage() {
   await ensureServer(); // the server may have stopped while the tab was hidden
   const { chromium } = loadPlaywright();
-  browser = await chromium.launch({ headless: true, args: ['--use-angle=metal', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] });
+  browser = await chromium.launch({ headless: true, args: [...(process.platform === 'darwin' ? ['--use-angle=metal'] : []), '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'] });
   context = await browser.newContext({ viewport: { width: view.w, height: view.h }, deviceScaleFactor: DPR });
   page = await context.newPage();
   // Links that would open a new window (Jira cards) open in the real browser instead.

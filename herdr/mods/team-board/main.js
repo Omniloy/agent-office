@@ -1,6 +1,8 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar } from "gpui-base";
 import { exec, readTextFile, theme, home, shared, setShared, props as modProps } from "herdr";
+const openUrl = (u) => exec("sh", ["-c", 'if command -v xdg-open >/dev/null 2>&1; then xdg-open "$1"; else open "$1"; fi', "sh", u]);
+const isLinux = async () => (await exec("uname", ["-s"])).stdout.trim() === "Linux";
 
 // Team Board: pending PRs + Jira board per project, filtered by persona (agent).
 // Config: ~/.omniloy-team/team.json. Jira token: macOS Keychain (service from config).
@@ -75,6 +77,11 @@ export default class TeamBoard extends View {
   async token() {
     if (this.tok) return this.tok;
     const j = this.config.jira;
+    if (await isLinux()) {
+      this.tok = (await readTextFile(`${home()}/.omniloy-team/jira-token`).catch(() => "")).trim();
+      if (!this.tok) throw new Error("No Jira token in ~/.omniloy-team/jira-token");
+      return this.tok;
+    }
     const r = await exec("security", ["find-generic-password", "-s", j.keychainService || "herdr-jira", "-a", j.email, "-w"], { timeout: 10000 });
     if (r.code !== 0) throw new Error(`No Jira token in Keychain (service "${j.keychainService || "herdr-jira"}")`);
     this.tok = r.stdout.trim();
@@ -255,7 +262,7 @@ export default class TeamBoard extends View {
     const other = i.labels.filter((l) => !ps.some((p) => p.label === l)).slice(0, 3);
     return v_flex().id(`issue-${i.key}`).w_full().flex_none().p(8).gap(5).rounded(8).bg(t.surface).border_1().border_color(t.border)
       .cursor_pointer().hover((s) => s.border_color(t.accent))
-      .on_click(() => { exec("open", [i.url]); })
+      .on_click(() => { openUrl(i.url); })
       .child(h_flex().gap(6).items_center()
         .child(div().text_size(11).font_semibold().text_color(t.accent).child(i.key))
         .child(div().text_size(10).text_color(t.dim).child(i.type ?? ""))
@@ -273,7 +280,7 @@ export default class TeamBoard extends View {
     const ci = { pass: ["✓ CI", t.ansi2], fail: ["✗ CI", t.ansi1], pending: ["● CI", t.blocked], none: ["– CI", t.dim] }[pr.ci];
     const rv = pr.draft ? ["Draft", t.dim] : { APPROVED: ["Approved", t.ansi2], CHANGES_REQUESTED: ["Changes requested", t.ansi1], REVIEW_REQUIRED: ["Review required", t.blocked] }[pr.review] ?? ["No review", t.muted];
     return h_flex().id(`pr-${pr.repo}-${pr.number}`).w_full().flex_none().px(10).py(6).gap(10).items_center().rounded(7)
-      .cursor_pointer().hover((s) => s.bg(t.hover)).on_click(() => { exec("open", [pr.url]); })
+      .cursor_pointer().hover((s) => s.bg(t.hover)).on_click(() => { openUrl(pr.url); })
       .child(div().w(150).flex_none().truncate().text_size(11).text_color(t.dim).child(`${pr.short}#${pr.number}`))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(div().truncate().text_size(12).text_color(t.foreground).child(pr.title))
@@ -338,7 +345,7 @@ export default class TeamBoard extends View {
   ticketChip(k, t, prefix) {
     const st = this.traceJira[k], color = !st ? t.dim : st.cat === "done" ? t.ansi2 : st.cat === "new" ? t.muted : t.blocked;
     return h_flex().id(`tk-${prefix}-${k}`).flex_none().h(18).px(6).gap(4).items_center().rounded(5).bg(t.raised).text_size(10).cursor_pointer()
-      .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); exec("open", [`${this.config.jira.site}/browse/${k}`]); })
+      .hover((s) => s.bg(t.hover)).on_click((_e, cx) => { cx.stop_propagation(); openUrl(`${this.config.jira.site}/browse/${k}`); })
       .child(div().size(6).rounded_full().bg(color))
       .child(div().text_color(t.foreground).child(`${prefix}${k}`))
       .when(Boolean(st), (e) => e.child(div().text_color(t.dim).child(st?.name ?? "")));
@@ -347,7 +354,7 @@ export default class TeamBoard extends View {
   traceRow(r, gaps, t) {
     const url = r.impl[0] ? `${this.config.jira.site}/browse/${r.impl[0]}` : this.proj()?.trace?.url;
     return v_flex().id(`req-${r.tab}-${r.req}`).w_full().flex_none().px(12).py(7).gap(4).cursor_pointer()
-      .border_b(1).border_color(t.border).hover((s) => s.bg(t.hover)).on_click(() => { if (url) exec("open", [url]); })
+      .border_b(1).border_color(t.border).hover((s) => s.bg(t.hover)).on_click(() => { if (url) openUrl(url); })
       .child(h_flex().gap(6).items_center()
         .child(div().flex_none().text_size(11).font_semibold().text_color(t.accent).child(r.req))
         .child(this.stagePill(this.stageOf(r), t))
@@ -413,7 +420,7 @@ export default class TeamBoard extends View {
         .child(div().text_size(26).font_semibold().line_height("28px").child(`${pct(items)}%`))
         .child(div().flex_1().min_w(0).pb(3).text_size(11).text_color(t.muted).child("overall progress"))
         .when(Boolean(p?.trace?.url), (e) => e.child(div().id("open-sheet").flex_none().pb(3).text_size(10).text_color(t.accent).cursor_pointer()
-          .on_click(() => { exec("open", [p.trace.url]); }).child("Sheet ↗"))))
+          .on_click(() => { openUrl(p.trace.url); }).child("Sheet ↗"))))
       .child(h_flex().w(barW).h(8).rounded(4).overflow_hidden().bg(t.raised).children(all.map((st) => {
         const c = count((x) => x.stage.id === st.id);
         return div().h_full().flex_none().w(Math.round((barW * c) / n)).bg(this.stageColor(st, t));
@@ -495,7 +502,7 @@ export default class TeamBoard extends View {
     const ci = { pass: ["✓", t.ansi2], fail: ["✗", t.ansi1], pending: ["●", t.blocked], none: ["", t.dim] }[pr.ci];
     const rv = pr.draft ? ["Draft", t.dim] : { APPROVED: ["Approved", t.ansi2], CHANGES_REQUESTED: ["Changes", t.ansi1], REVIEW_REQUIRED: ["Needs review", t.blocked] }[pr.review] ?? ["No review", t.dim];
     return v_flex().id(`pr-${pr.repo}-${pr.number}`).w_full().flex_none().px(12).py(7).gap(3).cursor_pointer()
-      .border_b(1).border_color(t.border).hover((s) => s.bg(t.hover)).on_click(() => { exec("open", [pr.url]); })
+      .border_b(1).border_color(t.border).hover((s) => s.bg(t.hover)).on_click(() => { openUrl(pr.url); })
       .child(h_flex().gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(12).text_color(t.foreground).child(pr.title))
         .when(Boolean(ci[0]), (e) => e.child(div().flex_none().text_size(11).text_color(ci[1]).child(ci[0]))))
@@ -508,7 +515,7 @@ export default class TeamBoard extends View {
   issueRowNarrow(i, t) {
     const ps = this.personasOf([...i.labels, this.holder(i.key)]);
     return v_flex().id(`issue-${i.key}`).w_full().flex_none().px(12).py(7).gap(3).cursor_pointer()
-      .border_b(1).border_color(t.border).hover((s) => s.bg(t.hover)).on_click(() => { exec("open", [i.url]); })
+      .border_b(1).border_color(t.border).hover((s) => s.bg(t.hover)).on_click(() => { openUrl(i.url); })
       .child(div().text_size(12).text_color(t.foreground).child(i.summary ?? ""))
       .child(h_flex().gap(6).items_center().text_size(10).text_color(t.dim)
         .child(div().flex_none().font_semibold().text_color(t.accent).child(i.key))
@@ -595,7 +602,7 @@ export default class TeamBoard extends View {
     }
     if (view !== "prs") {
       const link = div().id("open-board").flex_none().text_size(10).text_color(t.accent).cursor_pointer()
-        .on_click((_e, cx) => { cx.stop_propagation(); exec("open", [hasBoard ? `${cfg.jira.site}/jira/software/c/projects/${p.jiraProject}/boards/${hasBoard}` : `${cfg.jira.site}/browse/${p.jiraProject}`]); })
+        .on_click((_e, cx) => { cx.stop_propagation(); openUrl(hasBoard ? `${cfg.jira.site}/jira/software/c/projects/${p.jiraProject}/boards/${hasBoard}` : `${cfg.jira.site}/browse/${p.jiraProject}`); })
         .child("Jira ↗");
       rows.push(h_flex().w_full().flex_none().h(26).px(12).gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.dim).child(`${p?.jiraProject ?? ""} ${this.board === "product" ? "Product" : "Dev"} board · ${issues.length} cards`))
@@ -680,7 +687,7 @@ export default class TeamBoard extends View {
         .child(div().font_semibold().text_size(12).child(`${p?.jiraProject ?? ""} ${this.board === "product" ? "Product" : "Dev"} board · ${issues.length}`))
         .when(!hasBoard, (e) => e.child(div().text_size(11).text_color(t.dim).child(`no board: JQL project = ${p?.jiraProject}`)))
         .child(div().id("open-board").text_size(11).text_color(t.accent).cursor_pointer()
-          .on_click(() => { exec("open", [hasBoard ? `${cfg.jira.site}/jira/software/c/projects/${p.jiraProject}/boards/${hasBoard}` : `${cfg.jira.site}/browse/${p.jiraProject}`]); })
+          .on_click(() => { openUrl(hasBoard ? `${cfg.jira.site}/jira/software/c/projects/${p.jiraProject}/boards/${hasBoard}` : `${cfg.jira.site}/browse/${p.jiraProject}`); })
           .child("Open in Jira ↗"))
         .when(Boolean(this.jiraError), (e) => e.child(div().flex_1().min_w(0).truncate().text_size(11).text_color(t.ansi1).child(this.jiraError))))
       .child(div().id("jira-x").flex_1().min_h(0).overflow_x_scroll()

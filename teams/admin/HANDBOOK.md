@@ -117,7 +117,7 @@ When this handbook is wrong or incomplete, fix it as part of the change.
 ## Artifacts server (added 2026-11-14)
 
 - Server: `~/.omniloy-office/artifacts/server.mjs` on 127.0.0.1:4340, kept alive by LaunchAgent `com.omniloy.artifacts`
-  (log: `~/.omniloy-team/artifacts/.server.log`). Restart: `launchctl kickstart -k gui/$(id -u)/com.omniloy.artifacts`.
+  (log: `~/.omniloy-team/artifacts/.server.log`). Restart: on macOS `launchctl kickstart -k gui/$(id -u)/com.omniloy.artifacts`; on Linux `systemctl --user restart omniloy-artifacts` (Linux has no `~/Library` and no `launchctl`).
   Phone: the same port through `tailscale serve`, same door as the offices (`remote.json`).
 - Store: `~/.omniloy-team/artifacts/<herdrName>/<slug>/` (`index.html|mdx|md`, `meta.json`). Deleted pages go to `.trash/` for 7 days.
 - Tool: `~/.local/bin/team-artifact` (`new`, `ls`, `path`, `rm`). Skill for everyone: `local-artifact`
