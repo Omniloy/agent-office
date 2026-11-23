@@ -11,7 +11,12 @@ if not cfg.get("site") or not cfg.get("email"):
     sys.exit("Jira is not set up on this Mac (no jira.site and jira.email in ~/.omniloy-team/team.json). Cards live in team-card only.")
 cfg.setdefault("keychainService", "herdr-jira")
 SITE, EMAIL = cfg["site"], cfg["email"]
-TOK = subprocess.run(["security","find-generic-password","-s",cfg["keychainService"],"-a",EMAIL,"-w"],capture_output=True,text=True).stdout.strip()
+def keychain_token(service, email):
+    if sys.platform.startswith("linux"):
+        try: return open(os.path.expanduser("~/.omniloy-team/jira-token")).read().strip()
+        except OSError: return ""
+    return subprocess.run(["security","find-generic-password","-s",service,"-a",email,"-w"],capture_output=True,text=True).stdout.strip()
+TOK = keychain_token(cfg["keychainService"], EMAIL)
 AUTH = "Basic " + base64.b64encode(f"{EMAIL}:{TOK}".encode()).decode()
 def req(method, path, body=None, headers=None, raw=None):
     h = {"Authorization": AUTH, "Accept": "application/json"}

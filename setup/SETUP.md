@@ -22,7 +22,7 @@ sentences, and only about what they need to decide or do.
    Never say "should work".
 6. **Stop on anything surprising**: an existing install you did not expect, a port in use by something else, a
    refusal from a security tool. Say what you found and ask.
-7. This package is built for **macOS** (it uses launchd and the Keychain). On Linux or Windows, tell the user it
+7. This package supports **macOS** (launchd, Keychain) and **Linux** (systemd user services, a token file). On Windows, tell the user it
    is not supported yet and stop, unless they only want a second machine (step 11).
 
 ## Step 1. Look, change nothing
@@ -129,6 +129,8 @@ as offline until step 8: that is expected.
 2. The user stores it in the Keychain **in their own terminal** (it prompts for the token, nothing is echoed):
 
        security add-generic-password -s herdr-jira -a <their Atlassian email> -w
+
+   On Linux there is no Keychain: the user creates `~/.omniloy-team/jira-token` with mode 0600 containing only the token (`install -m 600 /dev/null ~/.omniloy-team/jira-token`, then types the token into it; the agent never sees it).
 
 3. Verify without printing anything secret: `team-jira search "project = <KEY> ORDER BY updated DESC" 3`.
 4. Board ids (`productBoard`, `devBoard`) in `~/.omniloy-team/team.json` are optional; leave them `null` unless the
@@ -239,11 +241,7 @@ a request there and the answer comes back. Agents of the two buildings can talk 
 6. Phone: with step 9 done, each foreign floor's door (ports from 7100 up, printed in the log) is also served
    through Tailscale with the same `remote.json` check as the offices.
 
-The installer and its services are for macOS. On a Linux computer the same files work, but you place them and keep
-them running yourself: the floors (`PORT=4317 node server.mjs` in the app folder) under a service, and, only if
-that computer is the one whose Herdr lists the other machine, `node peer-link.mjs` too, for example as a systemd
-user unit with `ExecStart=<node> %h/.omniloy-office/team-office/peer-link.mjs`, `Restart=always` and
-`~/.local/bin` on its `PATH`. A computer whose floors are not the default two lists them in
+On Linux the installer sets up the same services as systemd user units (`~/.config/systemd/user/omniloy-*.service`). User services only run while the user's session is active, unless lingering is enabled: `loginctl enable-linger <user>` (needs sudo; the owner runs it). A computer whose floors are not the default two lists them in
 `~/.omniloy-team/floors.json`: `[{ "name": "Dev", "port": 4317, "dir": ".omniloy-team" }]`.
 
 ## Step 12. Hand over

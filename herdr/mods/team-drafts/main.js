@@ -4,6 +4,7 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input, TextareaState, Textarea, TextView } from "gpui-base";
 import { exec, readTextFile, theme, home, run } from "herdr";
+const openUrl = (u) => exec("sh", ["-c", 'if command -v xdg-open >/dev/null 2>&1; then xdg-open "$1"; else open "$1"; fi', "sh", u]);
 
 // Text the person can select and copy (plain divs are not selectable).
 const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -114,7 +115,7 @@ export default class TeamDrafts extends View {
         .child(div().child(sig.title))
         .child(h_flex().gap(sig.appSeparator.trim() ? 5 : 6).items_center().children(sig.links.flatMap((l, i) => [
           ...(i && sig.appSeparator.trim() ? [div().text_color(t.muted).child(sig.appSeparator.trim())] : []),
-          div().id(`dr-l-${x.id}-${i}`).text_color(t.accent).underline().cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); exec("open", [l.url]); }).child(l.label)])))));
+          div().id(`dr-l-${x.id}-${i}`).text_color(t.accent).underline().cursor_pointer().on_click((_e, cx) => { cx.stop_propagation(); openUrl(l.url); }).child(l.label)])))));
   }
   ask(id, cx) {
     const q = this.question[id], v = q.value().trim(); if (!v) return;
@@ -122,7 +123,7 @@ export default class TeamDrafts extends View {
   }
   openExternal(x, cx) {
     // Saving first means the WhatsApp link carries the text as it is on screen.
-    const go = async () => { const r = await exec(BIN(), ["show", String(x.id)], { timeout: 10000 }); try { const link = JSON.parse(r.stdout).link; if (link) exec("open", [link]); } catch {} };
+    const go = async () => { const r = await exec(BIN(), ["show", String(x.id)], { timeout: 10000 }); try { const link = JSON.parse(r.stdout).link; if (link) openUrl(link); } catch {} };
     if (this.dirty(x)) this.save(x, cx, () => { go(); }); else go();
   }
 
@@ -185,7 +186,7 @@ export default class TeamDrafts extends View {
           .when(Boolean(x.link), (e2) => e2.child(this.btn(`dr-open-${id}`, `Open in ${app}`, t, (cx) => this.openExternal(x, cx), !canSend && !dirty)))
           .child(this.btn(`dr-copy-${id}`, this.flash[id] === "Copied" ? "Copied" : "Copy", t, (cx) => {
             const text = this.body[id].value();
-            if (typeof cx.write_to_clipboard === "function") cx.write_to_clipboard(text); else exec("sh", ["-c", 'printf %s "$1" | pbcopy', "copy", text]);
+            if (typeof cx.write_to_clipboard === "function") cx.write_to_clipboard(text); else exec("sh", ["-c", 'if command -v pbcopy >/dev/null 2>&1; then printf %s "$1" | pbcopy; elif command -v wl-copy >/dev/null 2>&1; then printf %s "$1" | wl-copy; else printf %s "$1" | xclip -selection clipboard; fi', "copy", text]);
             this.flash[id] = "Copied"; cx.notify();
           })))
         .child(h_flex().gap(5).flex_wrap()

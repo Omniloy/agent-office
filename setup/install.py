@@ -10,7 +10,7 @@ name. It never overwrites a team folder that already exists (people, protocols, 
 It does not install Herdr, Node, Claude Code, Codex or Tailscale, and it never starts agents: setup/SETUP.md
 tells the installing agent how to do those with the user's go-ahead.
 """
-import sys, os, json, re, shutil, subprocess, argparse, datetime, filecmp, glob
+import sys, os, json, re, shutil, subprocess, argparse, datetime, filecmp, glob, shlex, stat
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOME = os.path.expanduser("~")
@@ -18,6 +18,8 @@ APPS = f"{HOME}/.omniloy-office"
 BIN = f"{HOME}/.local/bin"
 HERDR = f"{HOME}/.config/herdr-app"
 LA = f"{HOME}/Library/LaunchAgents"
+SU = f"{HOME}/.config/systemd/user"
+LINUX = sys.platform.startswith("linux")
 TEAMS = {"dev": f"{HOME}/.omniloy-team", "biz": f"{HOME}/.omniloy-biz", "admin": f"{HOME}/.omniloy-admin"}
 RESERVED = {"lucia", "daniel", "marta", "kenji", "irene", "pablo", "elena", "zeus", "all", "team", "owner"}
 STAMP = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -106,7 +108,7 @@ class Run:
             if target and not os.path.lexists(dst) and os.path.abspath(target) != dst:
                 if not self.dry: os.symlink(target, dst)
                 self.say(f"{link} linked to {target}")
-        if BIN not in os.environ.get("PATH", "").split(":"): self.warn.append(f"{BIN} is not on PATH: add `export PATH=\"$HOME/.local/bin:$PATH\"` to ~/.zshrc (agents need the team-* tools)")
+        if BIN not in os.environ.get("PATH", "").split(":"): self.warn.append(f"{BIN} is not on PATH: add `export PATH=\"$HOME/.local/bin:$PATH\"` to your shell startup file (~/.zshrc or ~/.bashrc) (agents need the team-* tools)")
     def teams(self):
         c = self.cfg; have = c.get("runtimes") or ["claude"]
         for kind, d in TEAMS.items():
@@ -177,6 +179,7 @@ class Run:
                 # other buildings: one link per computer to the offices on Herdr's other machines (idle when there are none)
                 ("com.omniloy.peer-link", [nd, f"{APPS}/team-office/peer-link.mjs"], f"{APPS}/team-office", f"{TEAMS['dev']}/logs/peer-link.log", True)]
         if self.cfg.get("mailRound"): jobs.append(("com.omniloy.mail-round", ["/usr/bin/python3", f"{BIN}/team-mail-round"], HOME, f"{TEAMS['biz']}/mail-round.log", False))
+        if LINUX: return self.systemd(jobs, path)
         if not self.dry and os.path.exists(f"{LA}/com.omniloy.offices.plist"):  # replaced by com.omniloy.office-up
             subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/com.omniloy.offices"], capture_output=True); os.remove(f"{LA}/com.omniloy.offices.plist")
         for label, args, cwd, log, keep in jobs:
@@ -190,6 +193,21 @@ class Run:
                 r = subprocess.run(["launchctl", "bootstrap", f"gui/{uid}", f], capture_output=True, text=True)
                 if r.returncode: self.warn.append(f"{label} could not be loaded: {r.stderr.strip()[:200]}")
             self.say(f"{label} installed (starts at login{', kept alive' if keep else ''})")
+    def systemd(self, jobs, path):
+        for label, args, cwd, log, keep in jobs:
+            unit = "omniloy-" + label.rsplit(".", 1)[1]; timed = unit == "omniloy-mail-round"
+            run = ("Type=oneshot\n" + ("RemainAfterExit=yes\n" if unit == "omniloy-office-up" else "")) if not keep else "Restart=always\n"
+            body = (f"[Unit]\nDescription={unit}\n\n[Service]\n{run}ExecStart={' '.join(shlex.quote(x) for x in args)}\nWorkingDirectory={cwd}\nEnvironment=PATH={path}\n"
+                    f"StandardOutput=append:{log}\nStandardError=append:{log}\n" + ("" if timed else "\n[Install]\nWantedBy=default.target\n"))
+            files = {unit + ".service": body}
+            if timed: files[unit + ".timer"] = "[Unit]\nDescription=omniloy-mail-round every 10 minutes\n\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=10min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
+            if not self.dry:
+                os.makedirs(SU, exist_ok=True); os.makedirs(os.path.dirname(log), exist_ok=True)
+                for fn, b in files.items(): open(f"{SU}/{fn}", "w").write(b)
+                for cmd in (["daemon-reload"], ["enable", "--now", unit + (".timer" if timed else ".service")]):
+                    r = subprocess.run(["systemctl", "--user", *cmd], capture_output=True, text=True)
+                    if r.returncode: self.warn.append(f"{unit} could not be loaded: {r.stderr.strip()[:200]}"); break
+            self.say(f"{unit} installed (starts at login{', kept alive' if keep else ''})")
     def names(self):
         """Nothing that leaves the office names the team: the check runs before every outgoing write in Claude Code."""
         if "claude" not in (self.cfg.get("runtimes") or ["claude"]): self.warn.append("Codex has no check before each write: there the rule on team names rests on the protocol and on team-jira and team-draft"); return
@@ -209,7 +227,7 @@ def check():
     def line(ok, name, detail=""):
         nonlocal bad; print(f"{'ok ' if ok else 'NO '} {name}{': ' + detail if detail else ''}"); bad += 0 if ok else 1
     def opt(ok, name, detail=""): print(f"{'ok ' if ok else '-- '} {name}{': ' + detail if detail else ''}")
-    line(sys.platform == "darwin", "macOS", "" if sys.platform == "darwin" else "this system is built for macOS (launchd, Keychain)")
+    line(sys.platform in ("darwin", "linux"), "macOS or Linux", "" if sys.platform in ("darwin", "linux") else "this system is built for macOS (launchd, Keychain) or Linux (systemd, token file)")
     line(bool(node()), "node", node() or "install Node 20 or newer")
     line(bool(herdr_app()), "Herdr app", herdr_app() or "curl -fsSL https://releases.herdr.dev/app/install.sh | sh")
     line(bool(herdr_core()), "herdr-core (hc)", herdr_core() or "installed by Herdr on first start")
@@ -230,16 +248,20 @@ def check():
     line(up(4340, "/"), "artifacts server answers on 4340")
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
-    opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
-    opt(os.path.exists(f"{LA}/com.omniloy.peer-link.plist"), "link to other buildings installed (optional, see setup/SETUP.md step 11)")
+    opt(os.path.exists(f"{SU}/omniloy-mail-round.timer" if LINUX else f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")
+    opt(os.path.exists(f"{SU}/omniloy-peer-link.service" if LINUX else f"{LA}/com.omniloy.peer-link.plist"), "link to other buildings installed (optional, see setup/SETUP.md step 11)")
     opt(up(5317), "Dev floor's guest listener answers on 5317 (what another building reaches)")
     opt(os.path.exists(f"{TEAMS['dev']}/remote.json"), "phone door remote.json (optional)")
     try:
         t = json.load(open(f"{TEAMS['dev']}/team.json")); j = t.get("jira") or {}
         opt(bool(j.get("site")), "Jira configured (optional)", j.get("site", ""))
         if j.get("site"):
-            r = subprocess.run(["security", "find-generic-password", "-s", j.get("keychainService", "herdr-jira"), "-a", j.get("email", "")], capture_output=True)
-            line(r.returncode == 0, "Jira token in the Keychain", "" if r.returncode == 0 else "see setup/SETUP.md, step Jira")
+            if LINUX:
+                tf = f"{TEAMS['dev']}/jira-token"; ok = os.path.isfile(tf) and stat.S_IMODE(os.stat(tf).st_mode) == 0o600
+                line(ok, "Jira token file (mode 0600)", "" if ok else f"install -m 600 /dev/null {tf}, then put the token in it")
+            else:
+                r = subprocess.run(["security", "find-generic-password", "-s", j.get("keychainService", "herdr-jira"), "-a", j.get("email", "")], capture_output=True)
+                line(r.returncode == 0, "Jira token in the Keychain", "" if r.returncode == 0 else "see setup/SETUP.md, step Jira")
     except Exception: pass
     return 1 if bad else 0
 

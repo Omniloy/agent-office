@@ -42,14 +42,15 @@ const money = (minor, cur, exp = 2) =>
 async function claudeService(configDir) {
   const dir = expand(configDir);
   if (dir === `${home()}/.claude`) return "Claude Code-credentials";
-  const r = await exec("sh", ["-c", 'printf %s "$1" | shasum -a 256', "sh", dir]);
+  const r = await exec("sh", ["-c", 'printf %s "$1" | (sha256sum 2>/dev/null || shasum -a 256)', "sh", dir]);
   return `Claude Code-credentials-${r.stdout.trim().slice(0, 8)}`;
 }
 
 async function claudeToken(configDir) {
   const service = await claudeService(configDir);
   let raw = null;
-  const r = await exec("security", ["find-generic-password", "-s", service, "-a", user(), "-w"]).catch(() => null);
+  const linux = (await exec("uname", ["-s"])).stdout.trim() === "Linux";
+  const r = linux ? null : await exec("security", ["find-generic-password", "-s", service, "-a", user(), "-w"]).catch(() => null);
   if (r && r.code === 0) raw = r.stdout;
   if (!raw) raw = await readTextFile(`${expand(configDir)}/.credentials.json`).catch(() => null);
   if (!raw) return null;
@@ -110,7 +111,7 @@ async function loadClaude(acc) {
 const SCAN = `cd "$1" 2>/dev/null || exit 3
 for f in $(ls -t sessions/*/*/*/rollout-*.jsonl 2>/dev/null | head -30); do
   l=$(grep '"rate_limits"' "$f" | tail -1)
-  if [ -n "$l" ]; then stat -f %m "$f"; printf '%s\\n' "$l"; exit 0; fi
+  if [ -n "$l" ]; then stat -c %Y "$f" 2>/dev/null || stat -f %m "$f"; printf '%s\\n' "$l"; exit 0; fi
 done
 exit 4`;
 

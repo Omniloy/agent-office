@@ -53,7 +53,8 @@ def build(i):
                "fileId": (p.get("trace") or {}).get("fileId"), "rows": r}, open(f"{DIR}/{i}.json","w"), ensure_ascii=False)
     print(f"{i}: {sum(1 for x in r if x['tab']=='active')} active requirements, {len(r)} total")
 def jira_status(ks):
-    j = cfg["jira"]; tok = subprocess.run(["security","find-generic-password","-s",j["keychainService"],"-a",j["email"],"-w"],capture_output=True,text=True).stdout.strip()
+    j = cfg["jira"]; path = os.path.expanduser("~/.omniloy-team/jira-token")
+    tok = subprocess.run(["security","find-generic-password","-s",j["keychainService"],"-a",j["email"],"-w"],capture_output=True,text=True).stdout.strip() if sys.platform == "darwin" else (open(path).read().strip() if os.path.exists(path) else "")
     auth = "Basic " + base64.b64encode(f'{j["email"]}:{tok}'.encode()).decode(); out = {}
     ks = sorted(set(ks))
     for s in range(0, len(ks), 80):
