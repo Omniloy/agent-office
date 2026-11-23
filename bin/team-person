@@ -228,6 +228,11 @@ def cmd_remove(who, as_, force):
                     else: x.pop("leaving", None)
             save_team(d, t2, {"what": "leaving" if on else "staying", "who": p["herdrName"], "by": as_})
     mark(True)
+    with open(f"{d}/.temps.lock", "w") as tl:   # the temps lock (team-temp hire checks "leaving" under it): no new copy after this
+        fcntl.flock(tl, fcntl.LOCK_EX)
+        copies = [y.get("herdrName") for y in L.temps_of(d) if y.get("of") == p["herdrName"]]
+    if copies:
+        mark(False); sys.exit(f"{p['herdrName']} still has temp copies at work ({', '.join(copies)}): release them first (team-temp release <temp> --as {lead}), so their cards come back to {p['herdrName']}.")
     ls = sh(f"{HOME}/.local/bin/team-card", "ls", "--owner", p["herdrName"], "--json")   # under the cards lock, after the mark
     try: cards = json.loads(ls.stdout) if ls.returncode == 0 else None
     except Exception: cards = None

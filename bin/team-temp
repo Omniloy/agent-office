@@ -119,6 +119,8 @@ elif cmd == "hire":
     if who == lead: sys.exit("the lead is not cloned; hire a copy of the person who would do the task")
     base = next(p for p in t["personas"] if p["herdrName"] == who)
     lock = locked(d)
+    if next((q for q in (L.read_quiet(f"{d}/team.json", {}) or {}).get("personas", []) if q.get("herdrName") == who), {}).get("leaving"):
+        sys.exit(f"{who} is being removed from the team: no temp copies of them")   # read under the temps lock (team-person remove)
     cur = temps(d); cap = int(t.get("maxTemps", 2)); busy = [x for x in cur if x.get("state") not in ("done", "leaving")]
     if len(busy) >= cap: sys.exit(f"{t.get('name')} already has {len(busy)} temps at work (limit {cap}). Release one first, or ask __OWNER__ to raise maxTemps.")
     idle = [x["herdrName"] for x in cur if x.get("state") == "done"]
