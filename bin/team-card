@@ -38,7 +38,7 @@ def can_hold(n):
     so a card written before that is handed back, and one written after is refused here."""
     if n == "__OWNER_ID__": return True
     p = L.people().get(n)
-    return bool(p) and not (p.get("temp") and p.get("state") == "leaving")
+    return bool(p) and not p.get("leaving") and not (p.get("temp") and p.get("state") == "leaving")   # leaving: team-person remove
 KEY = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 def key_ok(k):
     if not KEY.fullmatch(k): sys.exit(f'"{k}" is not a card key: letters and digits, a dash, a number (APP-123)')

@@ -13,7 +13,7 @@ memory file <team>/memory/<slug>.md. Edits take effect the next time the person 
 previous version in <team>/history/. `remove` ends the session, takes the person out of team.json and moves their
 instructions to <team>/former/; the memory file stays. It refuses while they still hold cards (see `team-card`)
 unless --force. <who> and <lead> are Herdr names."""
-import json, os, sys, subprocess, datetime, fcntl, re, shutil
+import json, os, sys, subprocess, datetime, fcntl, re, shutil, time
 sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import teamlib as L
 HOME = L.HOME; HC = L.HC
@@ -86,8 +86,12 @@ def codex_model():
     try: return re.search(r'^model\s*=\s*"([^"]+)"', open(f"{HOME}/.codex/config.toml").read(), re.M).group(1)
     except Exception: return ""
 def live(name):
-    try: return json.loads(sh(HC, "get", name, "--json").stdout).get("state") == "live"
-    except Exception: return False
+    """False only when Herdr says the terminal is gone or not live; if it cannot be asked, it may still be running."""
+    r = sh(HC, "get", name, "--json")
+    try: j = json.loads((r.stdout or r.stderr).strip().splitlines()[-1])
+    except Exception: return True
+    if (j.get("error") or {}).get("kind") == "not_found": return False
+    return j.get("state") == "live" if "state" in j else True
 def running():
     try: return {x.get("name") for x in json.loads(sh(HC, "ls", "--json").stdout)["terminals"] if x.get("state") == "live"}
     except Exception: return set()
@@ -215,14 +219,27 @@ def cmd_remove(who, as_, force):
     port, d, t, p = hit; lead = t.get("lead")
     if as_ != lead: sys.exit(f"only the team lead ({lead}) lets people go on {t.get('name')}")
     if p["herdrName"] == lead: sys.exit("the lead cannot remove themselves; that is __OWNER__'s call")
-    try: cards = {k: v for k, v in json.load(open(f"{HOME}/.omniloy-team/cards.json")).items() if isinstance(v, dict) and v.get("owner") == p["herdrName"]}
-    except Exception: cards = {}
-    if cards and not force: sys.exit(f"{p['herdrName']} still holds {', '.join(sorted(cards))}. Hand those cards over first (team-card), or repeat with --force.")
+    def mark(on):   # leaving: team-card refuses to hand them a card from now on (checked inside the cards lock)
+        with locked(d):
+            t2 = load(d)
+            for x in t2["personas"]:
+                if x["slug"] == p["slug"]:
+                    if on: x["leaving"] = True
+                    else: x.pop("leaving", None)
+            save_team(d, t2, {"what": "leaving" if on else "staying", "who": p["herdrName"], "by": as_})
+    mark(True)
+    ls = sh(f"{HOME}/.local/bin/team-card", "ls", "--owner", p["herdrName"], "--json")   # under the cards lock, after the mark
+    try: cards = json.loads(ls.stdout) if ls.returncode == 0 else None
+    except Exception: cards = None
+    if not isinstance(cards, dict): mark(False); sys.exit(f"the cards {p['herdrName']} holds could not be read ({(ls.stderr or ls.stdout).strip()[:120]}); nothing was changed.")
+    if cards and not force: mark(False); sys.exit(f"{p['herdrName']} still holds {', '.join(sorted(cards))}. Hand those cards over first (team-card), or repeat with --force.")
     with locked(d):
         t = load(d); p = next(x for x in t["personas"] if x["slug"] == p["slug"])
-        k = sh(HC, "kill", p["herdrName"])
-        if k.returncode != 0 and live(p["herdrName"]):   # their session is still running: nothing is changed, they stay on the team
-            sys.exit(f"{p['herdrName']}'s session could not be ended ({(k.stderr or k.stdout).strip()[:120]}); nothing was changed. Try again, or end it from Herdr first.")
+        k = sh(HC, "kill", p["herdrName"]); time.sleep(1)
+        if live(p["herdrName"]):   # their session is still running (or Herdr cannot say): nothing is changed, they stay on the team
+            p.pop("leaving", None); save_team(d, t, {"what": "staying", "who": p["herdrName"], "by": as_})
+            sys.exit(f"{p['herdrName']}'s session could not be confirmed ended ({(k.stderr or k.stdout).strip()[:120]}); nothing was changed. Try again, or end it from Herdr first.")
+        p.pop("leaving", None)
         os.makedirs(f"{d}/former", exist_ok=True)
         for ad in agent_dirs(t):
             src = f"{ad}/{p['slug']}.md"
