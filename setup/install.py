@@ -400,7 +400,9 @@ class Run:
             if not self.dry: os.makedirs(SU, exist_ok=True); os.makedirs(os.path.dirname(log), exist_ok=True)
             changed = self.put_data(body.encode(), f, 0o644)
             if f in [d for d, _, _ in self.drift] or (not changed and not os.path.exists(f)): continue   # left as it is (reported)
-            def sc(*a): return subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True)
+            def sc(*a):
+                try: return subprocess.run(["systemctl", "--user", *a], capture_output=True, text=True)
+                except FileNotFoundError: return subprocess.CompletedProcess([], 127, "", "systemctl was not found on this computer")
             if up:   # it may restart agents: enabled so it runs at the next login, never started from here
                 self.say(f"{unit} {'written' if changed else 'unchanged'}: it runs at the next login (start it now only with the owner's yes: systemctl --user start {unit}.service)")
                 if not self.dry and changed:

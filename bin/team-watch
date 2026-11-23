@@ -243,8 +243,10 @@ def start():
         return False
     if os.path.exists(PLIST) or os.path.exists(UNIT):
         # a nudge only: a job that is not loaded (unloaded on purpose) is never loaded from here
-        if sys.platform == "darwin": r = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{JOB}"], capture_output=True, text=True)
-        else: r = subprocess.run(["systemctl", "--user", "start", "omniloy-watchdog.service"], capture_output=True, text=True)
+        try:
+            if sys.platform == "darwin": r = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{JOB}"], capture_output=True, text=True)
+            else: r = subprocess.run(["systemctl", "--user", "start", "omniloy-watchdog.service"], capture_output=True, text=True)
+        except OSError: r = subprocess.CompletedProcess([], 127, "", "")   # launchctl or systemctl is not on this computer
         if r.returncode == 0 and up(): return f"started by its login job {JOB}"
     try:
         ts = [t for t in json.loads(hc("ls", "--json").stdout)["terminals"] if t.get("name") == TERM and t.get("state") == "live"] if TERM else [{"agent": "busy"}]
