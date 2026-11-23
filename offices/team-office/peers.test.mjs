@@ -71,6 +71,10 @@ await test('not connected: no message and no answer', async () => {
   assert.equal((await call('/peer/message', { body: { floor: PORT, text: 'hi' }, headers: P })).code, 403);
   assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 403);
 });
+await test('paused: an answer is "try again later" (503), so the other building keeps it', async () => {
+  peers('paused', { sent: { 1: 'aaaa1111' } });
+  assert.equal((await call('/peer/answer', { body: { ref: { local: 1 }, text: 'yes' }, headers: P })).code, 503);
+});
 await test('connected: an answer only to an open request that went to that building (home)', async () => {
   requests([{ id: 1, kind: 'request', from: 'ana', to: '__OWNER_ID__', status: 'open', title: 'Deploy?' }, { id: 2, kind: 'request', from: 'ana', status: 'answered', title: 'Old' }]);
   peers('on');

@@ -230,6 +230,8 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
         if (!['state', 'message', 'answer'].includes(kind)) return json(res, 404, { error: 'not found' });
         const b = await readBody(req);
         // state is how two buildings agree to connect; anything else needs the connection on
+        // paused is for a while: what comes now is "try again later" (their outbox keeps it); not connected is final
+        if (kind !== 'state' && peer.status === 'paused') return json(res, 503, { error: 'the connection is paused; try again later' });
         if (kind !== 'state' && !on(peer)) return json(res, 403, { error: 'the buildings are not connected' });
         if (kind === 'answer') { const why = await answerFits(peer, b); if (why) return json(res, 403, { error: why }); }
         if (kind === 'answer' && typeof b.text === 'string') b.text = argText(b.text.trim());
