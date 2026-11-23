@@ -289,19 +289,24 @@ elif c == "incoming":   # called by the office server for what arrives from anot
                 sys.exit("could not save the answer now: " + ((r.stderr or r.stdout).strip()[:200] or f"team-ask exit {r.returncode}"))
             with Box() as d: (d.get("sent") or {}).pop(str(int(ref["local"])), None)
             print(json.dumps({"ok": True})); sys.exit()
-        ag = str(ref.get("agent") or "")
-        with Box() as d: fits = asked_take(d, pid, ag)
-        if not fits: sys.exit(json.dumps({"error": "nothing from here is waiting for an answer from your building"}))
-        msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
+        ag = str(ref.get("agent") or ""); msg = f'{who} ({nm}) answered "{str(b.get("title", ""))[:80]}": {b.get("text", "")}'
+        to_agent = bool(ag and ag in L.people(admin=True)); queued = None
         try:
-            if ag and ag in L.people(admin=True):   # typed in now, or held in the outbox until they are off their menu
-                L.deliver(ag, msg, "team-peer")
-            else:
-                r = ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])
-                if r.returncode: raise RuntimeError((r.stderr or r.stdout).strip()[:200] or f"team-ask exit {r.returncode}")
-        except BaseException as e:   # not delivered and not saved: the answer is still expected, and the other building tries again
-            with Box() as d: asked_add(d, pid, ag)
-            sys.exit(f"could not take the answer now ({type(e).__name__}: {str(e)[:160]}); try again later")   # plain text: a 503 for the sender
+            with Box() as d:   # one at a time: is something from here waiting for this answer? keep the answer safe, then use the record up
+                cut = time.time() - ASKED_DAYS * 86400
+                if not any(x.get("peer") == pid and x.get("agent", "") == ag and x.get("ts", 0) > cut for x in (d.get("asked") or [])):
+                    sys.exit(json.dumps({"error": "nothing from here is waiting for an answer from your building"}))
+                if to_agent: queued = L.enqueue(ag, msg, "team-peer")   # on disk in their outbox (typed in just below)
+                else:
+                    r = ask("external", "--to", "owner", "--note", "--name", f"{who} · {nm}", "--peer", pid, *(["--body", b.get("text", "")] if len(msg) > 140 else []), msg[:140])
+                    if r.returncode: raise RuntimeError((r.stderr or r.stdout).strip()[:200] or f"team-ask exit {r.returncode}")
+                asked_take(d, pid, ag)   # saved with the store; if that save fails the answer is still kept: none is lost
+        except SystemExit: raise
+        except BaseException as e:
+            if queued is None: sys.exit(f"could not take the answer now ({type(e).__name__}: {str(e)[:160]}); try again later")   # plain text: a 503, retried
+        if queued is not None:
+            try: L.send_queued(ag, queued)
+            except Exception: pass   # it waits in the outbox; the watchdog types it in
         print(json.dumps({"ok": True}))
     else: sys.exit(json.dumps({"error": "unknown"}))
 elif c == "asked":   # called by peer-link before the owner's message to a visited building goes out (--undo: it did not)

@@ -352,11 +352,12 @@ export function createHub({ port, stuck, agents, theme }) { // theme: () => the 
         if (x.kind === 'stuck' && x.port !== port) continue; // the office they sit in announces it
         const claim = claimOf(k), mark = `pending ${Date.now()} ${port}`;
         await fs.mkdir(path.join(PUSH, 'sent'), { recursive: true, mode: 0o700 }).catch(() => {});
-        try { await fs.writeFile(claim, mark, { flag: 'wx' }); } catch {
+        try { await fs.writeFile(claim, mark, { flag: 'wx' }); } catch (e) {
+          if (e.code !== 'EEXIST') { known.delete(k); continue; } // could not write the claim (disk full?): try again next round
           const st = await claimState(claim);
           if (st === 'pending') { known.delete(k); continue; } // another office is sending it: look again next round
           if (st !== 'stale') continue; // already sent
-          await fs.writeFile(claim, mark); // that office stopped mid-send: this one sends it
+          if (!(await fs.writeFile(claim, mark).then(() => true, () => false))) { known.delete(k); continue; } // that office stopped mid-send: this one sends it
         }
         const out = await sendAll({ title: `${x.who} ${LABEL[x.kind] || 'needs you'}`, body: `${x.office} · ${x.title}`, port: x.port, hash: x.kind === 'stuck' ? `p=${x.from}` : 'foryou', tag: x.id });
         if (transient(out) && (tries.get(k) || 0) < 2) { // let go of the claim: this office or another tries again next round

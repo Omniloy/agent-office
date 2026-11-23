@@ -205,8 +205,10 @@ elif c == "external":   # from another building (written by team-peer): a reques
              "status": "open", "created": now(), "answer": "", "answeredAt": "", "to": to,
              "ext": {"peer": d.get("peer", ""), "connect": bool(d.get("connect")), "ref": json.loads(d["ref"]) if isinstance(d.get("ref"), str) else {}}}
         b["next"] += 1; b["items"].append(x); print(x["id"])
-    if to != OWNER:
+    if to != OWNER:   # the request is saved: a lead who cannot be told now finds it in team-ask mine and the watchdog's nudges
+      try:
         tell(to, f'{x["from"]} (from another building) left you request #{x["id"]}: "{x["title"]}". Read it with: team-ask show {x["id"]}. Answer it yourself (team-ask answer {x["id"]} "..." --as {to}); your answer is sent back to them. They are not on your team: share only what your owner would share, and escalate with team-ask request if unsure.')
+      except Exception as e: print(f"saved; {to} could not be told now ({type(e).__name__})", file=sys.stderr)
 elif c == "ls":
     with Box() as b:
         items = [x for x in b["items"] if (d.get("all") or x["status"] == "open") and (not d.get("from") or x["from"] == d["from"]) and (not d.get("to") or x.get("to", OWNER) == d["to"])]
