@@ -29,8 +29,9 @@ sentences, and only about what they need to decide or do.
 
 Run these and keep the answers:
 
-    uname -sm; sw_vers -productVersion; sysctl -n hw.memsize
-    which node npm brew claude codex tailscale hc herdr-app; node --version
+    uname -sm; sw_vers -productVersion; sysctl -n hw.memsize          # macOS
+    uname -sm; grep PRETTY_NAME /etc/os-release; free -h | head -2   # Linux
+    which node npm brew claude codex tailscale hc herdr-app lsof; node --version
     ls -d ~/.omniloy-team ~/.omniloy-biz ~/.omniloy-admin ~/.omniloy-office ~/.config/herdr-app 2>/dev/null
     python3 setup/install.py --check
 
@@ -52,7 +53,7 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 | 4 | Do they use Jira for the dev work? | If yes: site URL, their Atlassian email, and for each project a name, the Jira project key and the GitHub repos (`org/repo`). If no: cards live locally and Jira steps are skipped. |
 | 5 | Business floor: which Gmail account should it triage, and how often? | Only if they want the Business floor now. It needs the Gmail connector in their agent CLI. Default rounds: every 2 hours, 08:00 to 20:00, Monday to Friday. Goes in `gmailAccount` and `mailRound` in the config. No rounds wanted: leave `mailRound` out. |
 | 6 | Do they want the office on their phone? | Needs Tailscale (free for personal use; a company network needs an invite from its admin). |
-| 7 | Do they want to talk to the office by voice? | Local transcription. On Apple Silicon with 16 GB it downloads about 2 GB. |
+| 7 | Do they want to talk to the office by voice? | Local transcription. On Apple Silicon with 16 GB it downloads about 2 GB. On Linux the office microphone does not transcribe yet: say so, and offer dictation into the chat box with an outside tool (for example Superwhisper) instead. |
 | 8 | Is there another computer (a server, a second Mac) whose terminals they want inside Herdr? | Needs ssh access to it already working. If that computer has its own agent office, the two can also show up to each other as buildings (step 11). |
 
 ### Claude Code, Codex or both
@@ -70,13 +71,15 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 
 Install these yourself, in this order, and verify each. Only stop for the user where a line says so.
 
-1. **Homebrew** (only if you need it for Node or Tailscale and it is missing): the official command from
-   https://brew.sh. It asks for the Mac password, which you cannot type: give the user the command to paste.
+1. **Homebrew** (macOS only, and only if you need it for Node or Tailscale and it is missing): the official command
+   from https://brew.sh. It asks for the Mac password, which you cannot type: give the user the command to paste.
    If they would rather not install Homebrew, install Node from the official installer package or with nvm instead.
-2. **Node 20 or newer**: `brew install node`. Verify: `node --version`.
-3. **Herdr**: `curl -fsSL https://releases.herdr.dev/app/install.sh | sh`, then open it once (`open -a Herdr`) so
-   it writes `~/.config/herdr-app` and installs its core. Verify: `hc ls` answers (if `hc` is not found, the
-   installer in step 4 links it; rerun this check after).
+   On Linux skip this step: the packages come from the distribution (for example `pacman` on Arch).
+2. **Node 20 or newer**: macOS `brew install node`; Linux `sudo pacman -S nodejs npm` (or nvm). Verify: `node --version`.
+   On Linux the user types their sudo password in their own terminal, never in the chat.
+3. **Herdr**: `curl -fsSL https://releases.herdr.dev/app/install.sh | sh`, then open it once (`open -a Herdr` on macOS,
+   from the application menu on Linux) so it writes `~/.config/herdr-app` and installs its core. Verify: `hc ls`
+   answers (if `hc` is not found, the installer in step 4 links it; rerun this check after).
 4. **Agent CLI(s)** chosen in ASK 2, if missing. Use the vendor's current official instructions; at the time of
    writing: Claude Code `curl -fsSL https://claude.ai/install.sh | bash`, Codex `npm install -g @openai/codex`.
    **Sign in**: check first whether it is already signed in (`claude auth status` or a quick
@@ -85,7 +88,9 @@ Install these yourself, in this order, and verify each. Only stop for the user w
    a browser or the command needs an interactive screen you do not have, give the user the one command to paste
    in their terminal. The same goes for `gh auth login` if the dev floor will work with GitHub and `gh auth status`
    says it is not signed in. Verify each sign-in with its status command before moving on.
-5. Make sure `~/.local/bin` is on PATH for new shells: if `echo $PATH` lacks it, add
+5. **lsof** (macOS has it already; Linux: `sudo pacman -S lsof`). Verify: `command -v lsof`. Without it `office-restart`
+   cannot find the owner of each port.
+6. Make sure `~/.local/bin` is on PATH for new shells: if `echo $PATH` lacks it, add
    `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` (tell the user you did).
 
 ## Step 4. Write the config and run the installer
@@ -103,7 +108,7 @@ until step 6; everything above that should be ok.
 
 What the installer did (so you can tell the user): apps in `~/.omniloy-office`, tools in `~/.local/bin`, the three
 team folders, role instructions in `~/.claude/agents`, skills, Herdr panels and layout, and two background
-services (`com.omniloy.artifacts`, and `com.omniloy.office-up` which runs `office-up` at login: it starts the floors and the watchdog, and brings back the
+services (`com.omniloy.artifacts` and `com.omniloy.office-up` on macOS; `omniloy-artifacts` and `omniloy-office-up` as systemd user units on Linux; the second runs `office-up` at login: it starts the floors and the watchdog, and brings back the
 people who were running when the Mac went down, each in their own previous conversation, so they pick up where they were).
 
 ## Step 5. Herdr layout
@@ -120,7 +125,7 @@ refused, tell the user to pick the "omniloy" layout from Herdr's layout menu. Th
     office-restart status
     python3 setup/install.py --check
 
-Open http://127.0.0.1:4317 (Dev) and http://127.0.0.1:4318 (Business) for the user (`open <url>`). Everyone shows
+Open http://127.0.0.1:4317 (Dev) and http://127.0.0.1:4318 (Business) for the user (`open <url>` on macOS, `xdg-open <url>` on Linux). Everyone shows
 as offline until step 8: that is expected.
 
 ## Step 7. Jira (only if ASK 4 was yes)
@@ -174,6 +179,9 @@ signature the drafts end with: fill name, title and links with the user.
 1. **Tailscale on the Mac**: `brew install --cask tailscale` or the Mac App Store. The user opens it and signs in;
    to join a company network they accept the admin's invite. Verify: `tailscale status` (the CLI may be
    `/Applications/Tailscale.app/Contents/MacOS/Tailscale`).
+   **On Linux**: `sudo pacman -S tailscale`, then `sudo systemctl enable --now tailscaled` and `sudo tailscale up`,
+   all typed by the user in their own terminal. Then `sudo tailscale set --operator=$USER` so `tailscale serve` runs
+   without sudo. The CLI is `/usr/bin/tailscale`.
 2. HTTPS must be enabled for the tailnet (admin console: DNS > MagicDNS on, HTTPS certificates on). If
    `tailscale serve` complains, this is why; on a company network only the admin can switch it on.
 3. Open the doors, one per port (the servers keep listening on 127.0.0.1 only):
@@ -185,8 +193,9 @@ signature the drafts end with: fill name, title and links with the user.
 4. Who may come in: write `~/.omniloy-team/remote.json` as
    `{"host": "<this Mac's name>.<tailnet>.ts.net", "logins": ["<the user's Tailscale login>"]}`.
    Host: `tailscale status --json` (field `Self.DNSName`, without the final dot). Login: the account they signed in
-   with. Add it to `office.config.json` under `tailscale` too, so updates keep it. Then `office-restart all` and
-   `launchctl kickstart -k gui/$(id -u)/com.omniloy.artifacts`.
+   with. Add it to `office.config.json` under `tailscale` too, so updates keep it. Then `office-restart all` and restart
+   the artifacts server: `launchctl kickstart -k gui/$(id -u)/com.omniloy.artifacts` on macOS,
+   `systemctl --user restart omniloy-artifacts` on Linux.
 5. **On the phone**: install Tailscale, sign in with the same account, open `https://<host>:4317/` in Safari,
    Share > Add to Home Screen, open it from the new icon, and in More switch notifications on.
 6. Verify from the Mac: `curl -s -o /dev/null -w "%{http_code}" https://<host>:4317/` gives 200. You cannot test the
@@ -196,7 +205,9 @@ Never widen the door: no `tailscale funnel`, no listening on 0.0.0.0, no extra l
 
 ## Step 10. Voice (only if ASK 7 was yes)
 
-Follow `~/.omniloy-office/team-office/voice/SETUP.md` on this Mac. It picks the engine from the hardware (Apple
+On Linux, skip this step: the office microphone does not transcribe there yet. Tell the user, and offer dictation into
+the chat box with an outside tool (for example Superwhisper). On macOS, follow `~/.omniloy-office/team-office/voice/SETUP.md`
+on this Mac. It picks the engine from the hardware (Apple
 Silicon with 16 GB: Qwen3-ASR through mlx; weaker machines: Whisper on CPU), installs it as a background service
 on 127.0.0.1:4330 and tests it. Say the download size before starting. When `install.py --check` shows the voice
 line ok, tell the user to open More > Voice in the office and switch the Speak button on for that device.
