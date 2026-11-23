@@ -201,13 +201,19 @@ elif cmd == "release":
         sys.exit(f'not released: {why}. Ask it to finish its handover (hc send {x["herdrName"]} -- "Complete your handover and run team-temp done"). If the temp is broken and cannot write one, write what you know in {short(hpath(d, x))} yourself and use --no-handover "reason".')
     if o.get("no-handover"): x["noHandover"] = o["no-handover"] if isinstance(o["no-handover"], str) else "no reason given"
     x["handover"] = short(hpath(d, x))
-    ls = sh(f"{HOME}/.local/bin/team-card", "ls", "--owner", x["herdrName"], "--json")
-    try: held = json.loads(ls.stdout) if ls.returncode == 0 else None
-    except Exception: held = None
-    if not isinstance(held, dict): sys.exit(f'not released: the cards {x["herdrName"]} holds could not be read ({(ls.stderr or ls.stdout).strip()[:160]}). Try again.')
-    for k in held:   # anything the temp still held goes back to whoever it is a copy of; the temp does not leave holding cards
-        tc = sh(f"{HOME}/.local/bin/team-card", "take", k, "--as", x["of"], "--by", o["as"])
-        if tc.returncode: sys.exit(f'not released: {k} could not go back to {x["of"]} ({(tc.stderr or tc.stdout).strip()[:200]}). Move it with team-card, then run this again.')
+    lock = locked(d); cur = temps(d)   # from now on no card can be handed to it (team-card refuses a temp that is leaving)
+    for y in cur:
+        if y["herdrName"] == x["herdrName"]: y["state"] = "leaving"
+    save(d, cur); lock.close()
+    def give_back():   # anything the temp still holds goes back to whoever it is a copy of
+        ls = sh(f"{HOME}/.local/bin/team-card", "ls", "--owner", x["herdrName"], "--json")
+        try: held = json.loads(ls.stdout) if ls.returncode == 0 else None
+        except Exception: held = None
+        if not isinstance(held, dict): sys.exit(f'not released: the cards {x["herdrName"]} holds could not be read ({(ls.stderr or ls.stdout).strip()[:160]}). Try again.')
+        for k in held:
+            tc = sh(f"{HOME}/.local/bin/team-card", "take", k, "--as", x["of"], "--by", o["as"])
+            if tc.returncode: sys.exit(f'not released: {k} could not go back to {x["of"]} ({(tc.stderr or tc.stdout).strip()[:200]}). Move it with team-card, then run this again.')
+    give_back()
     tell(x["of"], f'Your temp {x["herdrName"]} has finished {x.get("ticket")} and is leaving. Its handover is at {x["handover"]}: read it now and copy into your memory file what you will need later (what it created, where credentials are kept, what is left). The card is yours again.')   # only now that its cards are back
     k = sh(HC, "kill", x["herdrName"]); time.sleep(1)
     if still_live(x["herdrName"]):   # its session did not end (or Herdr cannot say): it stays listed, marked leaving
@@ -217,6 +223,7 @@ elif cmd == "release":
         save(d, cur); lock.close()
         sys.exit(f'{x["herdrName"]}: its session could not be ended ({(k.stderr or k.stdout).strip()[:120]}); it stays listed as leaving. Run this again in a minute.')
     sh(HC, "rm", x["herdrName"])
+    give_back()   # once more: a card handed over just before it was marked leaving
     lock = locked(d)
     save(d, [y for y in temps(d) if y["herdrName"] != x["herdrName"]]); lock.close()
     x["releasedAt"] = now(); x["releasedBy"] = o["as"]; log(d, x)

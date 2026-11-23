@@ -31,6 +31,7 @@ sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realp
 import teamlib as L
 HOME = L.HOME; STORE = f"{L.SHARED}/cards.json"; LOG = f"{L.SHARED}/cards-log.jsonl"
 NAMES = {n: {"team": p["team"], "name": p["name"], "lead": p.get("lead") or n} for n, p in L.people().items()}   # everyone on the floors, and their temps
+LEAVING = {n for n, p in L.people().items() if p.get("temp") and p.get("state") == "leaving"}   # temps being released: no new cards
 KEY = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 def key_ok(k):
     if not KEY.fullmatch(k): sys.exit(f'"{k}" is not a card key: letters and digits, a dash, a number (APP-123)')
@@ -89,6 +90,7 @@ elif cmd == "log":
     except FileNotFoundError: pass
 elif cmd == "take":
     me = who(o, owner=True); key = key_ok(pos[0])
+    if me in LEAVING: sys.exit(f"{me} is a temp being released: it cannot take cards.")
     by = who(o, "by", owner=True) if o.get("by") else me   # --by: the lead or __OWNER__ giving the card to someone (team-temp)
     with Box() as d:
         prev = d.get(key, {})
@@ -99,6 +101,7 @@ elif cmd == "pass":
     if len(pos) < 3: sys.exit('usage: team-card pass KEY <to> --from <you> "what you need from them"')
     me = who(o, "from", owner=True); key, to, msg = key_ok(pos[0]), pos[1], " ".join(pos[2:])
     if to not in NAMES: sys.exit(f"<to> must be one of {sorted(NAMES)} (for __OWNER__ use team-ask request --to __OWNER_ID__ --ticket {key})")
+    if to in LEAVING: sys.exit(f"{to} is a temp being released: it cannot take cards. Pass {key} to someone else.")
     if to == me: sys.exit("that is you already")
     queued = None
     try:
