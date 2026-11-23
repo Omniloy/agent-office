@@ -100,14 +100,21 @@ elif cmd == "pass":
     me = who(o, "from", owner=True); key, to, msg = key_ok(pos[0]), pos[1], " ".join(pos[2:])
     if to not in NAMES: sys.exit(f"<to> must be one of {sorted(NAMES)} (for __OWNER__ use team-ask request --to __OWNER_ID__ --ticket {key})")
     if to == me: sys.exit("that is you already")
-    with Box() as d:
-        prev = d.get(key, {})
-        may({**prev, "key": key}, me, "pass")
-        # the message to the new holder is on disk (their outbox) BEFORE the card changes hands: if it cannot be
-        # written, nothing changes and the pass can simply be tried again
-        try: queued = L.enqueue(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card")
-        except Exception as e: sys.exit(f"{key} was not passed: the message to {to} could not be kept ({type(e).__name__}). Nothing changed; try again.")
-        d[key] = {"owner": to, "team": NAMES[to]["team"], "since": now(), "title": o.get("title") or prev.get("title", ""), "waiting": None}
+    queued = None
+    try:
+        with Box() as d:
+            prev = d.get(key, {})
+            may({**prev, "key": key}, me, "pass")
+            # the message to the new holder is on disk (their outbox) BEFORE the card changes hands, and taken back if
+            # the card cannot be saved: the two never disagree, and a failed pass can simply be tried again
+            queued = L.enqueue(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card")
+            d[key] = {"owner": to, "team": NAMES[to]["team"], "since": now(), "title": o.get("title") or prev.get("title", ""), "waiting": None}
+    except SystemExit: raise
+    except Exception as e:
+        if queued:
+            try: L.dequeue(to, queued)
+            except Exception: pass
+        sys.exit(f"{key} was not passed ({type(e).__name__}: {str(e)[:120]}). Nothing changed; try again.")
     try: log(key, "pass", by=me, to=to, msg=msg)
     except Exception: pass   # the history line is a convenience
     r = L.send_queued(to, queued)

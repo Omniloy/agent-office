@@ -183,6 +183,15 @@ def enqueue(name, text, source=""):
     q = _q(name); me = {"ts": time.time(), "at": now(), "to": name, "text": text, "source": source}
     with Locked(q): _write_q(q, _read_q(q) + [me])
     return me
+def dequeue(name, me):
+    """Take back a record enqueue() wrote that has not been sent (the change it announced did not happen).
+    Returns True if it was still there."""
+    q = _q(name)
+    with Locked(q):
+        items = _read_q(q); keep = [x for x in items if not (x.get("ts") == me["ts"] and x.get("text") == me["text"])]
+        if len(keep) == len(items): return False
+        _write_q(q, keep)
+    return True
 def send_queued(name, me=None):
     """Send what <name>'s outbox holds, in order. Returns 'delivered' or 'queued: <why>' for record `me` (or the queue)."""
     q = _q(name)
