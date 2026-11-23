@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install or update the agent office on this Mac from this repo.
+"""Install or update the agent office on this computer (macOS or Linux) from this repo.
 
   python3 setup/install.py --config office.config.json            install / update
   python3 setup/install.py --config office.config.json --dry-run  say what would happen, change nothing
@@ -160,7 +160,7 @@ class Run:
             n = self.tree(f"{REPO}/skills", d, backup=True)
             self.say(f"skills: {n} file(s) written to {d}")
     def herdr(self):
-        if not os.path.isdir(HERDR): self.warn.append("Herdr has not been opened yet on this Mac (no ~/.config/herdr-app): open it once, then run the installer again to add the panels"); return
+        if not os.path.isdir(HERDR): self.warn.append("Herdr has not been opened yet on this computer (no ~/.config/herdr-app): open it once, then run the installer again to add the panels"); return
         n = self.tree(f"{REPO}/herdr/mods", f"{HERDR}/mods", backup=True) + self.tree(f"{REPO}/herdr/layouts", f"{HERDR}/layouts", backup=True)
         self.say(f"Herdr panels and layout: {n} file(s) written")
     def services(self):
@@ -284,6 +284,7 @@ def main():
     if not a.no_services: r.services()
     r.record()
     for w in r.warn: print("NOTE: " + w)
-    print("\nNext: python3 setup/install.py --check   (then continue with setup/SETUP.md)")
+    guide = "setup/SETUP-linux.md" if LINUX else "setup/SETUP.md"
+    print(f"\nNext: python3 setup/install.py --check   (then continue with {guide})")
 
 if __name__ == "__main__": main()

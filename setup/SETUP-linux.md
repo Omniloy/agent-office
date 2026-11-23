@@ -30,9 +30,9 @@ Install these yourself, in this order, and verify each. Only stop for the user w
 3. **Herdr**: `curl -fsSL https://releases.herdr.dev/app/install.sh | sh`, then open it once from the application menu
    (there is no `open -a` on Linux) so it writes `~/.config/herdr-app` and installs its core. Verify: `hc ls` answers.
 4. **Agent CLI(s)**: the same as step 4 of `SETUP.md`, including the sign-in rules.
-5. **lsof**: `sudo pacman -S lsof` (the package is called `lsof` on other distributions too). Verify:
-   `command -v lsof`. `office-restart` cannot find the owner of each port without it, and `install.py --check` says NO
-   until it is there.
+5. **lsof and which**: `sudo pacman -S lsof which` (the same package names on other distributions). Verify:
+   `command -v lsof which`. `office-restart` cannot find the owner of each port without lsof, and step 1 uses `which`.
+   The Arch base image has neither by default; `install.py --check` says NO for lsof until it is there.
 6. **PATH**: the same as step 5 of `SETUP.md`, but the shell file is `~/.bashrc` on most Linux setups (Omarchy uses
    bash). Add `export PATH="$HOME/.local/bin:$PATH"` to whichever of `~/.bashrc` or `~/.zshrc` the user uses, and tell
    them which one you changed.
