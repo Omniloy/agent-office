@@ -105,9 +105,9 @@ elif cmd == "pass":
         with Box() as d:
             prev = d.get(key, {})
             may({**prev, "key": key}, me, "pass")
-            # the message to the new holder is on disk (their outbox) BEFORE the card changes hands, and taken back if
-            # the card cannot be saved: the two never disagree, and a failed pass can simply be tried again
-            queued = L.enqueue(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card")
+            # the message to the new holder is on disk (their outbox) BEFORE the card changes hands; it is only ever typed
+            # in while the card really is theirs (ifCard), and taken back if the card cannot be saved
+            queued = L.enqueue(to, f'{key} is yours now, from {me}: {msg}  (Your cards: team-card mine {to}. Reply to {me} with: hc send {me} -- "..." or hand the card back with team-card pass.)', "team-card", if_card=(key, to))
             d[key] = {"owner": to, "team": NAMES[to]["team"], "since": now(), "title": o.get("title") or prev.get("title", ""), "waiting": None}
     except SystemExit: raise
     except Exception as e:

@@ -165,7 +165,11 @@ def _drain(name, items, path=None):
     seconds of quiet, and one message reads better than six). Unreadable records stay where they are. With `path`, the
     queue file is rewritten after every send, so a crash can repeat at most one message, never lose one.
     Returns (left, why)."""
-    bad = [x for x in items if "_raw" in x]; keep = _good(items); why = ""
+    bad = [x for x in items if "_raw" in x]; keep, wait, why = [], [], ""
+    for x in _good(items):   # a conditional message whose condition is false: dropped once 60 s old (its change did not
+        h = _holds(x)        # happen); younger, it waits (that change may be saving right now), and so do those after it
+        if wait or (not h and time.time() - x.get("ts", 0) < 60): wait.append(x)
+        elif h: keep.append(x)
     while keep:
         n, size = 0, 0
         while n < len(keep) and n < 6 and (n == 0 or size + len(keep[n]["text"]) < 8000): size += len(keep[n]["text"]); n += 1
@@ -174,13 +178,22 @@ def _drain(name, items, path=None):
         ok, why = send_now(name, text)
         if not ok: break
         keep = keep[n:]
-        if path: _write_q(path, keep + bad)
-    return keep + bad, why
-def enqueue(name, text, source=""):
+        if path: _write_q(path, keep + wait + bad)
+    return keep + wait + bad, why
+def _holds(x):
+    """A record with "ifCard": {key, owner} is sent only while that card is held by that person (team-card pass: the
+    message says the card is theirs; if the pass was not saved, the message is dropped instead of misleading)."""
+    c = x.get("ifCard")
+    if not c: return True
+    cards = read_quiet(f"{SHARED}/cards.json", None)
+    if cards is None: return True   # cannot tell now: send (the text says to check team-card mine)
+    return (cards.get(c.get("key")) or {}).get("owner") == c.get("owner")
+def enqueue(name, text, source="", if_card=None):
     """Write `text` to <name>'s outbox without sending it (raises if it cannot be written). Returns the record, for
-    send_queued. Used by whoever must have the message safe on disk before changing anything else."""
+    send_queued. Used by whoever must have the message safe on disk before changing anything else. if_card=(key,
+    owner): only sent while that card is held by that owner."""
     os.makedirs(OUTBOX, mode=0o700, exist_ok=True)
-    q = _q(name); me = {"ts": time.time(), "at": now(), "to": name, "text": text, "source": source}
+    q = _q(name); me = {"ts": time.time(), "at": now(), "to": name, "text": text, "source": source, **({"ifCard": {"key": if_card[0], "owner": if_card[1]}} if if_card else {})}
     with Locked(q): _write_q(q, _read_q(q) + [me])
     return me
 def dequeue(name, me):
