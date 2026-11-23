@@ -231,6 +231,7 @@ def check():
     line(bool(node()), "node", node() or "install Node 20 or newer")
     line(bool(herdr_app()), "Herdr app", herdr_app() or "curl -fsSL https://releases.herdr.dev/app/install.sh | sh")
     line(bool(herdr_core()), "herdr-core (hc)", herdr_core() or "installed by Herdr on first start")
+    line(bool(shutil.which("lsof")), "lsof (office-restart finds the ports' owners)", "" if shutil.which("lsof") else "sudo pacman -S lsof" if LINUX else "built into macOS")
     cl, cx = which("claude"), which("codex")
     line(bool(cl or cx), "an agent CLI", ", ".join(x for x in (cl and "claude", cx and "codex") if x) or "install Claude Code or Codex")
     for name in ("team-office", "biz-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
