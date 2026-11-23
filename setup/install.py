@@ -404,12 +404,14 @@ class Run:
             if up:   # it may restart agents: enabled so it runs at the next login, never started from here
                 self.say(f"{unit} {'written' if changed else 'unchanged'}: it runs at the next login (start it now only with the owner's yes: systemctl --user start {unit}.service)")
                 if not self.dry and changed:
-                    sc("daemon-reload"); r = sc("enable", f"{unit}.service")
+                    d = sc("daemon-reload"); d.returncode and self.warn.append(f"systemd could not reload its units: {d.stderr.strip()[:200]}")
+                    r = sc("enable", f"{unit}.service")
                     if r.returncode: self.warn.append(f"{unit} could not be enabled: {r.stderr.strip()[:200]}")
                 continue
             if not changed and not self.dry and sc("is-active", f"{unit}.service").returncode == 0: self.say(f"{unit} unchanged and running"); continue
             if not self.dry:
-                sc("daemon-reload"); r = sc("enable", "--now", f"{unit}.service")
+                d = sc("daemon-reload"); d.returncode and self.warn.append(f"systemd could not reload its units: {d.stderr.strip()[:200]}")
+                r = sc("enable", "--now", f"{unit}.service")
                 if r.returncode: self.warn.append(f"{unit} could not be loaded: {r.stderr.strip()[:200]}")
             self.say(f"{unit} {'installed' if changed else 'loaded'} (starts at login{', kept alive' if keep else ''})")
     def names(self):
@@ -526,7 +528,7 @@ def main():
     r.report_links()
     drift = r.report_drift()
     if not a.only_services:
-        print("\nThe background services (LaunchAgents: floors at login, watchdog, artifacts, phone link) were not touched."
+        print("\nThe background services (" + ("systemd user units on Linux" if LINUX else "LaunchAgents on macOS") + ": floors at login, watchdog, artifacts, phone link) were not touched."
               "\nThey are a separate step, only with the owner's yes: the same command with --only-services.")
     guide = "setup/SETUP-linux.md" if LINUX else "setup/SETUP.md"
     print(f"\nNext: python3 setup/install.py --check   (then continue with {guide})")

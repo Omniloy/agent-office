@@ -103,7 +103,7 @@ def watchdog():
     return ('Watchdog: ' + (f'running (last check {int(ago)} s ago)' if ago < 300 else 'NOT RUNNING' + (f' (last check {int(ago // 60)} min ago)' if st.get('checkedAt') else ''))
             + (f'; outbox: {q} message(s) waiting' if q else ''))
 WATCH = f'{L.BIN}/team-watch'
-WATCH_JOB = H('~/Library/LaunchAgents/com.omniloy.watchdog.plist')
+WATCH_JOB = H('~/Library/LaunchAgents/com.omniloy.watchdog.plist') if sys.platform == 'darwin' else H('~/.config/systemd/user/omniloy-watchdog.service')
 def start_watchdog():
     """`team-watch start`, only once the owner set up its login job (install.py --only-services): the watchdog nudges
     people (paid turns), so a restart never starts it on its own before that yes. Does nothing when one runs."""

@@ -230,6 +230,7 @@ def flush_outbox():
 
 SHELLS = {"zsh", "bash", "sh", "fish", "login", "-zsh", "-bash"}
 JOB = "com.omniloy.watchdog"; PLIST = f"{HOME}/Library/LaunchAgents/{JOB}.plist"
+UNIT = f"{HOME}/.config/systemd/user/omniloy-watchdog.service"   # the same job on Linux (there is no ~/Library there)
 TERM = os.environ.get("TEAM_WATCH_TERMINAL", "watchdog")   # empty: never in Herdr (tests: a Herdr terminal gets the real HOME)
 def start():
     """Start `team-watch run` unless one is running: its login job (setup/install.py, kept alive by launchd) when
@@ -240,10 +241,10 @@ def start():
             if holder(): return True
             time.sleep(0.25)
         return False
-    if os.path.exists(PLIST):
-        uid = os.getuid()
+    if os.path.exists(PLIST) or os.path.exists(UNIT):
         # a nudge only: a job that is not loaded (unloaded on purpose) is never loaded from here
-        r = subprocess.run(["launchctl", "kickstart", f"gui/{uid}/{JOB}"], capture_output=True, text=True)
+        if sys.platform == "darwin": r = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{JOB}"], capture_output=True, text=True)
+        else: r = subprocess.run(["systemctl", "--user", "start", "omniloy-watchdog.service"], capture_output=True, text=True)
         if r.returncode == 0 and up(): return f"started by its login job {JOB}"
     try:
         ts = [t for t in json.loads(hc("ls", "--json").stdout)["terminals"] if t.get("name") == TERM and t.get("state") == "live"] if TERM else [{"agent": "busy"}]

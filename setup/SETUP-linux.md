@@ -8,6 +8,11 @@ Linux notes that the other steps need.
 The ground rules of `SETUP.md` hold, with one addition: the user types their sudo password in their own terminal.
 You never see it.
 
+**There is no `~/Library` and no `launchctl` on Linux.** Anything in `SETUP.md` that names `~/Library/LaunchAgents`,
+`LaunchAgents`, `launchctl` or `com.omniloy.*` is macOS only. On Linux the same background jobs are systemd user units
+named `omniloy-*` in `~/.config/systemd/user`, and the commands are `systemctl --user ...`. Do not look for or create a
+`~/Library` folder on Linux.
+
 ## Step 1. Look, change nothing
 
 Run these and keep the answers:
@@ -54,11 +59,14 @@ exists with mode 0600. Then verify the connection as in `SETUP.md` step 7, point
 
 ## Background services (Linux)
 
-On Linux the installer writes systemd user units instead of launchd agents:
+On Linux the installer writes systemd user units instead of launchd agents. They are a separate step, only with the
+owner's yes: `install.py --only-services`, never in a normal run.
 
-- `omniloy-artifacts` (the pages server on 4340), `omniloy-office-up` (runs `office-up` at login) and
-  `omniloy-peer-link` (only useful with another computer, step 11).
-- `omniloy-mail-round.timer` with its service, only when `mailRound` is in the config.
+- `omniloy-artifacts` (the pages server on 4340), `omniloy-peer-link` (only useful with another computer, step 11) and
+  `omniloy-watchdog` (the watchdog, `team-watch run`). All three restart by themselves.
+- `omniloy-office-up` only with `--login-resume`, and only with the owner's yes: at login it restarts the people who
+  were running (paid sessions). The installer never starts it.
+- There is no mail-round unit: the Business floor is retired in this version.
 
 Check them with `systemctl --user list-units 'omniloy-*' --all`. Restart the pages server with
 `systemctl --user restart omniloy-artifacts`. User services run only while the user's session is active; to keep them

@@ -20,6 +20,9 @@ import json, os, sys, glob, re, subprocess, time, datetime
 sys.dont_write_bytecode = True; sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import teamlib as L
 HOME = os.path.expanduser("~"); BIN = f"{HOME}/.local/bin"; HC = f"{BIN}/hc"
+# the watchdog's login job: a LaunchAgent on macOS, a systemd user unit on Linux (there is no ~/Library on Linux)
+WATCH_JOB = (f"{HOME}/Library/LaunchAgents/com.omniloy.watchdog.plist" if sys.platform == "darwin"
+             else f"{HOME}/.config/systemd/user/omniloy-watchdog.service")
 SHELLS = {"zsh", "bash", "sh", "fish", "login", "-zsh", "-bash"}
 NOTE = ("The Mac restarted (or your terminal stopped) and this conversation was interrupted; it has just been resumed. "
         "Background tasks, workflows, subagents and monitors you had running did not survive. Check what you were "
@@ -48,7 +51,7 @@ for name, port in re.findall(r"^(.+?) \((\d+)\): DOWN", st, re.M):
 
 # 2. watchdog (it does not need Herdr to start: it waits for it). `team-watch alive` asks its lock, not `ps`
 #    (a script run through its #! line shows up in ps as ".../Python team-watch run", which a match on "python" misses)
-if not os.path.exists(os.path.expanduser("~/Library/LaunchAgents/com.omniloy.watchdog.plist")):
+if not os.path.exists(WATCH_JOB):
     log("watchdog: its login job is not installed (owner's yes: install.py --only-services); left off")
 elif os.path.exists(f"{BIN}/team-watch") and sh("/usr/bin/python3", f"{BIN}/team-watch", "alive").returncode:
     log("watchdog is not running: starting it")
