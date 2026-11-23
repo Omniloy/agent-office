@@ -185,8 +185,8 @@ elif cmd == "done":
         r = sh(f"{HOME}/.local/bin/team-jira", "comment", x["ticket"], "Handover notes\n\n" + open(hpath(d, x)).read().split("\n", 1)[1].lstrip())
         print("handover posted on " + x["ticket"] if r.returncode == 0 else f"could not post the handover on {x['ticket']} ({(r.stderr or r.stdout).strip()[:120]}); paste it there yourself")
     lock = locked(d); cur = temps(d)
-    for y in cur:
-        if y["herdrName"] == x["herdrName"]: y["state"] = "done"; y["result"] = result; y["doneAt"] = now()
+    for y in cur:   # a temp already being released stays leaving (it can never take a card again)
+        if y["herdrName"] == x["herdrName"] and y.get("state") != "leaving": y["state"] = "done"; y["result"] = result; y["doneAt"] = now()
     save(d, cur); lock.close()
     tell(x["hiredBy"], f'Temp {x["herdrName"]} says {x.get("ticket")} is finished: "{result}". Read the handover at {short(hpath(d, x))} (also posted on the card). Check it says what was created (users, test data, credentials and where they are kept) and what is left; ask the temp for anything missing BEFORE releasing, afterwards nobody can answer. If it is right, let the temp go with: team-temp release {x["herdrName"]} --as {x["hiredBy"]}. If not, tell it what is missing (hc send {x["herdrName"]} -- "...").')
     print(f'told {x["hiredBy"]}. Stay available until you are released.')

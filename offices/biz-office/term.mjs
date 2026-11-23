@@ -188,6 +188,8 @@ export function createTerm({ teamDir, owner = 'the owner' }) {
         const old = sessions.get(id), fresh = !(old && old.alive);
         // typed into whatever holds the terminal: a password prompt, psql, vim or a command still running would take it
         // as its input. A local shell says when it is back at its prompt; over ssh nobody can tell, so it goes ahead.
+        // one pressed command at a time per terminal: its output, its sharing choice and its message stay its own
+        if (old && old.done === false) return json(res, 409, { error: 'A command pressed from a message is still running here. Wait until it finishes (or end it with Ctrl+C), then press Run again.', busy: true }), true;
         if (!fresh && id === 'local' && !old.idle) return json(res, 409, { error: 'The terminal is busy: a program is running or waiting for input (maybe a password). Finish it or press Ctrl+C there, then press Run again.', busy: true }), true;
         const s = live(id), share = body.share === true; // what it prints is shared only when the owner ticked it
         const who = String(body.from || ''), person = who ? (await personas()).find((x) => x.herdrName === who || x.slug === who) : null;
