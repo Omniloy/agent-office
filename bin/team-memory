@@ -47,8 +47,13 @@ def archive(p, st):
     shutil.copy2(p["file"], dst); s["hash"], s["copy"] = h, dst
     return dst
 def save(st):
-    tmp = STATE + ".tmp"; json.dump(st, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STATE)
+    tmp = f"{STATE}.{os.getpid()}.tmp"; json.dump(st, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STATE)
 def check(dry=False):
+    """One check at a time (the watchdog's every 10 minutes and one run by hand can meet): the other one skips."""
+    try:
+        with L.Locked(STATE, wait=False): return _check(dry)
+    except BlockingIOError: print("another memory check is running now: skipped"); return []
+def _check(dry=False):
     c = cfg(); now = time.time(); P = people(); st = rj(STATE, {})
     if c.get("off"): return []
     over = {n: p for n, p in P.items() if p["size"] > c["limitTokens"]}
