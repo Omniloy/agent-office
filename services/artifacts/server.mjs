@@ -113,10 +113,15 @@ async function mdx(file, meta, owner) {
   return SHELL(meta.title || 'Artifact', `${by}<div class="err">This document could not be rendered: ${esc(error)}</div><pre>${esc(src)}</pre>`);
 }
 
+// Tailscale Serve (the phone door) connects from this computer too and passes the client's Host header on, so a
+// request is "from this computer" only with a local Host AND none of the headers a proxy adds; anything proxied must
+// pass the remote.json login check.
+const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'via', 'tailscale-user-login', 'tailscale-user-name', 'tailscale-user-profile-pic', 'tailscale-headers-info', 'tailscale-app-capabilities'];
+const proxied = (req) => PROXY_HEADERS.some((h) => req.headers[h] !== undefined);
 const server = http.createServer(async (req, res) => {
   const send = (code, type, body, head = {}) => { res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': CSP, ...head }); res.end(body); };
   try {
-    const host = String(req.headers.host || ''), local = /^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host);
+    const host = String(req.headers.host || ''), local = /^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host) && !proxied(req);
     if (!local && !(await remoteOk(req, host))) return send(403, 'text/plain', 'not allowed');
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain', 'read only: publish with team-artifact');
     const url = new URL(req.url, 'http://x'); let p;

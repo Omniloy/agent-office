@@ -29,12 +29,17 @@ const failed = (name, why) => {
   log(`${name}: ${why}; next try in ${Math.round(ms / 1000)} s`);
 };
 
+// Tailscale Serve (the phone door) connects from this computer too and passes the client's Host header on, so a
+// request is "from this computer" only with a local Host AND none of the headers a proxy adds; anything proxied must
+// pass the remote.json login check.
+const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'via', 'tailscale-user-login', 'tailscale-user-name', 'tailscale-user-profile-pic', 'tailscale-headers-info', 'tailscale-app-capabilities'];
+const proxied = (req) => PROXY_HEADERS.some((h) => req.headers[h] !== undefined);
 function door(port) {
   if (doors.has(port)) return;
   doors.set(port, {});
   http.createServer(async (req, res) => {
     const d = doors.get(port), host = String(req.headers.host || '').toLowerCase();
-    const local = host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+    const local = (host === `127.0.0.1:${port}` || host === `localhost:${port}`) && !proxied(req);
     const login = String(req.headers['tailscale-user-login'] || '').toLowerCase();
     const far = remote && remote.host && host.split(':')[0] === String(remote.host).toLowerCase() && login && (remote.logins || []).some((l) => String(l).toLowerCase() === login);
     if (!local && !far) { res.writeHead(403, { 'content-type': 'application/json' }); return res.end('{"error":"bad host"}'); }

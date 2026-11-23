@@ -1051,10 +1051,16 @@ const hub = createHub({ port: PORT, stuck: () => [...state.agents.filter((x) => 
 
 const term = createTerm({ teamDir: TEAM_DIR, owner: '__OWNER__' }); // the room's terminal (term.mjs): the owner's page only
 
+// Tailscale Serve (the phone door) connects from this computer too and passes the client's Host header on, so a
+// request is "from this computer" only with a local Host AND none of the headers a proxy adds; anything proxied must
+// pass the remote.json login check.
+const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'forwarded', 'via', 'tailscale-user-login', 'tailscale-user-name', 'tailscale-user-profile-pic', 'tailscale-headers-info', 'tailscale-app-capabilities'];
+const proxied = (req) => PROXY_HEADERS.some((h) => req.headers[h] !== undefined);
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${HOST}:${PORT}`);
   const host = String(req.headers.host || '');
-  if (host !== `${HOST}:${PORT}` && host !== `localhost:${PORT}` && !remoteOk(req, host)) return json(res, 403, { error: 'bad host' });
+  const local = (host === `${HOST}:${PORT}` || host === `localhost:${PORT}`) && !proxied(req);
+  if (!local && !remoteOk(req, host)) return json(res, 403, { error: 'bad host' });
   const p = url.pathname;
   try {
     if (p === '/' || p === '/index.html') {
