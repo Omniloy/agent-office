@@ -215,7 +215,7 @@ def flush_outbox():
     """Type in what the outbox holds for people who were on a menu or not running; report once what waited 2 days."""
     try:
         for n, r in L.flush().items(): print(f"{datetime.datetime.now():%H:%M:%S} outbox {n}: {r}", flush=True)
-        pending = os.path.exists(f"{L.SHARED}/peer-outbox.json") or any((p or {}).get("tell") for p in ((L.read_quiet(f"{L.SHARED}/peers.json", {}) or {}).get("peers") or {}).values())
+        pending = os.path.exists(f"{L.SHARED}/peer-outbox.json") or any((p or {}).get("tells") for p in ((L.read_quiet(f"{L.SHARED}/peers.json", {}) or {}).get("peers") or {}).values())
         if pending:   # answers or connection changes for another building that waited for the link
             r = subprocess.run([f"{BIN}/team-peer", "flush"], capture_output=True, text=True, timeout=120)
             for ln in (r.stdout + r.stderr).strip().splitlines():
