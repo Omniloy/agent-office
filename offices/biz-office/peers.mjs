@@ -280,6 +280,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog, theme }) {
         return json(res, 200, { ...(await chatLog(a.herdrName, Number(url.searchParams.get('pos')) || 0, url.searchParams.get('file') || '')), menu: null, screen: '', blocked: false, person });
       }
       if (p.startsWith('/api/chat/')) return json(res, 404, { error: 'not for visitors' });
+      if (p === '/api/skills' || p.startsWith('/api/skills/')) return json(res, 403, { error: 'not for visitors' }); // the floor's skills: the owner's page only
       if (req.method === 'GET') return json(res, 200, p === '/api/attention' ? { here: port, items: [], offices: [] } : p === '/api/artifacts' ? { port: 0, items: [] } : p === '/api/voice' ? { ready: false } : {});
       return json(res, 403, { error: 'Visitors can only look, and write to the lead of this floor.' });
     } catch (e) { try { json(res, 500, { error: String(e.message || e).slice(0, 200) }); } catch { /* already answered */ } }

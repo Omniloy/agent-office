@@ -13,6 +13,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createHub, OFFICES } from './hub.mjs';
 import { menuInstance, parseMenu, terminalId, maskSecrets } from './menu.mjs';
+import { catalogueCache, readFocus, validateFocus, saveFocus } from './skills.mjs';
 
 const HOME = os.homedir();
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -783,6 +784,8 @@ process.on('exit', () => eventsProc && eventsProc.kill());
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(0));
 
 // ---------------------------------------------------------------- http
+// Every skill the agents can load (name and description only), read again at most every 5 minutes or on 'refresh'.
+const skillCatalogue = catalogueCache({ skillsDir: path.join(HOME, '.claude', 'skills'), codexDirs: [path.join(HOME, '.codex', 'skills'), path.join(HOME, '.agents', 'skills')] });
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
 const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
@@ -1082,6 +1085,30 @@ const server = http.createServer(async (req, res) => {
     if (await hub.route(req, res, p)) return;
     if (await term.route(req, res, p, url)) return;
 
+    if (p === '/api/skills' || p === '/api/skills/focus') { // the floor's highlighted skills: the owner's page only (the guest listener refuses it)
+      const team = await loadTeam().catch(() => null), people = team ? team.personas.length : 0;
+      if (req.method === 'GET' && p === '/api/skills') {
+        const catalogue = await skillCatalogue(url.searchParams.has('refresh')), f = await readFocus(TEAM_DIR);
+        return json(res, 200, { catalogue, focus: f.skills, updatedAt: f.updatedAt, people, floor: team ? team.name || '' : '' });
+      }
+      if (req.method !== 'POST' || p !== '/api/skills/focus') return json(res, 405, { error: 'method not allowed' });
+      if (!String(req.headers['content-type'] || '').includes('application/json')) return json(res, 415, { error: 'json only' });
+      let body;
+      try { body = await readBody(req); } catch { return json(res, 400, { error: 'the body is not JSON, or too large' }); }
+      const v = validateFocus(body, await skillCatalogue(true));
+      if (v.error) return json(res, 400, { error: v.error });
+      let saved;
+      try { saved = await saveFocus(TEAM_DIR, v.skills); } catch (e) { return json(res, 409, { error: clip(oneLine(e.message), 240) }); }
+      let told = null;
+      if (body.notify === true && team) { // only when the owner ticks "Avisar al equipo ahora": the same outbox as a queued chat message
+        const text = v.skills.length
+          ? `Nota del owner: han cambiado las skills destacadas de esta planta (${v.skills.map((x) => x.id).join(', ')}). Están en PROTOCOL.md, sección «Skills destacadas en esta planta»: úsalas siempre que la tarea encaje. Las demás skills siguen disponibles como siempre.`
+          : 'Nota del owner: esta planta ya no tiene skills destacadas (sección quitada de PROTOCOL.md).';
+        const rs = await Promise.all(team.personas.map((x) => run(bin('team-deliver'), [x.herdrName, text, '--source', 'office'], { timeout: 30_000 })));
+        told = { ok: rs.filter((r) => r.ok).length, failed: rs.filter((r) => !r.ok).length };
+      }
+      return json(res, 200, { ok: true, focus: saved.focus.skills, updatedAt: saved.focus.updatedAt, people, protocolChanged: saved.protocolChanged, told });
+    }
     if (p === '/api/state') return json(res, 200, state);
     if (p === '/api/theme') { // the building's theme: anyone with this page reads it, the owner (this token) changes it
       if (req.method !== 'POST') return json(res, 200, await themeSetting());
