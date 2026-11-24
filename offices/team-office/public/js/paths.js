@@ -1,4 +1,4 @@
-// Walking round the blocked areas of the floor (world.js): the centre desk and what a theme blocks (k.block).
+// Walking round the blocked areas of the floor (world.js): what a theme blocks (k.block).
 // Plain geometry, no three.js, so node can test it (offices/team-office/paths.test.mjs).
 // An area is a rectangle in world x/z { x0, z0, x1, z1 } plus `ex`, the same grown by a body's width. People keep
 // out of `ex`; they only stand in it right beside the area, where a walk starts or ends next to it.

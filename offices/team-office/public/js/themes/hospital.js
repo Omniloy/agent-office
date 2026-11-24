@@ -1,17 +1,11 @@
-// Hospital: Planta 3 of a bright, modern hospital: the medical director's central control station at the heart of
-// the ward, a glass-walled operating theatre to one side, one clinical station per role along the back, and the
+// Hospital: Planta 3 of a bright, modern hospital: a glass-walled operating theatre to one side, one clinical
+// station per role in the rows of desks (the medical director's among them), and the
 // "Cafetería de guardia" where the shift goes for a coffee. Everything is built here from three.js primitives and
 // canvas-painted textures (no downloaded assets). The contract is in themes/index.js.
 //
 // What it builds:
 //   shell    light speckled vinyl with coloured zones (operating theatre, cafeteria) and wayfinding lines, white walls
 //            with a teal wainscot, bumper rail and gas trunking, clerestory windows with blinds, a lit cornice.
-//   centre   "Dirección médica · Control central", the heart of the ward: a round two-step dais with lit rings and
-//            the floor medallion; on it a C-shaped nurses' counter all round the director (flat front with the
-//            nameplate and the lit name, "CONTROL CENTRAL" on its curved sides, open on the right where they walk
-//            in), the ward status and ER triage screens turned out to the room, the chart rack, nurse-call panel and
-//            printer; inside, the director's own desk with two monitors, the coat stand; two lit totems with glowing
-//            crosses on the dais's rim.
 //   stations one per role, each with its own body and its own floor bay (the service's name painted in front):
 //            surgeon (a draped instrument table on castors, the sterile field falling to the floor, the Mayo stand
 //            with instruments over it, a touch panel, the laparoscopy tower, a big surgical light on a boom),
@@ -36,8 +30,8 @@
 //            pharmacy robot that follows the floor line. By day, sun shafts from the clerestory; at night warm pools
 //            from the corridor's downlights and a glowing wayfinding line. The coffee mug in hand is a teal one, steaming.
 //   layout   tall pieces of a desk (tower, gantry, pegboard, cabinet, shelves) show only where they cannot hide a
-//            nameplate: the back row, and the centre with one row of desks. The theatre's light box and blade sign
-//            show with one row only. A third row of desks (big teams, no centre) hides the theatre and the
+//            nameplate: the back row. The theatre's light box and blade sign
+//            show with one row only. A third row of desks (big teams) hides the theatre and the
 //            stretcher (their blocked areas too), and the cafeteria moves to the theatre's corner with the coffee spot.
 //   people   scrubs in the role colour with a surgical cap, white coats for the doctors in charge, a suit for the
 //            manager, a work uniform and tool belt for the technician, goggles for the researcher; stethoscopes,
@@ -51,7 +45,7 @@ const gauss = (x, m, s) => Math.exp(-((x - m) * (x - m)) / (2 * s * s));
 // the coffee corner: people stand in front of the counter (z 4.5..5.15), turned to the room and the camera
 const CAFE_DX = -0.45; // the café sits this far left of where it was built, clear of the whiteboard
 const CAFE = { x: 4.95 + CAFE_DX, z: 6.0, yaw: -0.3 };
-// with a third row of desks (big teams, no centre) the café moves to the front-left corner, where the theatre was
+// with a third row of desks (big teams) the café moves to the front-left corner, where the theatre was
 // (hidden then): in front of the third row it would stand on its aisle and hide its nameplates
 const CAFE3 = { dx: -15.65, dz: 1.52 }; // where the café group stands then (built at x CAFE_DX, z 0)
 const CAFE_3 = { x: 4.95 + CAFE3.dx, z: CAFE.z + CAFE3.dz, yaw: CAFE.yaw };
@@ -379,53 +373,6 @@ function paintCapPattern(c) {
   }
 }
 
-// the floor medallion under the central station
-function paintMedallion(c, W) {
-  const R = W / 2;
-  c.clearRect(0, 0, W, W);
-  c.fillStyle = '#14a39a'; c.beginPath(); c.arc(R, R, R - 4, 0, TAU); c.fill();
-  c.fillStyle = '#eaf6f3'; c.beginPath(); c.arc(R, R, R - 26, 0, TAU); c.fill();
-  c.fillStyle = '#0f6f68'; c.beginPath(); c.arc(R, R, R - 36, 0, TAU); c.fill();
-  c.fillStyle = '#e2f3ef'; c.beginPath(); c.arc(R, R, R - 104, 0, TAU); c.fill();
-  c.strokeStyle = 'rgba(20,163,154,.35)'; c.lineWidth = 3;
-  for (let i = 0; i < 72; i++) { const a = i / 72 * TAU, r0 = R - 104, r1 = r0 - (i % 6 ? 16 : 34); c.beginPath(); c.moveTo(R + Math.cos(a) * r0, R + Math.sin(a) * r0); c.lineTo(R + Math.cos(a) * r1, R + Math.sin(a) * r1); c.stroke(); }
-  c.fillStyle = 'rgba(20,163,154,.10)'; c.beginPath(); c.arc(R, R, R - 170, 0, TAU); c.fill();
-  // text round the ring, upright at the bottom (the side seen from the room)
-  const s = 'DIRECCIÓN MÉDICA  ·  CONTROL CENTRAL  ·  PLANTA 3  ·  ';
-  c.font = '800 44px system-ui'; c.fillStyle = '#ffffff'; c.textAlign = 'center'; c.textBaseline = 'middle';
-  const r = R - 70, total = c.measureText(s).width * 2, scale = (TAU * r) / total;
-  let a0 = Math.PI / 2 + Math.PI;
-  for (let rep = 0; rep < 2; rep++) for (const ch of s) {
-    const w = c.measureText(ch).width * scale, a = a0 + (w / 2) / r;
-    c.save(); c.translate(R + Math.cos(a) * r, R + Math.sin(a) * r); c.rotate(a + Math.PI / 2); c.fillText(ch, 0, 0); c.restore();
-    a0 += w / r;
-  }
-}
-
-// the ward status screen on the central station: beds, ER queue, theatre
-function paintWard(c, busy, tick) {
-  const W = 512, H = 320;
-  c.fillStyle = '#061620'; c.fillRect(0, 0, W, H);
-  c.fillStyle = '#0f6f68'; c.fillRect(0, 0, W, 40);
-  txt(c, 'ESTADO DE PLANTA 3', 14, 21, '800 21px system-ui', '#ffffff');
-  const now = new Date(); txt(c, `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, W - 14, 21, '700 20px system-ui', '#bff3ea', 'right');
-  const st = ['#39d98a', '#39d98a', '#ffd23f', '#39d98a', '#3fb8ff', '#39d98a', '#ff5d6c', '#39d98a', '#7b8a94', '#39d98a', '#ffd23f', '#39d98a', '#39d98a', '#3fb8ff', '#39d98a', '#7b8a94', '#39d98a', '#39d98a', '#ffd23f', '#39d98a', '#39d98a', '#39d98a', '#3fb8ff', '#39d98a'];
-  for (let i = 0; i < 24; i++) {
-    const x = 14 + (i % 8) * 38, y = 54 + Math.floor(i / 8) * 46, call = i === 6 && tick % 2;
-    c.fillStyle = call ? '#ffffff' : st[i]; rr(c, x, y, 32, 38, 6); c.fill();
-    txt(c, String(301 + i), x + 16, y + 20, '700 13px system-ui', '#06202a', 'center');
-  }
-  txt(c, 'OCUPACIÓN', 330, 64, '700 14px system-ui', '#7fa6b8'); txt(c, '87%', 500, 98, '800 40px system-ui', '#39d98a', 'right');
-  c.fillStyle = '#123040'; c.fillRect(330, 118, 168, 10); c.fillStyle = '#39d98a'; c.fillRect(330, 118, 146, 10);
-  txt(c, 'URGENCIAS', 330, 150, '700 14px system-ui', '#7fa6b8'); txt(c, '3 en espera', 500, 176, '800 22px system-ui', '#ffd23f', 'right');
-  c.fillStyle = '#0c2430'; c.fillRect(0, 210, W, 110);
-  txt(c, 'QUIRÓFANO 1', 14, 236, '700 15px system-ui', '#7fa6b8');
-  txt(c, busy ? '● EN CURSO' : '○ LIBRE', 14, 266, '800 26px system-ui', busy ? '#ff5d6c' : '#7fa6b8');
-  txt(c, 'GUARDIA', 260, 236, '700 15px system-ui', '#7fa6b8');
-  txt(c, 'Dra. de guardia · busca 4412', 260, 264, '600 16px system-ui', '#e6eef3');
-  txt(c, 'Altas previstas hoy: 5', 14, 300, '600 16px system-ui', '#bff3ea'); txt(c, 'Ingresos: 4', 260, 300, '600 16px system-ui', '#bff3ea');
-}
-
 // ---------------------------------------------------------------- the room
 function buildShell(k) {
   const { room, mat, C: { BACK_Z, LEFT_X, WALL_H } } = k;
@@ -562,7 +509,6 @@ function buildShell(k) {
     const patchM = k.my.patchMat = new THREE.MeshBasicMaterial({ map: patchT, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
     const sg = new THREE.Group(); room.add(sg);
     for (let i = 0; i < 5; i++) {
-      if (i === 2) continue; // the centre's medallion
       const x = -10.4 + i * 5.2, pt = plane(2.6, 4.4, patchM); pt.rotation.x = -Math.PI / 2; pt.rotation.z = 0.32; pt.position.set(x - 1.6, 0.012, 0.2); sg.add(pt);
     }
   }
@@ -1184,7 +1130,7 @@ function buildFloor(k) {
     bake(cg);
   }
   bake(zone);
-  // between the centre and the café's back: a patient on a stretcher waiting for theatre with a nurse's monitor,
+  // between the middle of the floor and the café's back: a patient on a stretcher waiting for theatre with a nurse's monitor,
   // a portable X-ray unit parked, a hand-gel post. One group (hidden with three rows of desks, which reach here).
   {
     const wg = k.my.wardFill = new THREE.Group(); room.add(wg); const w = kit(k, wg);
@@ -1251,7 +1197,6 @@ function buildFloor(k) {
 
 // ---------------------------------------------------------------- desks: one station per role
 function roleKind(st) {
-  if (st.centre) return 'centre';
   const r = String((st.agent && st.agent.role) || '');
   if (/^\s*(develop|ciruj|engineer)/i.test(r)) return 'surgeon';
   if (/verif|diagn|\bqa\b|test/i.test(r)) return 'diag';
@@ -1904,128 +1849,6 @@ function coatStand(k, b, x, z, ry = 0) {
   return g;
 }
 
-// --- Dirección médica: the heart of the ward. A round two-step dais (the floor medallion on top, lit rings at its
-// edges); on it a C-shaped nurses'-station counter all round the director (a flat front for the nameplate, open on
-// the right where they walk in), the ward and triage screens on the counter turned out to the room, inside it the
-// director's own desk, and two lit totems with glowing crosses on the dais's rim.
-const CTR = { FO: 1.9, RO: 2.3, FI: 1.45, RI: 1.85, G0: 1.43, G1: 2.23, H: 1.12, DAIS: 2.4, OFF: -0.65 };
-function paintTriage(c) {
-  const W = 512, H = 320;
-  c.fillStyle = '#061620'; c.fillRect(0, 0, W, H);
-  c.fillStyle = '#b3202c'; c.fillRect(0, 0, W, 40);
-  txt(c, 'URGENCIAS · TRIAJE', 14, 21, '800 21px system-ui', '#ffffff');
-  txt(c, 'en espera', W - 14, 21, '600 16px system-ui', '#ffd9dc', 'right');
-  [['I', 'Resucitación', 0, '0 min', '#e23a46'], ['II', 'Emergencia', 1, '4 min', '#f08a24'], ['III', 'Urgente', 3, '22 min', '#f5c518'], ['IV', 'Menos urgente', 5, '48 min', '#22c55e'], ['V', 'No urgente', 2, '1 h 10', '#3fa7f5']].forEach(([lv, name, n, w, col], i) => {
-    const y = 66 + i * 50;
-    c.fillStyle = col; rr(c, 14, y - 18, 56, 36, 8); c.fill(); txt(c, lv, 42, y + 1, '800 22px system-ui', '#0b1a24', 'center');
-    txt(c, name, 84, y, '700 19px system-ui', '#e6eef3');
-    for (let j = 0; j < n; j++) { c.fillStyle = col; c.beginPath(); c.arc(290 + j * 22, y, 8, 0, TAU); c.fill(); }
-    txt(c, w, W - 16, y, '700 19px system-ui', col, 'right');
-  });
-}
-function centreStation(k, st, R, T, D) {
-  const m = prepDesk(k, st, { top: mc(k, 0xe8eff0, { roughness: 0.3 }), deskMat: M(k).tealSoft }), b = kit(k, R), t = kit(k, T);
-  noLaptop(st);
-  const L = st.lift || 0, CZ = D + CTR.OFF, H = CTR.H, { FO, RO, FI, RI, G0, G1 } = CTR;
-  const AO = Math.acos(FO / RO), AI = Math.acos(FI / RI), wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
-  const rO = (d) => (a) => { const w = wrap(a); return (Math.abs(w) < AO ? FO / Math.cos(w) : RO) + d; };
-  const rI = (d) => (a) => { const w = wrap(a); return (Math.abs(w) < AI ? FI / Math.cos(w) : RI) + d; };
-  const ring = (fo, fi, depth, mat_, y) => slab(R, cShape(fo, fi, G1, G0 + TAU), depth, mat_, 0, y, CZ);
-  const gl = k.my.centreGlow = k.my.centreGlow || k.glow(0x2de0c8, 1.6);
-  // the dais: two steps down to the room's floor, the medallion on top, lit rings at both edges and on the floor
-  const dm = mc(k, 0xf2f6f6, { roughness: 0.35 });
-  if (L > 0) {
-    const d1 = new THREE.Mesh(new THREE.CylinderGeometry(CTR.DAIS + 0.22, CTR.DAIS + 0.26, L / 2, 72), dm); d1.position.set(0, -L * 0.75, CZ); d1.receiveShadow = true; R.add(d1);
-    const d2 = new THREE.Mesh(new THREE.CylinderGeometry(CTR.DAIS, CTR.DAIS + 0.02, L / 2, 72), dm); d2.position.set(0, -L * 0.25, CZ); d2.receiveShadow = true; d2.castShadow = true; R.add(d2);
-    const st1 = new THREE.Mesh(new THREE.RingGeometry(CTR.DAIS + 0.02, CTR.DAIS + 0.22, 72), m.tealSoft); st1.rotation.x = -Math.PI / 2; st1.position.set(0, -L / 2 + 0.002, CZ); st1.receiveShadow = true; R.add(st1);
-    for (const [r, y] of [[CTR.DAIS + 0.005, -0.006], [CTR.DAIS + 0.225, -L / 2 - 0.004], [CTR.DAIS + 0.275, -L + 0.012]]) { const tr = new THREE.Mesh(new THREE.TorusGeometry(r, 0.014, 6, 96), gl); tr.rotation.x = Math.PI / 2; tr.position.set(0, y, CZ); R.add(tr); }
-  }
-  { const md = k.my.medT || (k.my.medT = tex(k, 1024, 1024, paintMedallion)); const p = plane(CTR.DAIS * 2, CTR.DAIS * 2, new THREE.MeshStandardMaterial({ map: md.tex, transparent: true, roughness: 0.3, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 })); p.rotation.x = -Math.PI / 2; p.position.set(0, 0.004, CZ); p.receiveShadow = true; R.add(keep(p)); }
-  // the counter: body, kick plinth, the worktop ledge, lit lines under the ledge and at the plinth
-  const fas = mc(k, 0xf7fafa, { roughness: 0.3 }), wt = mc(k, 0xdfe9e7, { roughness: 0.25 });
-  ring(rO(-0.03), rI(0.03), H - 0.14, fas, H - 0.04);
-  ring(rO(-0.07), rI(0.07), 0.1, m.tealDeep, 0.1);
-  ring(rO(0.035), rI(-0.02), 0.05, wt, H + 0.01);
-  ring(rO(0.0), rO(-0.04), 0.025, gl, H - 0.065);
-  ring(rO(-0.045), rO(-0.09), 0.02, gl, 0.125);
-  const F = CZ + FO - 0.03; // the flat front's face
-  // the front: emblems either side of the nameplate, the station's name lit below it
-  const em = k.my.emblemT || (k.my.emblemT = tex(k, 128, 128, (c) => { c.clearRect(0, 0, 128, 128); c.fillStyle = '#14a39a'; c.beginPath(); c.arc(64, 64, 60, 0, TAU); c.fill(); c.fillStyle = '#ffffff'; c.beginPath(); c.arc(64, 64, 50, 0, TAU); c.fill(); crossIcon(c, 64, 64, 60, '#14a39a'); }));
-  for (const s of [-1, 1]) { const e = b.sign(0.32, 0.32, em, { rough: 0.4 }); e.material.transparent = true; e.position.set(s * 1.07, 0.64, F + 0.004); }
-  const dmT = k.my.dmT || (k.my.dmT = tex(k, 1024, 96, (c) => { c.fillStyle = '#0f6f68'; rr(c, 0, 0, 1024, 96, 14); c.fill(); crossIcon(c, 44, 48, 44, '#ffffff'); crossIcon(c, 980, 48, 44, '#ffffff'); txt(c, 'DIRECCIÓN MÉDICA', 512, 50, fit(c, 'DIRECCIÓN MÉDICA', 820, 800, 62, 30), '#ffffff', 'center'); }));
-  at(b.sign(2.3, 0.215, dmT, { lit: 1.05 }), 0, 0.27, F + 0.005);
-  // the curved sides: "CONTROL CENTRAL" in teal, both sides of the front
-  const ccT = k.my.ccT2 || (k.my.ccT2 = tex(k, 768, 80, (c) => { c.clearRect(0, 0, 768, 80); txt(c, '✚  CONTROL CENTRAL  ✚', 384, 42, '800 50px system-ui', '#0f6f68', 'center'); }));
-  const ccM = new THREE.MeshStandardMaterial({ map: ccT.tex, transparent: true, roughness: 0.4 });
-  for (const a0 of [AO + 0.06, -G0 + 0.04]) { const cy = new THREE.Mesh(new THREE.CylinderGeometry(RO - 0.026, RO - 0.026, 0.2, 24, 1, true, a0, G0 - AO - 0.1), ccM); cy.position.set(0, 0.66, CZ); R.add(cy); }
-  // the director's desk inside the ring: a white top on two pedestals, a modesty panel, the teal mat
-  sizeTop(st, 2.4, 0.7, 0, D - 0.2);
-  for (const x of [-0.92, 0.92]) { b.box(0.52, 0.94, 0.62, fas, x, 0.48, D - 0.2); for (let i = 0; i < 3; i++) b.box(0.2, 0.02, 0.02, m.steel, x, 0.3 + i * 0.25, D + 0.115, { cast: false }); }
-  b.box(1.3, 0.5, 0.03, fas, 0, 0.68, D + 0.1, { cast: false });
-  if (st.props.mat) { st.props.mat.position.z = D - 0.22; st.props.mat.scale.z = 0.85; }
-  // two monitors on arms turned to the director, the phone
-  const patT = k.my.patT || (k.my.patT = tex(k, 256, 160, (c) => { c.fillStyle = '#071622'; c.fillRect(0, 0, 256, 160); txt(c, 'PACIENTES · PLANTA 3', 10, 14, '700 13px system-ui', '#8fb6c9'); [['301', 'Estable', '#39ff88'], ['302', 'Post-op', '#ffd23f'], ['304', 'Alta hoy', '#3fe0ff'], ['307', 'Aislamiento', '#ff5d6c'], ['309', 'Libre', '#7b8a94']].forEach(([a, b2, col], i) => { txt(c, a, 12, 40 + i * 25, '700 15px system-ui', '#e6eef3'); c.fillStyle = col; c.beginPath(); c.arc(60, 40 + i * 25, 5, 0, TAU); c.fill(); txt(c, b2, 72, 40 + i * 25, '600 15px system-ui', col); }); }));
-  for (const s of [-1, 1]) {
-    const mo = b.grp(s * 0.72, 1.03, D - 0.4, Math.PI + s * 0.35);
-    b.cyl(0.07, 0.08, 0.02, m.dark, 0, 0.01, 0, { to: mo, cast: false }); b.cyl(0.018, 0.018, 0.34, m.steel, 0, 0.18, 0, { to: mo, cast: false });
-    b.box(0.6, 0.38, 0.04, m.white, 0, 0.48, 0, { r: 0.012, to: mo }); b.screen(0.56, 0.34, patT, 1.05, mo).position.set(0, 0.48, 0.021);
-    const lg = b.sign(0.12, 0.12, em, { to: mo }); lg.material.transparent = true; lg.rotation.y = Math.PI; lg.position.set(0, 0.5, -0.021);
-  }
-  b.box(0.22, 0.05, 0.16, m.dark, 0.98, 1.055, D - 0.42, { r: 0.02, cast: false }); b.box(0.06, 0.04, 0.2, m.dark, 0.98, 1.1, D - 0.42, { r: 0.015, cast: false });
-  // on the counter, turned out to the room: the ward status screen (right) and the ER triage board (left)
-  const onRing = (a, r, ry = a) => b.grp(Math.sin(a) * r, H + 0.01, CZ + Math.cos(a) * r, ry);
-  const scr = (a, s, keepIt) => {
-    const g = onRing(a, 2.06);
-    b.cyl(0.08, 0.09, 0.02, m.dark, 0, 0.01, 0, { to: g, cast: false }); b.cyl(0.03, 0.03, 0.34, m.steel, 0, 0.18, 0, { to: g });
-    b.box(1.06, 0.68, 0.06, m.dark, 0, 0.7, 0, { r: 0.02, to: g }); b.box(1.06, 0.03, 0.065, gl, 0, 0.35, 0, { to: g, cast: false });
-    const sc = b.screen(0.98, 0.61, s, 1.1, g); sc.position.set(0, 0.7, 0.032); if (keepIt) keep(sc);
-    return g;
-  };
-  const ward = k.my.ward = k.surface(512, 320); paintWard(ward.ctx, false, 0); ward.tex.needsUpdate = true;
-  scr(0.98, ward, true);
-  scr(-0.98, k.my.triT || (k.my.triT = tex(k, 512, 320, paintTriage)));
-  // the front ledge: a bell and sanitiser on the right, an orchid on the left
-  const bell = new THREE.Mesh(new THREE.SphereGeometry(0.05, 14, 8, 0, TAU, 0, Math.PI / 2), m.chrome); bell.position.set(0.62, H + 0.04, CZ + 1.72); R.add(bell); b.cyl(0.055, 0.06, 0.015, m.dark, 0.62, H + 0.045, CZ + 1.72, { cast: false });
-  b.cyl(0.04, 0.045, 0.16, m.clear, 0.86, H + 0.12, CZ + 1.7, { cast: false }); b.cyl(0.035, 0.04, 0.1, m.fluid, 0.86, H + 0.09, CZ + 1.7, { cast: false }); b.cyl(0.015, 0.015, 0.05, m.white, 0.86, H + 0.22, CZ + 1.7, { cast: false });
-  const orc = b.grp(-0.75, H + 0.04, CZ + 1.7);
-  b.cyl(0.07, 0.06, 0.12, m.white, 0, 0.06, 0, { to: orc }); b.rod([0, 0.1, 0], [0.02, 0.42, 0.0], 0.006, m.leaf3, orc); b.rod([0.02, 0.42, 0], [0.1, 0.46, 0.03], 0.005, m.leaf3, orc);
-  for (let i = 0; i < 5; i++) b.sph(0.03, mc(k, 0xd06bd6, { roughness: 0.6 }), 0.02 + i * 0.022, 0.4 + Math.sin(i) * 0.03, 0.02 + (i % 2) * 0.02, { to: orc, sx: 1.2, sy: 0.7, sz: 1.2, cast: false });
-  for (let i = 0; i < 3; i++) b.sph(0.06, m.leaf2, Math.cos(i * 2.1) * 0.06, 0.13, Math.sin(i * 2.1) * 0.06, { to: orc, sx: 1.4, sy: 0.3, sz: 0.6, cast: false });
-  // the back of the ring: the patient-chart rack (left), a printer, the nurse-call panel (right, by the way in)
-  const rack = onRing(-2.05, 2.06, -2.05 + Math.PI);
-  b.box(0.9, 0.02, 0.3, m.dark, 0, 0.01, 0, { to: rack, cast: false });
-  const fc = [0xe23a46, 0x2b6cb0, 0x16a34a, 0xf5c518, 0x7c3aed, 0xf08a24, 0x0ea5e9];
-  for (let i = 0; i < 7; i++) b.box(0.025, 0.3, 0.26, mc(k, fc[i], { roughness: 0.6 }), -0.36 + i * 0.12, 0.16, 0, { to: rack, rz: -0.25, cast: false });
-  const pr = onRing(Math.PI - 0.35, 2.06, Math.PI - 0.35 + Math.PI);
-  b.box(0.46, 0.22, 0.34, m.white, 0, 0.11, 0, { r: 0.02, to: pr }); b.box(0.3, 0.02, 0.18, m.sheet, 0, 0.23, 0.05, { to: pr, cast: false }); b.box(0.06, 0.02, 0.01, m.glowGreen, 0.16, 0.15, 0.172, { to: pr, cast: false });
-  const callT = k.my.callT || (k.my.callT = tex(k, 192, 96, (c) => { c.fillStyle = '#0d1a24'; c.fillRect(0, 0, 192, 96); txt(c, 'LLAMADAS', 96, 13, '700 13px system-ui', '#8fb6c9', 'center'); for (let i = 0; i < 8; i++) { txt(c, String(301 + i * 3), 24 + (i % 4) * 48, 42 + Math.floor(i / 4) * 34, '700 13px system-ui', '#cfe1ea', 'center'); } }));
-  const cp = onRing(2.5, 2.06, 2.5 + Math.PI);
-  b.box(0.36, 0.2, 0.06, m.dark, 0, 0.1, 0, { to: cp, rx: -0.4 });
-  const cps = b.screen(0.32, 0.16, callT, 1.1, cp); cps.position.set(0, 0.11, 0.035); cps.rotation.x = -0.4;
-  const callM = k.my.callLed = k.my.callLed || new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.3, 0.1), toneMapped: false });
-  b.box(0.05, 0.03, 0.01, callM, 0.08, 0.06, 0.06, { to: cp, rx: -0.4, cast: false }).userData.keep = true;
-  // inside the ring behind the chair: the coat stand with the white coat, a plant
-  coatStand(k, b, -0.95, CZ - 1.2, 0.5);
-  b.plant(0.95, CZ - 1.25, 0.42);
-  chairStyle(k, st, 'white');
-  lightAt(k, st, 0, 2.5, D - 0.3);
-  infoAt(st, { orb: [0.2, 0, -0.55], tray: [0, 0, -0.45], flags: [0.25, 0, -0.55], front: [0, 0, F - D - 0.66 + 0.006] });
-  // two lit totems on the dais's rim either side of the station, a glowing cross on top of each: they rise over the
-  // ring at its sides only, where they hide nothing of the rows behind (the tall group: one row of desks only)
-  const totT = k.my.totT || (k.my.totT = tex(k, 96, 512, (c) => { c.fillStyle = '#f7fafa'; c.fillRect(0, 0, 96, 512); c.fillStyle = '#0f6f68'; c.fillRect(0, 0, 96, 300); crossIcon(c, 48, 52, 52, '#ffffff'); c.save(); c.translate(48, 180); c.rotate(-Math.PI / 2); txt(c, 'DIRECCIÓN', 0, 0, '800 34px system-ui', '#ffffff', 'center'); c.restore(); c.fillStyle = '#2de0c8'; c.fillRect(0, 300, 96, 8); txt(c, 'PLANTA', 48, 350, '800 20px system-ui', '#0f6f68', 'center'); txt(c, '3', 48, 410, '900 64px system-ui', '#0f6f68', 'center'); }));
-  const TH = 2.62;
-  for (const a of [-1.62, 1.2]) {
-    const g = t.grp(Math.sin(a) * (CTR.DAIS - 0.16), 0, CZ + Math.cos(a) * (CTR.DAIS - 0.16), a * 0.55);
-    t.box(0.44, 0.08, 0.3, m.tealDeep, 0, 0.04, 0, { to: g, cast: false });
-    t.box(0.4, TH, 0.22, fas, 0, TH / 2, 0, { to: g, r: 0.04 });
-    t.sign(0.34, TH * 0.86, totT, { to: g, rough: 0.4 }).position.set(0, TH * 0.47, 0.112);
-    for (const s2 of [-1, 1]) t.box(0.02, TH - 0.2, 0.02, gl, s2 * 0.205, TH / 2, 0.06, { to: g, cast: false });
-    t.box(0.08, 0.42, 0.08, gl, 0, TH + 0.27, 0, { to: g, cast: false }); t.box(0.42, 0.08, 0.08, gl, 0, TH + 0.3, 0, { to: g, cast: false });
-  }
-  // its light: a warm pool on the dais at night
-  const hl = new THREE.PointLight(0xffe7c2, 0, 7.5, 1.6); hl.position.set(0, 4.2 - L, CZ + 0.3); T.add(hl); (k.my.lamps = k.my.lamps || []).push([hl, 5.5, 0.6]);
-}
-
 // the mug people hold at the coffee spot (world.js's ch.mug, on the right hand): bigger, teal with a white band and
 // a handle, upright in the coffee pose, with a little steam
 function mugStyle(k, mug) {
@@ -2056,9 +1879,6 @@ export default {
   },
   exposure: 1.0,
   bloom: { strength: 0.55, radius: 0.5, threshold: 1 },
-  // the director médico (Product, else Lead) runs the floor from the central station (themes/index.js: centre)
-  // the dais is 2.66 round (CTR); with two rows of desks it moves forward and left, clear of the second row and the café
-  centre: { roles: ['Product', 'Lead'], x: (rows) => (rows === 1 ? 0.6 : -0.3), z: (rows) => (rows === 1 ? 0.9 : 4.9), lift: 0.25, foot: { x0: -2.7, x1: 2.7, z0: CTR.OFF - 2.7, z1: CTR.OFF + 2.7 }, side: 2.95 },
   spots: { coffee: (rows) => (rows > 2 ? CAFE_3 : CAFE) }, // the café moves with a third row (layout)
   boardStyle: { bg: '#0d1c22', ink: '#5eead4' },
   traceStyle: { bg: '#fbfdfc', ink: '#0f2f2b' },
@@ -2118,8 +1938,7 @@ export default {
     const D = k.C.DESK_Z, kind = roleKind(st);
     const R = new THREE.Group(), T = new THREE.Group();
     st.group.add(R, T); st.group.userData.R = R;
-    if (kind === 'centre') centreStation(k, st, R, T, D);
-    else (LAB_STATIONS[kind] || LAB_STATIONS.consult)(k, st, R, T, D);
+    (LAB_STATIONS[kind] || LAB_STATIONS.consult)(k, st, R, T, D);
     // the status light becomes a nurse-call lamp: a frosted dome on a white base with a teal ring
     if (st.info && st.info.orb) {
       const o = st.info.orb, base = o.children[1];
@@ -2258,18 +2077,17 @@ export default {
     if (k.my.lineGlow) { k.my.lineGlow.opacity = Math.max(0, 0.9 - f * 1.2); k.my.lineHalo.opacity = Math.max(0, 0.22 - f * 0.3); }
     if (k.my.poolMat) k.my.poolMat.opacity = Math.max(0, 0.32 - f * 0.4);
     if (k.my.beamMat) k.my.beamMat.opacity = 0.03 + (1 - f) * 0.06;
-    // the teal night lights (skirting, the centre station's lines) are bright at night and quiet by day
+    // the teal night lights (skirting) are bright at night and quiet by day
     if (k.my.skirt) k.my.skirt.color.setRGB(0.18, 0.88, 0.78).multiplyScalar(0.55 + (1 - f) * 0.75);
-    if (k.my.centreGlow) k.my.centreGlow.color.setRGB(0.18, 0.88, 0.78).multiplyScalar(0.9 + (1 - f) * 0.9);
   },
 
   // ------------------------------------------------------------ layout and animation
   layout(k) {
     const my = k.my, fz = k.frontZ(), three = fz > 3;
-    // a station's tall back piece (tower, gantry, pegboard, cabinet, shelves) only at the back row and the centre:
-    // in a second row it would stand in front of the first row's nameplates
-    for (const d of k.desks()) { const t = my.tall && my.tall[d.slug]; if (t) t.visible = d.centre ? fz < 0 : d.row <= 0; }
-    // a third row of desks (big teams, no centre) reaches into the theatre and the stretcher: they go, and with them
+    // a station's tall back piece (tower, gantry, pegboard, cabinet, shelves) only at the back row: in a second row
+    // it would stand in front of the first row's nameplates
+    for (const d of k.desks()) { const t = my.tall && my.tall[d.slug]; if (t) t.visible = d.row <= 0; }
+    // a third row of desks (big teams) reaches into the theatre and the stretcher: they go, and with them
     // the stretcher's blocked area; the café moves into the theatre's corner, its blocked areas and the coffee spot
     // (spots.coffee) with it
     if (my.theatre) my.theatre.visible = !three;
@@ -2284,7 +2102,7 @@ export default {
     // forget animated parts of desks that left the room
     const inScene = (o) => { while (o) { if (o === k.scene) return true; o = o.parent; } return false; };
     if (my.spin) my.spin = my.spin.filter(([o]) => inScene(o));
-    if (my.lamps) my.lamps = my.lamps.filter(([l]) => inScene(l)); // the centre desk's lamp goes with its desk
+    if (my.lamps) my.lamps = my.lamps.filter(([l]) => inScene(l)); // a desk's lamp goes with its desk
     if (my.tall) for (const s of Object.keys(my.tall)) if (!inScene(my.tall[s])) delete my.tall[s];
     if (my.mugSteam) my.mugSteam = my.mugSteam.filter((p) => inScene(p)); // a temp who left takes their mug with them
     if (my.bscLight) my.bscLight = my.bscLight.filter((l) => inScene(l));
@@ -2346,7 +2164,6 @@ export default {
         txt(c, chrono, 496, 136, '800 30px Menlo, monospace', busy ? '#ffd23f' : '#5d7684', 'right');
         my.panel.tex.needsUpdate = true;
       }
-      if (my.ward && my.sN % 2 === 0) { paintWard(my.ward.ctx, busy, my.sN / 2); my.ward.tex.needsUpdate = true; }
     }
     // the pharmacy robot goes back and forth along the blue floor line
     const r = my.robot, rs = my.rs, P = my.path;

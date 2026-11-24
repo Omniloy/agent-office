@@ -1,5 +1,5 @@
 // Walks round the blocked areas (public/js/paths.js, what world.js walks by): run the real route() on many random
-// walks in every theme's real floor, 1 to 12 desks with and without a centre person, and on random areas.
+// walks in every theme's real floor, 1 to 15 desks (everyone in the rows), and on random areas.
 // The floors are fixtures/paths-layouts.json: world.paths() read from the page in a headless browser for each theme
 // and layout (make it again when a theme moves its decor or its blocked areas). Run: node paths.test.mjs
 import fs from 'node:fs';

@@ -196,10 +196,6 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   const room = new THREE.Group();
   scene.add(room);
   const myTheme = {};
-  // The centre desk (theme.centre): one person, by role, sits in the open floor in the middle of the room instead of
-  // in the rows. Its place can follow the number of rows: x, z and yaw may be numbers or functions of `rows`.
-  const CENTRE = theme.centre ? { roles: ['Product', 'Lead'], side: 1.9, lift: 0, foot: { x0: -1.55, x1: 1.55, z0: -1.85, z1: 0.85 }, ...theme.centre } : null;
-  if (CENTRE) CENTRE.side = Math.max(CENTRE.side, CENTRE.foot.x1 + 0.4); // the step beside the desk is outside its footprint
   // The coffee spot: idle people walk there, stand with a mug for a while and go back. theme.spots.coffee may move it:
   // { x, z, yaw }, or a function of the number of rows of desks (1, 2, 3...) that gives one (see setAgents).
   const tc = theme.spots && theme.spots.coffee;
@@ -211,20 +207,19 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     return out;
   };
   const COFFEE = coffeeFor(1);
-  // Areas of the open floor nobody walks through: the centre desk and whatever the theme blocks (k.block). Each is a
+  // Areas of the open floor nobody walks through: whatever the theme blocks (k.block). Each is a
   // rectangle in world x/z; people walk around it with a body's width to spare (paths.js).
   const blocks = [];
-  let obs = [], centreFoot = null, rowObs = [], walkObs = []; // rowObs: the row desks (rowAreas); walkObs: what walks go round
-  const rebuildObs = () => { obs = centreFoot ? [...blocks, centreFoot] : blocks.slice(); walkObs = obs.concat(rowObs); };
+  let obs = [], rowObs = [], walkObs = []; // rowObs: the row desks (rowAreas); walkObs: what walks go round
+  const rebuildObs = () => { obs = blocks.slice(); walkObs = obs.concat(rowObs); };
   const k = {
     THREE, scene, room, renderer, camera, hemi, sun, PHONE, TOUCH, texts, title, base: theme.base, my: myTheme,
     C: { BACK_Z, LEFT_X, RIGHT_X: 13, FRONT_Z: 9, WALL_H, DESK_Z, SEAT_Z, AISLE_Z, ROW_D },
     mat, box, cyl, rod: (a, b, r, m) => rod(a, b, r, m), surface, wrap, hex, smooth, hashOf, mix: C,
     glow: (color, n = 1) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(n), toneMapped: false }),
     dayFactor,
-    desks: () => { try { return [...stations.values()].map((s) => (s.centre ? { slug: s.slug, agent: s.agent, ...xz(deskAt(s)), row: -1, centre: true, yaw: s.yaw, lift: s.lift } : { slug: s.slug, agent: s.agent, x: s.x, z: DESK_Z + s.z, row: s.row })); } catch { return []; } },
+    desks: () => { try { return [...stations.values()].map((s) => ({ slug: s.slug, agent: s.agent, x: s.x, z: DESK_Z + s.z, row: s.row })); } catch { return []; } },
     frontZ: () => { try { return zA(lastAisle()); } catch { return AISLE_Z; } },
-    centre: () => { try { const s = [...stations.values()].find((x) => x.centre); return s ? { slug: s.slug, agent: s.agent, ...xz(deskAt(s)), yaw: s.yaw, lift: s.lift } : null; } catch { return null; } },
     // k.block(x0, z0, x1, z1) returns a handle: h.set(x0, z0, x1, z1) moves the area, h.set() takes it away
     block: (x0, z0, x1, z1) => {
       const h = { r: null, set(a, b, c, d) {
@@ -236,7 +231,6 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     },
     spots: { board: { x: LEFT_X + 1.5, z: -2.1 }, white: { x: 8.54, z: 6.58 }, coffee: { x: COFFEE.x, z: COFFEE.z, yaw: COFFEE.yaw } },
   };
-  const xz = (v) => ({ x: v.x, z: v.z });
   const hookFail = new Set();
   function hook(name, ...args) { // a theme part that throws is skipped (and said once), the room keeps working
     const fn = theme[name];
@@ -522,7 +516,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     return sp;
   }
 
-  function createStation(agent, idx, centre = false) {
+  function createStation(agent, idx) {
     const g = new THREE.Group();
     // the working information, in groups a theme may move onto its own desk surface (st.info): front (status strip
     // and nameplate), orb (status light), tray (in-tray, sheets and count), flags (pull request flags and count)
@@ -698,7 +692,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       seed: (hashOf(agent.slug) % 1000) / 100, steps: [], pending: [], mode: 'seat', pose: '', phase: 0, hurry: false,
       listenUntil: 0, talkingUntil: 0, nextBreak: 40 + Math.random() * 90, bubbleTimer: 0, cur: {},
       idx, stack, load, prLoad, flags, halo, ask, note, draft, askReq: 0, askNote: 0, askDraft: 0, at: 'desk', kind: 'code', kindWant: 'code', kindSince: 0, placeSince: -99, carry: false, sip: false,
-      props, screen, info, centre: !!centre, title: title(agent.role), yaw: 0, lift: centre ? CENTRE.lift : 0,
+      props, screen, info, title: title(agent.role),
     };
     ch.root.position.set(0, 0, SEAT_Z);
     stations.set(agent.slug, st);
@@ -738,19 +732,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   const V = (x, z) => new THREE.Vector3(x, 0, z);
   const zA = (k) => AISLE_Z + k * ROW_D;
   const lastAisle = () => plan.rows - 1;
-  // A point given in a desk's own coordinates (as in its group: desk centre at x 0, z DESK_Z), in the room. Only the
-  // centre desk can be turned (st.yaw) or raised (st.lift); the rows never are.
-  function loc(st, lx, lz, y = 0, out = new THREE.Vector3()) {
-    const a = st.yaw || 0;
-    if (!a) return out.set(st.x + lx, y, st.z + lz);
-    const c = Math.cos(a), s = Math.sin(a);
-    return out.set(st.x + lx * c + lz * s, y, st.z - lx * s + lz * c);
-  }
-  const deskAt = (st) => (st.centre ? loc(st, 0, DESK_Z) : V(st.x, DESK_Z + st.z));
-  const seatOf = (st) => (st.centre ? loc(st, 0, SEAT_Z, st.lift) : V(st.x, SEAT_Z + st.z));
-  const sideOf = (st) => (st.centre ? loc(st, CENTRE.side, SEAT_Z) : V(st.x + plan.side, SEAT_Z + st.z));
-  const nearSeat = (st, p, r) => { const s = seatOf(st); return Math.hypot(p.x - s.x, p.z - s.z) < r; };
-  // ---- walking around blocked areas (the centre desk, k.block) and the row desks with their chairs: a straight walk
+  const deskAt = (st) => V(st.x, DESK_Z + st.z);
+  const seatOf = (st) => V(st.x, SEAT_Z + st.z);
+  const sideOf = (st) => V(st.x + plan.side, SEAT_Z + st.z);
+  // ---- walking around blocked areas (k.block) and the row desks with their chairs: a straight walk
   // that would cross one goes the shortest way round all of them instead (paths.js). A walk that starts or ends inside
   // an area (their own desk) may cross that one. The walks planned by the aisles never meet a row desk; a walk after
   // someone who moves (a chase) or to a spot across a row would.
@@ -768,7 +753,6 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   function rowAreas() { // a row desk and its chair: to walk round (a thin band: people pass between two desks), and to stand clear of
     rowObs = []; rowSpots = [];
     for (const s of stations.values()) {
-      if (s.centre) continue;
       rowObs.push(rect(s.x - 1.5, SEAT_Z + s.z - 0.55, s.x + 1.5, DESK_Z + s.z + 0.75, 0.15));
       rowSpots.push({ x0: s.x - 1.6, x1: s.x + 1.6, z0: SEAT_Z + s.z - 0.6, z1: DESK_Z + s.z + 1.15 });
     }
@@ -796,16 +780,10 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     return out;
   }
   // Out from the desk to aisle `dest`: sideways first when seated, otherwise straight to the nearest aisle.
-  // The centre desk stands in the open floor in front of the rows: out of it by its side, then straight on in the
-  // open floor, or back through the rows when going further back.
   function leave(st, dest = st.row) {
     dest = Math.max(0, Math.min(lastAisle(), dest));
     const p = st.ch.root.position;
-    if (st.centre && nearSeat(st, p, 1.3)) {
-      const s = sideOf(st), last = lastAisle();
-      return dest >= last ? [walk(s)] : [walk(s), walk(V(s.x, zA(last))), ...cross(s.x, last, dest)];
-    }
-    const atSeat = !st.centre && Math.abs(p.z - (SEAT_Z + st.z)) < 1.3 && Math.abs(p.x - st.x) < 2.6;
+    const atSeat = Math.abs(p.z - (SEAT_Z + st.z)) < 1.3 && Math.abs(p.x - st.x) < 2.6;
     if (atSeat) { const a = dest < st.row ? st.row - 1 : st.row; return [walk(sideOf(st)), walk(V(st.x + plan.side, zA(a))), ...cross(st.x + plan.side, a, dest)]; }
     const a = nearAisle(p.z);
     return [walk(V(p.x, zA(a))), ...cross(p.x, a, dest)];
@@ -814,7 +792,6 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   function homeSteps(st, from, x) {
     if (from == null) { from = nearAisle(st.ch.root.position.z); x = st.ch.root.position.x; }
     from = Math.max(0, Math.min(lastAisle(), from));
-    if (st.centre) return [...cross(x, from, lastAisle()), walk(sideOf(st)), walk(seatOf(st)), { type: 'arrive', at: 'desk' }];
     const a = from < st.row ? st.row - 1 : st.row;
     return [...cross(x, from, a), walk(V(st.x + plan.side, zA(a))), walk(sideOf(st)), walk(seatOf(st)), { type: 'arrive', at: 'desk' }];
   }
@@ -833,33 +810,12 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   }
   const placeYaw = (at) => (at === 'board' ? -Math.PI / 2 : Math.atan2(0.66, -0.75));
 
-  // ---- the centre desk
   let layoutKey = '';
-  const roleIs = (role, want) => new RegExp(`^\\s*${String(want).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(String(role || ''));
-  function pickCentre(agents) {
-    if (!CENTRE || agents.length - 1 > 10) return null; // the others must fit in two rows in front of the back wall
-    for (const want of [].concat(CENTRE.roles || [])) {
-      const a = agents.find((x) => !x.temp && roleIs(x.role, want));
-      if (a) return a.slug;
-    }
-    return null;
-  }
-  // Where it stands for this many rows: theme numbers or functions of `rows`, else the middle of the open floor.
-  function centrePlace(rows) {
-    const val = (v, d) => { const r = typeof v === 'function' ? v(rows) : v; return Number.isFinite(r) ? r : d; };
-    return { x: val(CENTRE.x, 0.6), z: val(CENTRE.z, rows === 1 ? 0.9 : 4.0), yaw: val(CENTRE.yaw, 0) };
-  }
-  // its footprint (desk, chair and whatever the theme says it covers), as a world rectangle
-  function footOf(c) {
-    const f = CENTRE.foot, cs = Math.cos(c.yaw), sn = Math.sin(c.yaw), xs = [], zs = [];
-    for (const [lx, lz] of [[f.x0, f.z0], [f.x1, f.z0], [f.x1, f.z1], [f.x0, f.z1]]) { xs.push(c.x + lx * cs + lz * sn); zs.push(c.z - lx * sn + lz * cs); }
-    return rect(Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs));
-  }
 
   // a thin arc between two desks while their owners talk
   const links = [];
   function linkDesks(a, b, dur) {
-    const p0 = deskAt(a).setY(1.3 + a.lift), p1 = deskAt(b).setY(1.3 + b.lift);
+    const p0 = deskAt(a).setY(1.3), p1 = deskAt(b).setY(1.3);
     const mid = p0.clone().lerp(p1, 0.5); mid.y += 1.5 + Math.abs(a.x - b.x) * 0.1; mid.z += 1.3;
     const curve = new THREE.QuadraticBezierCurve3(p0, mid, p1);
     const m = new THREE.Mesh(new THREE.TubeGeometry(curve, 36, 0.02, 6), new THREE.MeshBasicMaterial({ color: a.agent.color, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
@@ -907,16 +863,9 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   // Where talker number `n` stands to speak to `to`, right now: in front of their desk while they sit at it,
   // around them anywhere else (the board, the whiteboard, someone else's desk, on their way somewhere).
   const DESK_ROW = [0, -0.9, 0.9, -1.8, 1.8], RING = [[0.95, 0], [-0.95, 0], [0.7, 0.65], [-0.7, 0.65], [0, 1.1], [1.8, 0.1], [-1.8, 0.1], [1.5, 0.9], [-1.5, 0.9]];
-  const seatedAt = (to) => { const p = to.ch.root.position; if (to.centre) { const s = seatOf(to); return Math.abs(p.z - s.z) < 0.5 && Math.abs(p.x - s.x) < 0.5; } return Math.abs(p.z - (SEAT_Z + (to.z || 0))) < 0.5 && Math.abs(p.x - to.x) < 0.5; };
+  const seatedAt = (to) => { const p = to.ch.root.position; return Math.abs(p.z - (SEAT_Z + (to.z || 0))) < 0.5 && Math.abs(p.x - to.x) < 0.5; };
   function talkSpot(to, n) {
     if (seatedAt(to)) {
-      if (to.centre) { // in front of the centre desk, or (when its footprint reaches the front wall) along its sides,
-        // the outer ones further back so the group does not pile up on one spot
-        const v = loc(to, DESK_ROW[n % 5], AISLE_Z - 0.35 + (n >= 5 ? 0.8 : 0)), x0 = v.x;
-        freeSpot(v);
-        if (Math.abs(v.x - x0) > 0.01) { v.z -= Math.abs(DESK_ROW[n % 5]) * 0.75; freeSpot(v); }
-        return v;
-      }
       return new THREE.Vector3(to.x + DESK_ROW[n % 5], 0, AISLE_Z + (to.z || 0) - 0.35 + (n >= 5 ? 0.8 : 0));
     }
     const p = to.ch.root.position, o = RING[n % RING.length];
@@ -956,7 +905,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     const ch = st.ch, root = ch.root;
     ch.body.visible = st.online;
     if (st.trip) { if (!st.online) endTrip(st); else if (st.trip.hold) { ch.body.visible = !st.trip.gone; return; } } // teleported to another room (travel)
-    if (!st.online) { st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; root.position.copy(seatOf(st)); root.rotation.y = st.yaw || 0; return; }
+    if (!st.online) { st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; root.position.copy(seatOf(st)); root.rotation.y = 0; return; }
     const needs = st.status === 'blocked' || st.askReq > 0;
     // Where the work happens. A new kind has to hold for a few seconds, and nobody moves more than once every 20s.
     if (st.kind !== st.kindWant && t - st.kindSince > 6 && t - st.placeSince > 20) { st.kind = st.kindWant; st.placeSince = t; }
@@ -982,7 +931,7 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     let yawTarget = 0;
     if (!step) {
       st.hurry = false;
-      if (st.at === 'desk') { st.mode = 'seat'; root.position.lerp(seatOf(st), Math.min(1, dt * 12)); yawTarget = st.yaw || 0; }
+      if (st.at === 'desk') { st.mode = 'seat'; root.position.lerp(seatOf(st), Math.min(1, dt * 12)); yawTarget = 0; }
       else { st.mode = 'stand'; st.pose = st.at; yawTarget = placeYaw(st.at); }
     } else if (step.type === 'walk') {
       st.mode = 'walk';
@@ -1129,15 +1078,13 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
       const ph = (t * 0.32 + i / st.glyphs.length + st.seed) % 1;
       const on = st.status === 'working' && !needs && seated && st.kind === 'code' && st.listenUntil < t;
       sp.material.opacity = on ? Math.sin(ph * Math.PI) * 0.9 : 0;
-      if (st.centre) loc(st, Math.sin(ph * 5 + i * 2) * 0.35 + (i - 1) * 0.3, DESK_Z - 0.2, 1.45 + ph * 1.25 + st.lift, sp.position);
-      else sp.position.set(st.x + Math.sin(ph * 5 + i * 2) * 0.35 + (i - 1) * 0.3, 1.45 + ph * 1.25, DESK_Z - 0.2 + st.z);
+      sp.position.set(st.x + Math.sin(ph * 5 + i * 2) * 0.35 + (i - 1) * 0.3, 1.45 + ph * 1.25, DESK_Z - 0.2 + st.z);
     });
     const sleepy = st.status === 'idle' && !needs && seated && Date.now() - st.agent.statusSince > 15 * 60000;
     st.zs.forEach((sp, i) => {
       const ph = (t * 0.25 + i * 0.5) % 1;
       sp.material.opacity = sleepy ? Math.sin(ph * Math.PI) * 0.85 : 0;
-      if (st.centre) loc(st, 0.35 + ph * 0.5, SEAT_Z, 2.0 + ph * 0.9 + st.lift, sp.position);
-      else sp.position.set(st.x + 0.35 + ph * 0.5, 2.0 + ph * 0.9, SEAT_Z + st.z);
+      sp.position.set(st.x + 0.35 + ph * 0.5, 2.0 + ph * 0.9, SEAT_Z + st.z);
       sp.scale.setScalar(0.25 + ph * 0.25);
     });
     const sign = st.askReq > 0 ? st.ask : st.alert, off = sign === st.ask ? st.alert : st.ask;
@@ -1146,13 +1093,11 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     sign.position.set(st.ch.root.position.x - 0.55, 2.55 + Math.sin(t * 2.2) * 0.08 + st.ch.root.position.y, st.ch.root.position.z + 0.2);
     st.note.material.opacity = st.online && st.askNote > 0 ? 0.95 : 0;
     const ob = st.info.orb.position; // the envelope floats over the status light, wherever the theme put it
-    if (st.centre || ob.x || ob.y || ob.z) loc(st, ob.x - 1.15, DESK_Z + 0.5 + ob.z, 1.62 + Math.sin(t * 1.7 + st.seed) * 0.04 + ob.y + st.lift, st.note.position);
-    else st.note.position.set(st.x - 1.15, 1.62 + Math.sin(t * 1.7 + st.seed) * 0.04, DESK_Z + 0.5 + st.z);
+    st.note.position.set(st.x + ob.x - 1.15, 1.62 + Math.sin(t * 1.7 + st.seed) * 0.04 + ob.y, DESK_Z + 0.5 + ob.z + st.z);
     // a draft waiting for you: a pen hops over the desk and the desk light beats teal
     const hasDraft = st.askDraft > 0, hop = Math.abs(Math.sin(t * 3.1 + st.seed));
     st.draft.material.opacity = hasDraft ? 1 : 0;
-    if (st.centre) loc(st, 1.0, DESK_Z + 0.45, 2.0 + hop * 0.4 + st.lift, st.draft.position);
-    else st.draft.position.set(st.x + 1.0, 2.0 + hop * 0.4, DESK_Z + 0.45 + st.z);
+    st.draft.position.set(st.x + 1.0, 2.0 + hop * 0.4, DESK_Z + 0.45 + st.z);
     st.draft.scale.setScalar(0.8 + hop * 0.14);
     if (hasDraft && !needs) st.strip.material.color.set(0x2dd4bf).multiplyScalar(0.55 + hop * 0.6);
     st.flags.forEach((f, j) => { if (f.visible) f.userData.cloth.rotation.y = Math.sin(t * (f.userData.state === 'approved' ? 5 : 1.6) + j) * (f.userData.state === 'approved' ? 0.5 : 0.12); });
@@ -1205,10 +1150,6 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
     if (slug && SPOTS[slug]) return flyTo(SPOTS[slug][0].clone(), SPOTS[slug][1].clone());
     const st = slug && stations.get(slug);
     if (!st) return flyTo(home().pos.clone(), home().target.clone());
-    if (st.centre) { // the same view as of a desk in the rows, turned with the desk
-      const c = centered || (PHONE && tall), lz = DESK_Z, y = st.lift;
-      return flyTo(loc(st, c ? 1.8 : 3.4, lz + (c ? 10.6 : 10.0), y + (c ? 5.2 : 5.4)), loc(st, c ? 0 : 1.1, lz - 1.0, y + (c ? 2.5 : 2.3)));
-    }
     if (centered || (PHONE && tall)) return flyTo(new THREE.Vector3(st.x + 1.8, 5.2, 5.2 + st.z), new THREE.Vector3(st.x, 2.5 - st.row * 0.5, -6.4 + st.z));
     flyTo(new THREE.Vector3(st.x + 3.4, 5.4, 4.6 + st.z), new THREE.Vector3(st.x + 1.1, 2.3 - st.row * 0.5, -6.4 + st.z));
   }
@@ -1568,7 +1509,7 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       tr.gone = true; tr.phase = 'away';
       // the tag moves to their chair and stays readable; whatever they were on the way to is dropped
       st.steps = []; st.at = 'desk'; st.carry = false; st.hurry = false; st.mode = 'away';
-      st.ch.root.position.copy(seatOf(st)); st.ch.root.rotation.y = st.yaw || 0;
+      st.ch.root.position.copy(seatOf(st)); st.ch.root.rotation.y = 0;
       const c = st.ch; // sitting, hands down, for when they come back
       c.hips.position.y = SEAT_Y; c.legL.rotation.x = c.legR.rotation.x = -1.5; c.armL.rotation.set(-0.4, 0, 0.1); c.armR.rotation.set(-0.4, 0, -0.1);
       c.upper.rotation.x = 0; c.head.rotation.set(0, 0, 0); c.mug.visible = c.phone.visible = c.card.visible = false;
@@ -1640,7 +1581,6 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       // beside them wherever they are, or are heading (as startConversation does): their desk, the board or the whiteboard
       const last = [...host.steps].reverse().find((s) => s.type === 'arrive'), at = last ? last.at : host.at;
       if (at !== 'desk') { const ps = placeSpot(host, at); yaw = placeYaw(at); spot = new THREE.Vector3(ps.x - Math.sin(yaw) * (0.95 + n * 0.9), 0, ps.z - Math.cos(yaw) * (0.95 + n * 0.9)); }
-      else if (host.centre) { spot = freeSpot(loc(host, (n % 2 ? -1 : 1) * CENTRE.side * (1 + (n >> 1) * 0.45), SEAT_Z + 0.25)); yaw = host.yaw + (n % 2 ? Math.PI / 2 : -Math.PI / 2); }
       else { spot = new THREE.Vector3(host.x + (n % 2 ? -1 : 1) * Math.min(1.9, side) * (1 + (n >> 1) * 0.45), 0, SEAT_Z + (host.z || 0) + 0.25); yaw = n % 2 ? Math.PI / 2 : -Math.PI / 2; }
       host.holdUntil = Math.max(host.holdUntil || 0, now + FX_DUR + dur + 1);
       if (host.steps.length) { host.steps = host.steps.filter((s) => s.pose !== 'coffee'); host.hurry = true; }
@@ -1749,14 +1689,10 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       }
     },
     setAgents(agents, extra = {}) {
-      // Who sits at the centre desk (theme.centre): the first role of its list that someone here has, never a temp,
-      // and only while everybody else still fits in two rows.
-      const centreSlug = pickCentre(agents);
-      // people who left (a temp that was released), and a desk that moves between the rows and the centre (the theme
-      // dresses the two differently, so it is built again): take their desk and character out of the room
+      // people who left (a temp that was released): take their desk and character out of the room
       const here = new Set(agents.map((a) => a.slug));
       for (const [slug, st] of [...stations]) {
-        if (here.has(slug) && st.centre === (slug === centreSlug)) continue;
+        if (here.has(slug)) continue;
         try {
           const parts = [st.group, st.ch.root, st.wall, ...st.glyphs, ...st.zs, st.alert, st.ask, st.note, st.draft];
           parts.forEach((o) => scene.remove(o)); st.tag.remove(); if (st.art) st.art.element.remove();
@@ -1764,51 +1700,31 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
           freeUnused(parts);
         } catch (e) { console.warn('desk removal', e); }
         stations.delete(slug);
-        if (here.has(slug)) continue; // built again below, still selected
         if (selected === slug) selected = null;
         if (hovered === slug) hovered = null;
       }
-      // Up to six desks share one row; bigger teams sit in rows of up to five, one behind the other. The centre desk
-      // is not in the rows: the others close up without a gap.
-      const n = Math.max(1, agents.length), inRows = centreSlug ? agents.filter((a) => a.slug !== centreSlug) : agents;
-      const m = Math.max(1, inRows.length), rows = m <= 6 ? 1 : Math.ceil(m / 5), per = Math.ceil(m / rows);
-      const gap = rows === 1 ? Math.min(5.2, 21 / m) : Math.min(4.4, 19 / per), cx = rows === 1 ? 0.6 : 0.2;
-      // Wall screens: one line, or two smaller ones when the team is big. The centre person's screen stays on the
-      // wall with the others, in the middle of the (top) line.
+      // Up to six desks share one row; bigger teams sit in rows of up to five, one behind the other.
+      const n = Math.max(1, agents.length), rows = n <= 6 ? 1 : Math.ceil(n / 5), per = Math.ceil(n / rows);
+      const gap = rows === 1 ? Math.min(5.2, 21 / n) : Math.min(4.4, 19 / per), cx = rows === 1 ? 0.6 : 0.2;
+      // Wall screens: one line, or two smaller ones when the team is big.
       const tiers = n <= 6 ? 1 : 2, perTier = Math.ceil(n / tiers);
-      const cell = tiers === 1 ? Math.max(Math.min(5.2, 21 / n), Math.min(4.35, 22 / n)) : Math.min(4.35, 22 / perTier);
+      const cell = tiers === 1 ? Math.max(gap, Math.min(4.35, 22 / n)) : Math.min(4.35, 22 / perTier);
       const sScale = Math.min(1, (cell - 0.22) / 4.1, tiers === 1 ? 1 : 0.76);
-      const onWall = inRows.slice();
-      if (centreSlug) onWall.splice(Math.floor(((tiers === 1 ? n : perTier) - 1) / 2), 0, agents.find((a) => a.slug === centreSlug));
       labelsEl.classList.toggle('crowded', n > 6); // big team: name only on the tags, the role shows on hover
       plan.rows = rows; plan.side = rows === 1 ? 1.9 : gap / 2;
       Object.assign(COFFEE, coffeeFor(rows)); Object.assign(k.spots.coffee, COFFEE); // the theme's coffee spot may follow the rows
       plan.rowX = Array.from({ length: rows }, () => []);
-      centreFoot = null;
-      let ri = 0;
-      agents.forEach((a, idx) => {
-        const isC = a.slug === centreSlug;
-        const st = stations.get(a.slug) || createStation(a, idx, isC);
+      agents.forEach((a, i) => {
+        const st = stations.get(a.slug) || createStation(a, i);
         st.agent = a; st.status = a.status; st.online = a.online;
-        if (isC) {
-          const c = centrePlace(rows), x = c.x - DESK_Z * Math.sin(c.yaw), z = c.z - DESK_Z * Math.cos(c.yaw);
-          centreFoot = footOf(c);
-          if (st.x !== x || st.z !== z || st.yaw !== c.yaw || st.row !== rows - 1) {
-            st.x = x; st.z = z; st.yaw = c.yaw; st.row = rows - 1;
-            st.group.position.set(x, st.lift, z); st.group.rotation.y = c.yaw;
-            st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; st.ch.root.position.copy(seatOf(st)); st.ch.root.rotation.y = c.yaw;
-          }
-        } else {
-          const i = ri++;
-          const row = Math.floor(i / per), inRow = Math.min(per, m - row * per), z = row * ROW_D;
-          const x = (i % per - (inRow - 1) / 2) * gap + cx;
-          plan.rowX[row].push(x);
-          if (st.x !== x || st.z !== z) {
-            st.x = x; st.z = z; st.row = row; st.group.position.set(x, 0, z);
-            st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; st.ch.root.position.copy(seatOf(st));
-          }
+        const row = Math.floor(i / per), inRow = Math.min(per, n - row * per), z = row * ROW_D;
+        const x = (i % per - (inRow - 1) / 2) * gap + cx;
+        plan.rowX[row].push(x);
+        if (st.x !== x || st.z !== z) {
+          st.x = x; st.z = z; st.row = row; st.group.position.set(x, 0, z);
+          st.steps = []; st.pending = []; st.at = 'desk'; st.carry = false; st.ch.root.position.copy(seatOf(st));
         }
-        const i = onWall.indexOf(a), tier = Math.floor(i / perTier), inTier = Math.min(perTier, n - tier * perTier);
+        const tier = Math.floor(i / perTier), inTier = Math.min(perTier, n - tier * perTier);
         st.wall.position.set((i % perTier - (inTier - 1) / 2) * cell + 0.6, tiers === 1 ? 3.75 : 4.62 - tier * 2.02, 0);
         st.wall.scale.set(sScale, sScale, 1);
         st.doing.textContent = a.nowDoing || '';
@@ -1844,8 +1760,8 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
       });
       order = agents.map((a) => a.slug);
       rowAreas();
-      const lk = [...stations.values()].map((s) => `${s.slug}:${s.x.toFixed(2)},${s.z.toFixed(2)},${s.centre ? 1 : 0}`).join('|');
-      if (lk !== layoutKey) { layoutKey = lk; hook('layout'); } // the theme may follow the desks (k.desks(), k.centre(), k.frontZ())
+      const lk = [...stations.values()].map((s) => `${s.slug}:${s.x.toFixed(2)},${s.z.toFixed(2)}`).join('|');
+      if (lk !== layoutKey) { layoutKey = lk; hook('layout'); } // the theme may follow the desks (k.desks(), k.frontZ())
       const h = JSON.stringify([agents.map((a) => [a.slug, a.tickets]), extra.jira && extra.jira.error, new Date().getMinutes()]);
       if (h !== boardHash) { boardHash = h; drawBoard(agents, extra.jira); }
       drawTrace(extra.trace);
@@ -1904,11 +1820,11 @@ html.phone .holo { font-size: 11px; max-width: 170px; padding: 4px 9px 5px; }
     // people go, in world x/z.
     paths() {
       const r = (o) => [o.x0, o.z0, o.x1, o.z1].map((v) => +v.toFixed(3)), p = (v) => [+v.x.toFixed(3), +v.z.toFixed(3)];
-      const sts = [...stations.values()], c = sts.find((s) => s.centre);
+      const sts = [...stations.values()];
       return { rows: plan.rows, aisles: plan.rowX.map((_, i) => zA(i)), rowX: plan.rowX, side: plan.side, room: ROOM,
         obs: obs.map(r), desks: rowObs.map(r), stand: rowSpots.map(r), coffee: [COFFEE.x, COFFEE.z],
-        seats: sts.map((s) => ({ seat: p(seatOf(s)), side: p(sideOf(s)), centre: !!s.centre })),
-        spots: [0, 1, 2, 3].flatMap((i) => [p(placeSpot({ idx: i }, 'board')), p(placeSpot({ idx: i }, 'white'))]), centreFoot: c && centreFoot ? r(centreFoot) : null };
+        seats: sts.map((s) => ({ seat: p(seatOf(s)), side: p(sideOf(s)) })),
+        spots: [0, 1, 2, 3].flatMap((i) => [p(placeSpot({ idx: i }, 'board')), p(placeSpot({ idx: i }, 'white'))]) };
     },
     order: () => order,
     // Stops drawing entirely (used when the Herdr tab showing the office is not on screen).
