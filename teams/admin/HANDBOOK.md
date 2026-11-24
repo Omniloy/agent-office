@@ -35,6 +35,9 @@ you; your chat is served by every floor through `hub.mjs` (routes `/api/chat`, `
   `lead`; `space`; `tabPrefix`; runtimes), `PROTOCOL.md`, and `memory/<slug>.md`. A person's instructions are
   `~/.claude/agents/<slug>.md` (Codex people get the same text as their first message). Runtimes: `claude`, `codex` (whichever
   are installed; `omniloy-team runtime <name> <runtime>` switches a person).
+- **Skills de la planta** (team office only, `skills.mjs`): the owner marks a floor's most relevant skills from the
+  More menu. Saved in `<team dir>/skill-focus.json` and in `PROTOCOL.md` between `<!-- skills:begin -->` and
+  `<!-- skills:end -->` (previous file in `PROTOCOL.md.bak-skills`). Edit the list from the office, not that block by hand.
 - **Shared state** lives in `~/.omniloy-team/`: `requests.json` (requests and notes to __OWNER__, tool `team-ask`),
   `cards.json` (`team-card`), `push/` (phone notifications), `voice/stt.json` (transcription), `remote.json` (who may
   come in over Tailscale).
