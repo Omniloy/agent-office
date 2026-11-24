@@ -8,8 +8,9 @@
 //     rocket HERD-7 with two boosters on its mount, the red umbilical tower with swing arms and hoses, floodlight masts
 //     with soft beams, venting vapour, a gantry crane, the great door ajar on space; the launch countdown clock (big
 //     amber digits) stands on the deck in front of it;
-//   - command: the captain's chair on a two-tier dais in the middle of the bridge (the centre desk: Product, else
-//     Lead), with a crescent command console, a tactical rail, status pylons and the helm and navigation bank in front;
+//   - command: the captain's chair on a two-tier dais in the middle of the bridge (decor: nobody sits there, everyone
+//     works at a station in the rows), with a crescent command console, a tactical rail, status pylons and the helm
+//     and navigation bank in front;
 //   - one station per role, each with its own body and silhouette: a J-shaped systems console with holo code panels
 //     and a server rack; a white L-shaped lab bench with a fume hood and a sensor mast; a tall sloped engine console
 //     with a plasma column; a first officer's crescent with leaning pylons; a round star-chart table with a star globe
@@ -663,9 +664,9 @@ const CART = { x: 7.3, z: 2.5 }; // the propellant cart, right of the dais
 const CART_BLOCK = [CART.x - 0.95, CART.z - 0.8, CART.x + 0.95, CART.z + 0.8];
 const CX = -0.9, centreZ = (rows) => (rows === 1 ? 2.1 : 5.6); // the command dais (desk centre)
 const LIFT = 0.26;
-const EMPTY_FOOT = { x0: -2.35, x1: 2.35, z0: -2.95, z1: 3.1 }; // the command dais's footprint round its desk centre (with or without a captain)
+const EMPTY_FOOT = { x0: -2.35, x1: 2.35, z0: -2.95, z1: 3.1 }; // the command dais's footprint round its desk centre
 const DRONE_WP = [[-5.6, 3.4], [6.4, 3.2], [-5.2, 7.4], [2.6, 7.6], [6.6, 1.2], [-6.2, 1.6]]; // where the maintenance drone heads next
-// which station a role gets (the centre desk is always the captain's)
+// which station a role gets
 function kindOf(role) {
   const r = String(role || '');
   if (/^\s*dev/i.test(r)) return 'sistemas';
@@ -705,9 +706,6 @@ export default {
   },
   exposure: 1.08,
   bloom: { strength: 0.9, radius: 0.55, threshold: 1 },
-  // the captain (Product, else Lead) sits on the command dais in the middle of the bridge (themes/index.js: centre)
-  // foot covers the dais and the helm bank in front of it (part of the same station: it moves with the captain)
-  centre: { roles: ['Product', 'Lead'], x: CX, z: centreZ, lift: LIFT, foot: EMPTY_FOOT, side: 2.75 },
   spots: { coffee: { x: CAN.x + Math.sin(CAN.yaw) * 0.45, z: CAN.z + Math.cos(CAN.yaw) * 0.45, yaw: CAN.yaw } },
   boardStyle: { bg: '#050b16', ink: '#7dd3fc' },
   traceStyle: { bg: '#081627', ink: '#cfefff' }, // a dark glass display like the board, not an office whiteboard
@@ -1553,10 +1551,10 @@ export default {
       HATCH.forEach(([x, z, ry], i) => { m4.makeRotationY(ry).setPosition(x, 0.009, z); hi.setMatrixAt(i, m4); });
       room.add(hi);
     }
-    // ---- the empty command dais (shown when nobody sits at the centre: no Product or Lead on this floor)
+    // ---- the empty command dais in the middle of the bridge (decor; layout() places it and hides it for a third row)
     {
       const g = my.emptyDais = new THREE.Group(), P = new Parts();
-      buildCommand(k, P, g, { seat: M.red, glow: G(AMBER, 2.2), color: new THREE.Color(0xd4a62a) }, LIFT, true);
+      buildCommand(k, P, g, { seat: M.red, glow: G(AMBER, 2.2), color: new THREE.Color(0xd4a62a) }, LIFT);
       P.flush(g); g.visible = false; room.add(g);
     }
     // ---- maintenance drone (wanders the open floor, hovering)
@@ -1629,17 +1627,16 @@ export default {
     }
     const color = new THREE.Color(a.color || CYAN);
     const own = { color, glow: k.glow(color, 2.2), seat: k.mat(color.clone().lerp(new THREE.Color(0x12151c), 0.5), { roughness: 0.6 }) };
-    const kind = st.centre ? 'capitan' : kindOf(a.role);
+    const kind = kindOf(a.role);
     const P = new Parts();
     try {
-      if (st.centre) buildCommand(k, P, g, own, st.lift || LIFT, false);
-      else (STATIONS[kind] || STATIONS.operaciones)(k, P, g, own, kind, st);
-      if (a.temp && !st.centre) { // a temp's station: hazard tape on the console and a 'temporal' tag
+      (STATIONS[kind] || STATIONS.operaciones)(k, P, g, own, kind, st);
+      if (a.temp) { // a temp's station: hazard tape on the console and a 'temporal' tag
         const fz = DZ + 0.68 + ((st.info && st.info.front.position.z) || 0), ty = st.tapeY || 0.2;
         P.box(2.86, 0.05, 0.012, M.hazard, 0, ty, fz);
         P.pl(0.5, 0.16, signMat(k, 'TEMPORAL', '#fbbf24'), 1.13, ty + 0.16, fz + 0.004);
       }
-    } finally { pickBox(P, p, st.centre); P.flush(g); }
+    } finally { pickBox(P, p); P.flush(g); }
   },
 
   plate(ctx, p) {
@@ -1752,17 +1749,17 @@ export default {
 
   // ---------------------------------------------------------------- after the desks move
   layout(k) {
-    const my = k.my, c = k.centre();
+    const my = k.my;
     const nRows = Math.round((k.frontZ() - k.C.AISLE_Z) / k.C.ROW_D) + 1, rows = nRows > 1 ? 2 : 1;
-    if (my.emptyDais) { // nobody at the centre: the empty command dais stands there instead (not when a third row of
-      // desks, a big team without a Product or Lead, takes that floor), and people walk round it as round a captain's
-      const show = !c && nRows <= 2, ez = centreZ(rows), f = EMPTY_FOOT;
+    if (my.emptyDais) { // the empty command dais in front of the rows (not when a third row of desks, a big team,
+      // takes that floor); people walk round it
+      const show = nRows <= 2, ez = centreZ(rows), f = EMPTY_FOOT;
       my.emptyDais.visible = show;
       if (show) my.emptyDais.position.set(CX, LIFT, ez - DZ);
       if (!my.emptyBlock) my.emptyBlock = k.block();
       if (my.emptyBlock) { if (show) my.emptyBlock.set(CX + f.x0, ez + f.z0, CX + f.x1, ez + f.z1); else my.emptyBlock.set(); }
     }
-    // a third row of desks (a big team without a captain): the propellant cart would stand on one of its desks, the
+    // a third row of desks (a big team): the propellant cart would stand on one of its desks, the
     // holo table on its aisle and the cantina's high table in front of its left desk, so they go, with their blocked
     // areas
     const three = nRows > 2;
@@ -1857,17 +1854,17 @@ export default {
     my.flAt = my.flAt || -9;
     if (my.floorG && t - my.flAt > 1) {
       my.flAt = t;
-      const fz = k.frontZ(), ds = k.desks(), c = k.centre();
+      const fz = k.frontZ(), ds = k.desks();
       my.floorG.position.z = fz + 1.0;
-      let front = 0; for (const d of ds) if (!d.centre) front = Math.max(front, d.row || 0);
-      const cx = c ? c.x : CX, cz = c ? c.z - 0.7 : (my.emptyDais && my.emptyDais.visible ? my.emptyDais.position.z + DZ - 0.7 : null);
-      let key = `${fz}|${cx}|${cz}`; for (const d of ds) if (!d.centre && (d.row || 0) === front) key += `,${d.x.toFixed(2)}`;
+      let front = 0; for (const d of ds) front = Math.max(front, d.row || 0);
+      const cx = CX, cz = my.emptyDais && my.emptyDais.visible ? my.emptyDais.position.z + DZ - 0.7 : null;
+      let key = `${fz}|${cx}|${cz}`; for (const d of ds) if ((d.row || 0) === front) key += `,${d.x.toFixed(2)}`;
       if (key !== my.linesKey) {
         my.linesKey = key;
         const m4 = my.tmpM || (my.tmpM = new THREE.Matrix4()), sv = my.tmpV || (my.tmpV = new THREE.Vector3());
         let n = 0;
         if (cz != null) for (const d of ds) {
-          if (d.centre || (d.row || 0) !== front || n >= 16) continue;
+          if ((d.row || 0) !== front || n >= 16) continue;
           const sx = d.x, sz = fz + 1.3, dx = sx - cx, dz = sz - cz, l = Math.hypot(dx, dz) || 1, ex = cx + (dx / l) * 2.6, ez = cz + (dz / l) * 2.6;
           const L = Math.hypot(ex - sx, ez - sz); if (L < 0.3 || l < 2.7) continue;
           m4.makeRotationY(Math.atan2(ex - sx, ez - sz)).scale(sv.set(1, 1, L)).setPosition((sx + ex) / 2, 0.01, (sz + ez) / 2);
@@ -1891,7 +1888,7 @@ export default {
     if (d) {
       d.position.x += Math.sin(my.droneDir) * dt * 0.8; d.position.z += Math.cos(my.droneDir) * dt * 0.8;
       const rz = Math.min(4.5, k.frontZ() + 1.5);
-      if (!(t - (my.dcAt || -9) < 2)) { my.dcAt = t; const c = k.centre(); my.dcx = c ? c.x : CX; my.dcz = c ? c.z - 0.7 : (my.emptyDais && my.emptyDais.visible ? my.emptyDais.position.z + DZ - 0.7 : 99); }
+      if (!(t - (my.dcAt || -9) < 2)) { my.dcAt = t; my.dcx = CX; my.dcz = my.emptyDais && my.emptyDais.visible ? my.emptyDais.position.z + DZ - 0.7 : 99; }
       let bad = false;
       for (const [ox, oz, orr] of [[HOLO.x, HOLO.z, 2.1], [my.dcx, my.dcz, 3.4]]) { // keep off the holo table and the dais
         const hx = d.position.x - ox, hz = d.position.z - oz;
@@ -1979,7 +1976,7 @@ function consoleBase(k, P, own, kind, o = {}) {
 // console's body (its parts between knee and hand height, clipped to the desk's own patch of floor), the front
 // shrinks into it, so a click anywhere on the visible console selects its owner and nothing else does
 const _pb = new THREE.Box3(), _pp = new THREE.Box3();
-function pickBox(P, p, centre) {
+function pickBox(P, p) {
   const [top, front] = p.desk || [];
   if (!top) return;
   _pb.makeEmpty();
@@ -1990,7 +1987,7 @@ function pickBox(P, p, centre) {
     _pp.copy(b); _pb.union(_pp);
   }
   if (_pb.isEmpty()) return;
-  const lim = centre ? [-2.3, 2.3, DZ - 1.9, DZ + 1.6] : [-2.2, 2.2, DZ - 1.7, DZ + 1.0];
+  const lim = [-2.2, 2.2, DZ - 1.7, DZ + 1.0];
   const x0 = Math.max(lim[0], _pb.min.x), x1 = Math.min(lim[1], _pb.max.x), z0 = Math.max(lim[2], _pb.min.z), z1 = Math.min(lim[3], _pb.max.z);
   const y0 = Math.max(0, _pb.min.y), y1 = Math.min(1.3, _pb.max.y);
   if (!(x1 > x0 && z1 > z0 && y1 > y0)) return;
@@ -2333,10 +2330,10 @@ function chartMat(k) {
   const m = new THREE.MeshBasicMaterial({ map: t.tex, toneMapped: false }); m.color.setScalar(0.95); return m;
 }
 
-// the captain's command dais (the centre desk, and the empty one in decor): two tiers with the ship's emblem, the
-// captain's chair with armrest panels, a crescent command console, a tactical rail behind, status pylons and the
-// mission hologram. In desk coordinates; the dais goes from y -lift to 0.
-function buildCommand(k, P, g, own, lift, empty) {
+// the captain's command dais (decor in the middle of the bridge, nobody sits there): two tiers with the ship's
+// emblem, the captain's chair with armrest panels, a crescent command console, a tactical rail behind, status pylons
+// and the mission hologram. In desk coordinates; the dais goes from y -lift to 0.
+function buildCommand(k, P, g, own, lift) {
   const my = k.my, M = my.M, G = my.G, DCZ = DZ - 0.7;
   P.cyl(2.25, 2.3, lift * 0.5, M.dark, 0, -lift * 0.75, DCZ, 0, 0, 0, 72);
   P.cyl(1.95, 2.0, lift * 0.5, M.mid, 0, -lift * 0.25, DCZ, 0, 0, 0, 72);
@@ -2416,9 +2413,7 @@ function buildCommand(k, P, g, own, lift, empty) {
     const nose = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.1, 12), hm); nose.position.y = 0.41; h.add(nose);
     for (let i = 0; i < 4; i++) { const f = new THREE.Mesh(new THREE.BoxGeometry(0.004, 0.07, 0.05), hm); const a = (i / 4) * TAU; f.position.set(Math.sin(a) * 0.045, 0.07, Math.cos(a) * 0.045); f.rotation.y = a; h.add(f); }
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.12, 0.003, 4, 32), hm); ring.rotation.x = Math.PI / 2; ring.position.y = 0.2; h.add(ring);
-    if (empty) g.add(h); else spinner(k, g, h, 'y', 0.7);
-    if (empty) k.my.spin.push({ o: h, ax: 'y', sp: 0.7 }); }
-  if (!empty) { const l = new THREE.PointLight(0xffc77a, 5, 7, 1.6); l.position.set(0, 3.0, DZ - 0.4); g.add(l); }
+    g.add(h); k.my.spin.push({ o: h, ax: 'y', sp: 0.7 }); }
 }
 function daisTopMat(k) {
   const t = canvasTex(1024, 1024), g = t.ctx;
