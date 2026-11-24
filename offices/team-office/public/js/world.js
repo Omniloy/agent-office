@@ -96,7 +96,11 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   const title = theme.title, texts = theme.texts;
   const escText = (s) => String(s).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const fmt = format || escText;
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  // With the glow (theme.bloom, below) the scene is drawn and smoothed (MSAA) in the composer's own picture and only
+  // copied to the canvas, so the canvas gets no MSAA buffers of its own: on a 2x screen they are ~170 MB of GPU memory
+  // that nothing would draw into.
+  const BLOOM = !document.documentElement.classList.contains('phone') && theme.bloom && theme.bloom.strength > 0;
+  const renderer = new THREE.WebGLRenderer({ antialias: !BLOOM });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -108,7 +112,11 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0b1022);
   scene.fog = new THREE.Fog(0x0b1022, 45, 95);
-  scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+  { // the reflections: a white room, baked once (the generator's work pictures and the room's meshes are freed after)
+    const pm = new THREE.PMREMGenerator(renderer), env = new RoomEnvironment();
+    scene.environment = pm.fromScene(env, 0.04).texture;
+    pm.dispose(); env.dispose();
+  }
   scene.environmentIntensity = 0.3;
   const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 200);
   const HOME = { pos: new THREE.Vector3(5.5, 15.5, 25.5), target: new THREE.Vector3(-1.2, 1.2, -1.6) };
@@ -1263,21 +1271,29 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   // Glow (bloom), for themes that ask for it (theme.bloom), never on phones. The scene is drawn into an offscreen
   // picture that three treats like the screen (tone mapping and sRGB done in each material, so toneMapped:false
   // screens keep their exact colours), the bright parts are blurred on top, and a plain copy puts it on screen.
-  // If pictures come too slowly with it, it switches itself off for this page.
+  // If pictures come too slowly with it, the glow switches itself off for this page (the picture stays smoothed).
   let composer = null, bloomPass = null;
   const B = theme.bloom;
-  if (!PHONE && B && B.strength > 0) {
+  if (BLOOM) {
     try {
-      const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+      // MSAA: 4 samples, 2 on a 2x screen (its pixels are already small: the edges look the same, and the picture's
+      // MSAA buffers take half the memory, ~120 MB less)
+      const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: renderer.getPixelRatio() >= 2 ? 2 : 4 });
       rt.texture.colorSpace = THREE.SRGBColorSpace;
       rt.isXRRenderTarget = true; // three 0.170: "like the screen" for tone mapping and colour space (WebGLRenderer getProgram)
       composer = new EffectComposer(renderer, rt);
       composer.renderTarget2.isXRRenderTarget = true; composer.renderTarget2.texture.colorSpace = THREE.SRGBColorSpace;
       composer.addPass(new RenderPass(scene, camera));
       bloomPass = new UnrealBloomPass(new THREE.Vector2(256, 256), B.strength, B.radius != null ? B.radius : 0.4, B.threshold != null ? B.threshold : 1);
+      // its blur pictures are drawn as flat quads: no depth buffers (~20 MB on a 2x screen)
+      for (const t of [bloomPass.renderTargetBright, ...bloomPass.renderTargetsHorizontal, ...bloomPass.renderTargetsVertical]) t.depthBuffer = false;
       composer.addPass(bloomPass);
-      composer.addPass(new ShaderPass(CopyShader)); // already tone mapped and sRGB: copied as is (OutputPass would do both twice)
-    } catch (e) { console.warn('bloom off', e); composer = null; }
+      // already tone mapped and sRGB: copied as is (OutputPass would do both twice). It goes to the screen, so the
+      // composer need not swap its two pictures after it: the scene is always drawn into the same one and the other is
+      // never made (each is ~250 MB with its MSAA buffers on a 2x screen)
+      const copy = new ShaderPass(CopyShader); copy.needsSwap = false;
+      composer.addPass(copy);
+    } catch (e) { console.warn('bloom off', e); composer = null; bloomPass = null; }
   }
   let slowFor = 0, slowN = 0, lastFrameAt = 0;
   const KEEP_BLOOM = /[?&]bloom=1\b/.test(location.search); // ?bloom=1: never switch it off (tests on slow software GL)
@@ -1286,10 +1302,13 @@ export function createWorld(sceneEl, labelsEl, { onSelect, format, onBoard, them
   document.addEventListener('visibilitychange', resumeSpeed);
   function watchSpeed(nowMs) { // more than 1.5 s of pictures over 70 ms apart (at least 4 of them): the glow costs too much here
     const gap = lastFrameAt ? nowMs - lastFrameAt : 0; lastFrameAt = nowMs;
-    if (!composer || !gap || KEEP_BLOOM || document.hidden) return;
+    if (!bloomPass || !gap || KEEP_BLOOM || document.hidden) return;
     if (gap > 70) { slowFor += Math.min(gap, 2000); slowN++; } // a very slow picture counts too (one long stall alone is not enough)
     else { slowFor = Math.max(0, slowFor - gap * 0.5); if (!slowFor) slowN = 0; }
-    if (slowFor > 1500 && slowN >= 4) { console.info('office: bloom switched off, frames were slow'); composer.dispose(); composer = null; bloomPass = null; }
+    if (slowFor > 1500 && slowN >= 4) { // the blur passes go (and their pictures); the scene keeps its smoothed picture
+      console.info('office: bloom switched off, frames were slow');
+      composer.removePass(bloomPass); bloomPass.dispose(); bloomPass = null;
+    }
   }
 
   function resize() {
