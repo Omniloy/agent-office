@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""mstack-vendor: keep the pstack scripts that mstack copies as-is identical to upstream (plus our patches).
+A repo-only dev tool for Omniloy/agent-office; the installer does not need it.
+
+  mstack-vendor sync --upstream <cursor/plugins clone> [--dry-run] [--json]
+        copy every file listed in ports/pstack/vendored.tsv from the clone, apply ports/pstack/patches/<patch>,
+        and rewrite the sha256 column from the upstream files.
+  mstack-vendor check [--upstream <clone>] [--json]
+        exit 1 when a vendored file differs from the sha256 recorded for upstream (or, with --upstream, from the
+        clone plus its patch), when a LICENSE-pstack copy differs from ports/pstack/LICENSE, or a file is missing.
+  mstack-vendor upstream-diff --upstream <full clone> <oldsha> <newsha> [--json]
+        upstream skills changed between two pins -> the mx- skills a person must review by hand.
+  mstack-vendor init --upstream <clone> [--dry-run]
+        (first time only) write vendored.tsv from the folder map in this file and copy the files.
+
+Exit codes: 0 ok, 1 differences found, 2 usage or missing input.
+Example: bin/mstack-vendor check && echo vendored scripts match upstream"""
+import sys, os, json, hashlib, shutil, subprocess, argparse, tempfile
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PORTS = f"{REPO}/ports/pstack"
+TSV = f"{PORTS}/vendored.tsv"
+SK = "teams/misc/skills"
+# local folder or file -> upstream folder or file (inside the cursor/plugins clone)
+MAP = [
+    (f"{SK}/mx-statechart/scripts", "pstack/skills/statechart/scripts"),
+    (f"{SK}/mx-mode/scripts/watch-pr", "pstack/skills/poteto-mode/scripts/watch-pr"),
+    (f"{SK}/mx-mode/scripts/bootstrap.ts", "pstack/skills/poteto-mode/scripts/bootstrap.ts"),
+    (f"{SK}/mx-mode/scripts/package.json", "pstack/skills/poteto-mode/scripts/package.json"),
+    (f"{SK}/mx-mode/scripts/bun.lock", "pstack/skills/poteto-mode/scripts/bun.lock"),
+    (f"{SK}/mx-mode/scripts/worktree-audit.sh", "pstack/skills/poteto-mode/scripts/worktree-audit.sh"),
+    (f"{SK}/mx-show-me-your-work/scripts/log.sh", "pstack/skills/show-me-your-work/scripts/log.sh"),
+]
+LICENSE_COPIES = [f"{SK}/mx-statechart/LICENSE-pstack", f"{SK}/mx-mode/scripts/LICENSE-pstack", f"{SK}/mx-show-me-your-work/scripts/LICENSE-pstack"]
+RENAMES = {"poteto-mode": "mx-mode", "poteto-help": "mx-help", "setup-pstack": None, "make-bot-ui": None, "automate-me": None}
+
+def sha(p): return hashlib.sha256(open(p, "rb").read()).hexdigest()
+def rows():
+    if not os.path.exists(TSV): sys.exit(f"{TSV} is missing: run `mstack-vendor init --upstream <clone>` once")
+    out = []
+    for ln in open(TSV, encoding="utf-8"):
+        if not ln.strip() or ln.startswith("#") or ln.startswith("local_path\t"): continue
+        f = ln.rstrip("\n").split("\t")
+        if len(f) < 3: sys.exit(f"{TSV}: bad line (want local_path, upstream_path, upstream_sha256, patch): {ln!r}")
+        out.append({"local": f[0], "upstream": f[1], "sha256": f[2], "patch": f[3] if len(f) > 3 else ""})
+    return out
+def write_rows(rs):
+    with open(TSV, "w", encoding="utf-8") as fh:
+        fh.write("# Files mstack copies as-is from cursor/plugins. Maintained by bin/mstack-vendor; do not edit by hand.\n")
+        fh.write("local_path\tupstream_path\tupstream_sha256\tpatch\n")
+        for r in sorted(rs, key=lambda r: r["local"]): fh.write(f'{r["local"]}\t{r["upstream"]}\t{r["sha256"]}\t{r["patch"]}\n')
+def walk(up, rel):
+    p = os.path.join(up, rel)
+    if os.path.isfile(p): return [rel]
+    if not os.path.isdir(p): sys.exit(f"upstream path not found: {p}")
+    out = []
+    for root, dirs, files in os.walk(p):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", ".git")]
+        for f in files:
+            if f == ".DS_Store": continue
+            out.append(os.path.relpath(os.path.join(root, f), up))
+    return sorted(out)
+def patched(up, r):
+    """The upstream file with its patch applied, as bytes."""
+    src = os.path.join(up, r["upstream"]); data = open(src, "rb").read()
+    if not r["patch"]: return data
+    pf = f"{PORTS}/patches/{r['patch']}"
+    if not os.path.exists(pf): sys.exit(f"patch {pf} is listed for {r['local']} but missing")
+    with tempfile.TemporaryDirectory() as t:
+        tmp = os.path.join(t, "f"); open(tmp, "wb").write(data)
+        p = subprocess.run(["patch", "-s", tmp, pf], capture_output=True, text=True)
+        if p.returncode: sys.exit(f"patch {r['patch']} does not apply to {r['upstream']}: {p.stdout}{p.stderr}")
+        return open(tmp, "rb").read()
+def copy(up, r, dry):
+    dst = os.path.join(REPO, r["local"]); data = patched(up, r)
+    if os.path.exists(dst) and open(dst, "rb").read() == data: return False
+    if not dry:
+        os.makedirs(os.path.dirname(dst), exist_ok=True); open(dst, "wb").write(data)
+        shutil.copymode(os.path.join(up, r["upstream"]), dst)
+    return True
+
+def cmd_init(a):
+    up = a.upstream; rs = []
+    for loc, rel in MAP:
+        for u in walk(up, rel):
+            l = loc if u == rel else os.path.join(loc, os.path.relpath(u, rel))
+            rs.append({"local": l, "upstream": u, "sha256": sha(os.path.join(up, u)), "patch": ""})
+    n = sum(copy(up, r, a.dry_run) for r in rs)
+    for lc in LICENSE_COPIES:
+        if not a.dry_run: os.makedirs(os.path.dirname(f"{REPO}/{lc}"), exist_ok=True); shutil.copyfile(f"{PORTS}/LICENSE", f"{REPO}/{lc}")
+    if not a.dry_run: write_rows(rs)
+    print(f"{'would copy' if a.dry_run else 'copied'} {n} of {len(rs)} file(s); {len(LICENSE_COPIES)} LICENSE-pstack copies")
+def cmd_sync(a):
+    rs = rows(); changed = []
+    for r in rs:
+        if not os.path.exists(os.path.join(a.upstream, r["upstream"])): sys.exit(f"upstream lost {r['upstream']}: review by hand and edit vendored.tsv")
+        r["sha256"] = sha(os.path.join(a.upstream, r["upstream"]))
+        if copy(a.upstream, r, a.dry_run): changed.append(r["local"])
+    if not a.dry_run: write_rows(rs)
+    if a.json: print(json.dumps({"ok": True, "dryRun": a.dry_run, "changed": changed}))
+    else: print(f"{'would change' if a.dry_run else 'changed'} {len(changed)} file(s)" + "".join(f"\n  {c}" for c in changed))
+def cmd_check(a):
+    bad = []
+    for r in rows():
+        p = os.path.join(REPO, r["local"])
+        if not os.path.exists(p): bad.append({"file": r["local"], "problem": "missing", "fix": "mstack-vendor sync --upstream <clone>"}); continue
+        if a.upstream:
+            if open(p, "rb").read() != patched(a.upstream, r): bad.append({"file": r["local"], "problem": "differs from upstream clone + patch", "fix": "mstack-vendor sync --upstream <clone>, or move the change into ports/pstack/patches/"})
+        elif r["patch"]: continue  # a patched file can only be checked against a clone
+        elif sha(p) != r["sha256"]: bad.append({"file": r["local"], "problem": "sha256 differs from upstream", "fix": "undo the local edit, or move it into ports/pstack/patches/ and list it in vendored.tsv"})
+    lic = open(f"{PORTS}/LICENSE", "rb").read()
+    for lc in LICENSE_COPIES:
+        p = f"{REPO}/{lc}"
+        if not os.path.exists(p) or open(p, "rb").read() != lic: bad.append({"file": lc, "problem": "LICENSE-pstack missing or not byte-identical", "fix": f"cp ports/pstack/LICENSE {lc}"})
+    if a.json: print(json.dumps({"ok": not bad, "checked": len(rows()), "problems": bad}))
+    else:
+        for b in bad: print(f"DIFF {b['file']}: {b['problem']}. Fix: {b['fix']}")
+        print(f"{len(rows())} vendored file(s) checked; {len(bad)} problem(s)")
+    sys.exit(1 if bad else 0)
+def mx_name(path):
+    parts = path.split("/")
+    if parts[:2] == ["pstack", "skills"] and len(parts) > 2:
+        n = parts[2]
+        if n.startswith("principle-"): return "mx-principles"
+        return RENAMES.get(n, f"mx-{n}") if n in RENAMES else f"mx-{n}"
+    if parts[:4] == ["pstack", "automations", "benny", "skills"] and len(parts) > 4: return None if parts[4] == "setup-benny" else f"mx-{parts[4]}"
+    if parts[:2] == ["pstack", "agents"]: return {"poteto-agent.md": "subagent mx-worker", "comment-sicko.md": "subagent mx-comment-sicko"}.get(parts[2])
+    if parts[:3] == ["cursor-team-kit", "skills"] and parts[3] in ("control-ui", "control-cli", "verify-this", "deslop"): return f"mx-{parts[3]}"
+    return None
+def cmd_diff(a):
+    r = subprocess.run(["git", "-C", a.upstream, "diff", "--name-only", a.old, a.new, "--", "pstack", "cursor-team-kit"], capture_output=True, text=True)
+    if r.returncode: print(f"git diff failed ({r.stderr.strip()}). A shallow clone lacks old commits: `git -C {a.upstream} fetch --unshallow`", file=sys.stderr); sys.exit(2)
+    files = [f for f in r.stdout.split("\n") if f]
+    vend = {x["upstream"] for x in rows()} if os.path.exists(TSV) else set()
+    review = {}
+    for f in files:
+        n = mx_name(f)
+        if n: review.setdefault(n, []).append(f)
+    out = {"changedUpstream": len(files), "review": review, "vendoredChanged": sorted(vend & set(files))}
+    if a.json: print(json.dumps(out, indent=1)); return
+    print(f"{len(files)} upstream file(s) changed between {a.old} and {a.new}")
+    for n, fs in sorted(review.items()): print(f"review {n}: " + ", ".join(fs))
+    if out["vendoredChanged"]: print("vendored scripts changed upstream (run sync, then check): " + ", ".join(out["vendoredChanged"]))
+
+def main():
+    ap = argparse.ArgumentParser(prog="mstack-vendor", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest="cmd")
+    for n in ("sync", "init"):
+        p = sp.add_parser(n); p.add_argument("--upstream", required=True); p.add_argument("--dry-run", action="store_true"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("check"); p.add_argument("--upstream"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("upstream-diff"); p.add_argument("--upstream", required=True); p.add_argument("old"); p.add_argument("new"); p.add_argument("--json", action="store_true")
+    a = ap.parse_args()
+    if not a.cmd: print(__doc__); sys.exit(2)
+    if getattr(a, "upstream", None) and not os.path.isdir(a.upstream): print(f"no such folder: {a.upstream} (give a cursor/plugins clone)", file=sys.stderr); sys.exit(2)
+    {"init": cmd_init, "sync": cmd_sync, "check": cmd_check, "upstream-diff": cmd_diff}[a.cmd](a)
+
+if __name__ == "__main__": main()
