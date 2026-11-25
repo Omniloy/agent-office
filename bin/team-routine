@@ -73,6 +73,7 @@ def due(r, st, t):
         return not last or t - last >= step
     return False
 def item_key(i):
+    if isinstance(i, str) and "\t" in i: return i.split("\t")[0]   # a team-board search row: the card key
     if isinstance(i, dict):
         for k in ("key", "url", "repo", "id"):
             if i.get(k): return str(i[k])

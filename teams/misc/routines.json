@@ -1,0 +1,149 @@
+{
+  "_about": "Routines of the Miscelaneous floor, run by team-routine (launchd com.omniloy.team-routine every 5 minutes). Loaded only after __OWNER__'s go; only he adds or changes them.",
+  "routines": [
+    {
+      "id": "verify-due",
+      "to": "lorena",
+      "schedule": {
+        "daily": "07:30"
+      },
+      "probe": [
+        "team-verify",
+        "due",
+        "--json"
+      ],
+      "prompt": "Run mx-maintain-verification-skill for: {items}. One PR or none; a Bug card per product regression.",
+      "dedupe": "verify-due:{item}:{date}"
+    },
+    {
+      "id": "formal-due",
+      "to": "lorena",
+      "schedule": {
+        "weekly": "Mon 08:00"
+      },
+      "probe": [
+        "team-verify",
+        "due",
+        "--json"
+      ],
+      "prompt": "Run mx-maintain-formal-verification-skill for the formal checks covering: {items} (team-verify formal-for <repo> <syncSha>..main).",
+      "dedupe": "formal-due:{item}:{date}"
+    },
+    {
+      "id": "report-triage",
+      "to": "ines",
+      "schedule": {
+        "every": "30m",
+        "between": [
+          "08:00",
+          "22:00"
+        ]
+      },
+      "probe": [
+        "team-verify",
+        "reports",
+        "--json"
+      ],
+      "prompt": "Triage with mx-triage-issue-reports: {items}.",
+      "dedupe": "report-triage:{item}:{date}"
+    },
+    {
+      "id": "repro-intake",
+      "to": "lorena",
+      "schedule": {
+        "every": "30m",
+        "between": [
+          "08:00",
+          "22:00"
+        ]
+      },
+      "probe": [
+        "team-board",
+        "search",
+        "labels = report AND labels = triaged AND status = Discovery AND comment ~ \"[benny:bug]\" AND comment !~ \"CONFIRMED:\" AND comment !~ \"NOT REPRODUCED:\"",
+        "20"
+      ],
+      "prompt": "Run mx-reproduce-and-fix-issues (reproduce half) on: {items}.",
+      "dedupe": "repro-intake:{item}:{date}"
+    },
+    {
+      "id": "fix-ready",
+      "to": "gonzalo",
+      "schedule": {
+        "every": "30m",
+        "between": [
+          "08:00",
+          "22:00"
+        ]
+      },
+      "probe": [
+        "team-verify",
+        "fixes-ready",
+        "--json"
+      ],
+      "prompt": "Objection window closed with no REJECT on: {items}. Run the fix half of mx-reproduce-and-fix-issues.",
+      "dedupe": "fix-ready:{item}:{date}"
+    },
+    {
+      "id": "garden",
+      "to": "alvaro",
+      "schedule": {
+        "daily": "18:00"
+      },
+      "probe": [
+        "team-verify",
+        "garden-due",
+        "--json"
+      ],
+      "prompt": "Gardener round (mx-gardener) since {since}: new PRs and merges on the floor's repos.",
+      "dedupe": "garden:{item}:{date}"
+    },
+    {
+      "id": "main-recheck",
+      "to": "lorena",
+      "schedule": {
+        "tick": true
+      },
+      "probe": [
+        "team-verify",
+        "rechecks",
+        "--json"
+      ],
+      "prompt": "team-evidence rerun {key} --ref main --cwd <a lane at main>; attach; Flow step 8 if it fails. Cards: {items}.",
+      "dedupe": "main-recheck:{item}"
+    },
+    {
+      "id": "evidence-retention",
+      "to": null,
+      "schedule": {
+        "daily": "03:00"
+      },
+      "run": [
+        "team-evidence",
+        "prune",
+        "--older",
+        "14d"
+      ],
+      "then": [
+        "team-evidence",
+        "df"
+      ]
+    },
+    {
+      "id": "ketchup",
+      "to": "ines",
+      "schedule": {
+        "daily": "09:00"
+      },
+      "probe": [
+        "team-board",
+        "search",
+        "updated >= -12h",
+        "50"
+      ],
+      "prompt": "Prepare mx-ketchup for __OWNER__.",
+      "dedupe": "ketchup:{date}",
+      "weekdays": true
+    }
+  ]
+}

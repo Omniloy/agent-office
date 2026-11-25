@@ -16,6 +16,8 @@ checks), and the cheap probes the floor's routines run before they nudge anyone.
   team-verify due [--json] [--no-fetch]              PROBE: repos past maintainEvery, or with merges touching mapped sources since syncSha
   team-verify reports [--json]                       PROBE: untriaged `report` cards + open GitHub issues labeled bug with no card yet (read-only)
   team-verify fixes-ready [--json]                   PROBE: CONFIRMED cards whose objection window closed with no REJECT and no PR yet
+  team-verify garden-due [--json]                    PROBE: floor repos with PRs opened, updated or merged since the newest garden ledger row
+  team-verify rechecks [--json]                      PROBE: Validation cards whose PR is merged and that have no main-recheck run yet
 
 Probes print {"items": [...]} with --json and exit 0 (an empty list means no work); a nonzero exit is a probe failure.
 Registry: <team>/verify/registry.json. The team is TEAM_DIR, else ~/.omniloy-misc.
@@ -276,6 +278,33 @@ def c_fixes_ready(a):
         if any(b.startswith("REJECT:") for b in later) or any("/pull/" in b for b in later): continue
         if datetime.datetime.now() - datetime.datetime.fromisoformat(t0) >= datetime.timedelta(minutes=win): items.append({"key": key, "confirmed": t0})
     out(items, a, lambda i: f"{i['key']}: confirmed {i['confirmed']}, window closed")
+def c_garden_due(a):
+    led = f"{TD}/garden/ledger.tsv"; since = None
+    if os.path.exists(led):
+        rows = [l.split("\t") for l in open(led).read().splitlines()[1:] if l.strip()]
+        if rows: since = max(r[0] for r in rows)[:10]
+    since = since or (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    items = []
+    for r in [r for p in T.get("projects", []) for r in p.get("repos", [])]:
+        code, j, s = run(["gh", "pr", "list", "--repo", r, "--state", "all", "--search", f"updated:>={since}", "--json", "number,url,state,mergedAt", "--limit", "50"], timeout=60)
+        if code: die(f"gh pr list --repo {r} failed: {s.strip()[:200]}")
+        for pr in json.loads(j or "[]"): items.append({"repo": r, "url": pr["url"], "state": pr["state"]})
+    out(items, a, lambda i: f"{i['url']} {i['state']}")
+def c_rechecks(a):
+    c, o, s = board("search", "status = Validation", "100")
+    if c: die(f"team-board search failed: {s.strip()}")
+    items = []
+    for ln in o.splitlines():
+        key = ln.split("\t")[0]
+        m = None
+        try: m = json.load(open(f"{TD}/{VER.get('evidenceDir', 'evidence')}/{key}/manifest.json"))
+        except Exception: continue
+        if any(r.get("kind") == "main-recheck" for r in m.get("runs", [])): continue
+        for pr in m.get("prs", []):
+            code, j, _ = run(["gh", "pr", "view", pr["url"], "--json", "mergedAt,mergeCommit"], timeout=60)
+            if code == 0 and json.loads(j or "{}").get("mergedAt"):
+                items.append({"key": key, "pr": pr["url"], "merge": (json.loads(j).get("mergeCommit") or {}).get("oid")}); break
+    out(items, a, lambda i: f"{i['key']}: {i['pr']} merged")
 def c_status(a):
     d = reg(); rows = []
     for repo, e in sorted(d["repos"].items()):
@@ -299,9 +328,9 @@ def main():
     p = sp.add_parser("probe-used"); p.add_argument("repo"); p.add_argument("--card", required=True); p.add_argument("--no-board", action="store_true")
     p = sp.add_parser("ready-check"); p.add_argument("key")
     p = sp.add_parser("due"); p.add_argument("--json", action="store_true"); p.add_argument("--no-fetch", action="store_true")
-    for n in ("reports", "fixes-ready"): p = sp.add_parser(n); p.add_argument("--json", action="store_true")
+    for n in ("reports", "fixes-ready", "garden-due", "rechecks"): p = sp.add_parser(n); p.add_argument("--json", action="store_true")
     a = ap.parse_args()
     {"status": c_status, "add": c_add, "doctor": c_doctor, "features-for": c_features_for, "formal-for": c_formal_for, "sync": c_sync,
-     "probe-used": c_probe_used, "ready-check": c_ready_check, "due": c_due, "reports": c_reports, "fixes-ready": c_fixes_ready}[a.c](a)
+     "probe-used": c_probe_used, "ready-check": c_ready_check, "due": c_due, "reports": c_reports, "fixes-ready": c_fixes_ready, "garden-due": c_garden_due, "rechecks": c_rechecks}[a.c](a)
 
 if __name__ == "__main__": main()
