@@ -19,6 +19,10 @@ answers to the questions they ask you.
   deploy or production change without you.
 - **A Business floor** (port 4318): Irene (coordinator, triages your inbox), Pablo (clients), Elena (partners and
   proposals). Irene runs an email round on a schedule (every 2 hours by default); they prepare drafts in your voice and never send anything.
+- **A Miscelaneous floor** (optional, port 4322): Inés (product lead), Gonzalo (development), Lorena (verification),
+  Álvaro (infrastructure and gardener), on a local board, working with **mstack**: verification-first skills,
+  CLIs instead of checklists, an evidence ladder from tests and video up to Bombadil, TLA+ and Lean, and a board that
+  refuses to close a card without evidence. Credit below.
 - **Zeus**, your own assistant above the building: he does anything you ask from the chat, like Claude Code at your
   own terminal, and he is the one who changes the office system itself: new floors, new people, how things look and work.
 - **Chat with every agent**, with markdown, tables, links to PRs and tickets, image attachments and dictation.
@@ -83,6 +87,9 @@ Everything travels inside ssh tunnels between 127.0.0.1 ports; no new port is op
 | `services/artifacts` | `~/.omniloy-office/artifacts` | Local pages server (port 4340) |
 | `bin/` | `~/.local/bin/` | `team-ask`, `team-card`, `team-person`, `team-peer`, `omniloy-team`, `office-restart`, `office-up` (recover after a reboot), `team-memory` and friends |
 | `teams/dev`, `teams/biz`, `teams/admin` | `~/.omniloy-team`, `~/.omniloy-biz`, `~/.omniloy-admin` | Team definition, protocol, memory |
+| `teams/misc` (optional) | `~/.omniloy-misc` | The Miscelaneous floor: team, protocol, routines, mstack skills in `.claude/skills/` |
+| `ports/pstack/`, `THIRD_PARTY_NOTICES.md`, `docs/mstack.md` | not installed | Provenance, licenses and credit for mstack |
+| `services/launchd/` | `~/Library/LaunchAgents/` (by hand, with the owner's go) | The Miscelaneous floor's routine job |
 | `teams/*/agents` | `~/.claude/agents/` | Each person's instructions |
 | `skills/` | `~/.claude/skills`, `~/.codex/skills` | Skills every agent gets |
 | `herdr/` | `~/.config/herdr-app/` | Panels and layout for the Herdr app |
@@ -141,3 +148,18 @@ calls with the sign-in the Google Workspace connector already holds (it needs th
   someone on the team. A real person who shares a name with an agent is registered once with `team-names real`.
   Codex has no such check before each write: there the rule rests on the protocol and on those two tools.
 - Tokens live in the macOS Keychain or in each tool's own sign-in; they are not in this repo or in any file it writes.
+
+## Credits
+
+The Miscelaneous floor's way of working, **mstack**, is our version of **pstack by Lauren Tan (@poteto)**: verification
+is all you need, per-repo verification skills with Feature Maps as materialized memory, "Build the Lever" (give agents
+CLIs, not markdown), stop-the-line loops, routines that reproduce user reports, the gardener and the bot-maker are her
+ideas. We moved, renamed and rewrote her skills for Claude Code, Codex, Herdr, the Workflow tool and this office, and
+added an evidence ladder and an evidence gate. Where her text is kept, it is hers; where it changed, the mistakes are ours.
+
+- Her talk, "All Code Is Slop (Except Mine)": https://www.youtube.com/watch?v=O_zcc6Xl12g
+- Her article, "The Complete Guide to pstack Pt. 1": https://x.com/poteto/article/2094457600259842065
+- pstack: https://github.com/cursor/plugins/tree/main/pstack (MIT, Copyright (c) 2026 Lauren Tan). Companion skills from
+  cursor-team-kit (MIT, Copyright (c) 2026 Cursor).
+
+Full credit: [docs/mstack.md](docs/mstack.md). License notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

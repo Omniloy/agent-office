@@ -41,16 +41,19 @@ def find(rid):
             if r.get("id") == rid: return td, short, t, r
     die(f"no routine {rid}; team-routine ls")
 class State:
-    def __init__(self, td): self.td = td
+    def __init__(self, td, write=True): self.td, self.write = td, write
     def __enter__(self):
         os.makedirs(f"{self.td}/routines", exist_ok=True); self.p = f"{self.td}/routines/state.json"
         self.lock = open(self.p + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
         self.s = rj(self.p, {"routines": {}, "sent": []}); return self.s
     def __exit__(self, et, *_):
-        self.s["sent"] = self.s["sent"][-2000:]
-        tmp = self.p + ".tmp"; json.dump(self.s, open(tmp, "w"), indent=1); os.replace(tmp, self.p)
+        if self.write:   # a dry run changes nothing
+            self.s["sent"] = self.s["sent"][-2000:]
+            tmp = self.p + ".tmp"; json.dump(self.s, open(tmp, "w"), indent=1); os.replace(tmp, self.p)
         fcntl.flock(self.lock, fcntl.LOCK_UN)
+DRY = False
 def log(td, **kw):
+    if DRY: return
     os.makedirs(f"{td}/routines", exist_ok=True)
     with open(f"{td}/routines/log.jsonl", "a") as f: f.write(json.dumps({"at": now().isoformat(timespec="seconds"), **kw}) + "\n")
 def hm(s): h, m = s.split(":"); return int(h), int(m)
@@ -146,7 +149,7 @@ def run_one(td, short, t, r, s, dry, force=False):
 def c_tick(a, only=None):
     bad = 0
     for td, short, t, rs in teams():
-        with State(td) as s:
+        with State(td, write=not a.dry_run) as s:
             for r in rs:
                 if only and r.get("id") != only: continue
                 res = run_one(td, short, t, r, s, a.dry_run, force=bool(only))
@@ -204,6 +207,7 @@ def main():
     for n in ("pause", "resume"): p = sp.add_parser(n); p.add_argument("id")
     p = sp.add_parser("add"); p.add_argument("id"); p.add_argument("--file", required=True); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+    global DRY; DRY = bool(getattr(a, "dry_run", False))
     if a.c == "tick": c_tick(a)
     elif a.c == "run": c_tick(a, only=a.id)
     elif a.c == "ls": c_ls(a)

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The Miscelaneous floor's routines: every 5 minutes `team-routine tick` (probe, idle check, dedupe, pause, self-stop).
+     Load it only with the owner's go (setup/SETUP.md, "Miscelaneous floor", step 6):
+       cp services/launchd/com.omniloy.team-routine.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.omniloy.team-routine.plist
+     Stop it: launchctl bootout gui/$(id -u)/com.omniloy.team-routine -->
+<plist version="1.0"><dict>
+<key>Label</key><string>com.omniloy.team-routine</string>
+<key>ProgramArguments</key><array>
+  <string>/bin/sh</string><string>-c</string>
+  <string>export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"; mkdir -p "$HOME/.omniloy-misc/routines"; exec /usr/bin/python3 "$HOME/.local/bin/team-routine" tick >> "$HOME/.omniloy-misc/routines/tick.log" 2>&amp;1</string>
+</array>
+<key>StartInterval</key><integer>300</integer>
+<key>RunAtLoad</key><false/>
+</dict></plist>

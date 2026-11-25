@@ -59,6 +59,9 @@ if [ "$1" = send ]; then echo "$2|$3" >> {T}/sent.log; exit 0; fi
         self.assertEqual(self.tr("tick", at="2026-11-25T07:00:00").stdout.strip(), "")
         self.assertIn("sent", self.tr("tick", at="2026-11-25T07:31:00").stdout)
         self.items([{"repo": "z"}]); self.assertEqual(self.tr("tick", at="2026-11-25T09:00:00").stdout.strip(), "")  # once a day
+    def test_dry_run_changes_nothing(self):
+        self.items([{"repo": "x"}]); self.tr("tick", "--dry-run")
+        self.assertFalse(os.path.exists(f"{self.td}/routines/state.json")); self.assertFalse(os.path.exists(f"{self.td}/routines/log.jsonl")); self.assertEqual(self.sent(), [])
     def test_command_only_and_dry_run(self):
         self.routines([{"id": "evidence-retention", "to": None, "schedule": {"daily": "03:00"}, "run": ["true"]}])
         self.assertIn("would run", self.tr("tick", "--dry-run", at="2026-11-25T03:05:00").stdout)

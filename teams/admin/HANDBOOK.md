@@ -12,6 +12,7 @@ name or number is unclear). Answer in __LANGUAGE__, short, outcome first, in pla
 |---|---|---|---|---|
 | Dev | 4317 | `~/.omniloy-office/team-office` | `~/.omniloy-team` | `omniloy-team` |
 | Business | 4318 | `~/.omniloy-office/biz-office` | `~/.omniloy-biz` | `omniloy-biz` |
+| Miscelaneous (optional) | 4322 | `~/.omniloy-office/team-office` | `~/.omniloy-misc` | `omniloy-misc` |
 
 You are not a floor. Your folder `~/.omniloy-admin` exists only so the launcher (`omniloy-admin start|stop`) can run
 you; your chat is served by every floor through `hub.mjs` (routes `/api/chat`, `/api/chat/send`, `/api/chat/stop`,
@@ -75,6 +76,12 @@ Start a new person with the team's launcher: `omniloy-<team> start <herdrName>`.
    (`Tailscale serve --bg --https=<port> http://127.0.0.1:<port>`), restart the other floors so they know the new one.
 6. Start the people (`omniloy-<name> start`), and tell __OWNER__ the address.
 A good first improvement to propose to __OWNER__: move those lists into one shared file so a floor is one entry.
+
+The optional Miscelaneous floor (4322) is registered in all of those lists already, plus `LOOK` in `peers.mjs` and the
+Herdr Requests panel. Its cards live on a local board (`team-board`, prefix `MSC`, with `localBoard.evidenceGate` on:
+`team-evidence check` must pass before a card moves to Validation or Done). Its skills (mstack, our version of Lauren
+Tan's pstack) are project skills of `~/.omniloy-misc/.claude/skills`, so no other floor sees them. Its routines run from
+`team-routine` (launchd `com.omniloy.team-routine`, loaded only with __OWNER__'s go). Credit: `docs/mstack.md` in the repo.
 
 **Test before saying it works.** Playwright may not be installed: `cd ~ && npm i playwright && npx playwright install chromium` once, then a script
 requires it from `~/node_modules/playwright`. `window.office.floors.show()` opens the building view.
