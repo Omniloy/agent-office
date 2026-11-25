@@ -139,7 +139,7 @@ elif cmd == "hire":
     labels = ["--label", f"herdr.tab={prefix}{name}", "--label", f'team.persona={base["slug"]}', "--label", "team.temp=1"]
     if sp: labels = ["--label", f'herdr.space={sp[0]["id"]}'] + labels
     os.makedirs(f"{d}/work/temps", exist_ok=True)
-    res = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", d, *labels, "--", *argv)
+    res = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", d, *labels, "--", "env", f"TEAM_DIR={d}", *argv)
     if res.returncode != 0: sys.exit("could not start the temp: " + res.stderr.strip()[:300])
     cur.append(x); save(d, cur)
     time.sleep(2); sh("herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": f"{first} {n} · temp"}))

@@ -26,4 +26,16 @@ mkdir -p "$TEAM_DIR/work/lanes/handmade"; "$L" remove --slug handmade >/dev/null
 "$L" remove --slug MSC-7 >/dev/null; [ ! -e "$TEAM_DIR/work/lanes/MSC-7-1" ] && [ ! -e "$TEAM_DIR/work/lanes/MSC-7-2" ] && ok "remove deletes its lanes" || no "remove"
 [ -f "$TEAM_DIR/evidence/MSC-7/manifest.json" ] && ok "evidence survives" || no "evidence gone"
 [ -z "$(git -C "$TEAM_DIR/work/x" worktree list | sed 1d)" ] && ok "worktrees pruned" || no "worktrees left"
+# a commit upstream after the first clone: the next create must be at the new SHA, and the clone follows it
+echo 2 > "$R/a"; git -C "$R" -c user.name=t -c user.email=t@t commit -qam b; NEW=$(git -C "$R" rev-parse main)
+"$L" create --repo Omniloy/x --base main --slug MSC-9-verify --role verify -n 1 --source "$R" >/dev/null
+[ "$(git -C "$TEAM_DIR/work/lanes/MSC-9-verify-1" rev-parse HEAD)" = "$NEW" ] && ok "a new create is at today's origin/main" || no "stale base: lane at $(git -C "$TEAM_DIR/work/lanes/MSC-9-verify-1" rev-parse HEAD), main $NEW"
+[ "$(git -C "$TEAM_DIR/work/x" rev-parse HEAD)" = "$NEW" ] && ok "work/<repo> fast-forwarded" || no "work/<repo> stale"
+# roles get their own slugs; remove takes the exact slug and keeps uncommitted work
+"$L" create --repo Omniloy/x --base main --slug MSC-9-dev --role dev -n 1 --source "$R" >/dev/null && ok "dev and verify lanes coexist" || no "dev lane refused next to the verify lane"
+echo wip > "$TEAM_DIR/work/lanes/MSC-9-dev-1/a"
+"$L" remove --slug MSC-9-verify >/dev/null; [ -d "$TEAM_DIR/work/lanes/MSC-9-dev-1" ] && ok "remove --slug X-verify leaves X-dev" || no "remove touched the dev lane"
+"$L" remove --slug MSC-9-dev >/dev/null 2>&1; [ $? = 1 ] && grep -q wip "$TEAM_DIR/work/lanes/MSC-9-dev-1/a" && ok "remove refuses a dirty lane" || no "dirty lane removed"
+"$L" list --json | python3 -c 'import json,sys;l=json.load(sys.stdin)["lanes"];assert any(x.get("role")=="dev" for x in l)' && ok "the role is recorded" || no "role not recorded"
+"$L" remove --slug MSC-9-dev --force >/dev/null; [ ! -e "$TEAM_DIR/work/lanes/MSC-9-dev-1" ] && ok "--force removes a dirty lane" || no "--force"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

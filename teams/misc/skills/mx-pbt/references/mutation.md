@@ -9,7 +9,7 @@ the code and show the check fails on it.
 | inverse (`parse(print(x))`) | drop escaping of one special character |
 | oracle (fast vs reference) | off-by-one in a loop bound |
 | guard on shared state | remove the guard (`if (holder) return`) |
-| TLA+ invariant | delete the guard conjunct of the action that protects it |
+| TLA+ invariant | remove the guard in the real code the action names, and rerun the verify skill with its conformance replay (deleting the guard conjunct in the model is only a vacuity check) |
 | Bombadil property | reintroduce the bug the card fixed (revert the fix commit in a scratch lane) |
 
 How to run it without touching the PR: copy the lane (`cp -c -R <lane> <lane>-mut` on APFS is a cheap clone), apply

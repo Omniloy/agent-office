@@ -20,7 +20,7 @@ function start() {
     { name: 'Dev', port: '4317', floor: 0xead7b4, wall: 0xf3efe6, line: 0x5b6ee1, desks: 4 },
     { name: 'Business', port: '4318', floor: 0x3f8f88, wall: 0xe9f1ee, line: 0xfb923c, desks: 3 },
     { name: 'Miscelaneous', port: '4322', floor: 0xd8e6dc, wall: 0xf0f5f1, line: 0x0d9488, desks: 4 },
-  ];
+  ].filter((f) => !Array.isArray(window.__FLOORS__) || window.__FLOORS__.includes(f.port) || f.port === here); // only the floors this machine runs (the hub's OFFICES)
   const PEOPLE = [0xf87171, 0x60a5fa, 0x34d399, 0xfbbf24, 0xa78bfa, 0xf472b6];
   const GAP = 4.0, FW = 10, FD = 7, MID = ((FLOORS.length - 1) * GAP) / 2 + 0.5;
   const GOD = -2, GODH = 4.4; // the superadmin: a small figure in the top right corner of the screen (GODH: his height in scene units, clouds to halo)

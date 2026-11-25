@@ -21,7 +21,8 @@ together with Gonzalo's plan note.
    the branch exists, name them from the map by hand).
 4. Write `~/.omniloy-misc/evidence/<KEY>/claim.md` from [`references/claim-template.md`](references/claim-template.md):
    one claim per line, each falsifiable, with its tier, its feature files, the exact baseline and treatment commands
-   (kit CLI calls with `--json`), and what result means `NOT VERIFIED`. Then `team-evidence claims KEY` must exit 0.
+   (kit CLI calls with `--json`), and what result means `NOT VERIFIED`. Then `team-evidence claims KEY --sync` must exit 0 (it writes the claims into the manifest; `team-evidence run`
+   also syncs a changed claim.md and refuses one that does not parse).
 5. Run the baseline on main for every claim:
    `team-evidence run KEY --kind baseline --claim N --tier <tier> --cwd <lane at main> -- <baseline command>`.
    For a bug the baseline is expected to show the bug: add `--expect-fail` when the command exits nonzero on it.
@@ -34,7 +35,7 @@ For a one-claim Bug or Task card the whole claim file is three lines.
 Pick the lowest tier that can catch the kind of bug the diff could introduce (the ladder is in PROTOCOL.md):
 V0 always; V1 anything a user sees; V2 logic with an invariant or an inverse; V3 stateful UI flows and "it got
 stuck"; V4 coordination and "sometimes"; V5 only when Inés wrote it. "When something passes too easily, suspect the
-observation method."
+observation method before the system."
 
 ---
 Our own skill, in the spirit of pstack by Lauren Tan.

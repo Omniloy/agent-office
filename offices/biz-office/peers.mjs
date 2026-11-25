@@ -171,7 +171,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
         const peer = await who(req), c = await floorCard(mine), me = (await peersFile()).me || {};
         const info = { building: me.name || '', owner: me.owner || '', floor: mine.name, lead: c ? c.lead : {}, viewer: peer ? { id: peer.id, name: peer.name, user: String(req.headers['x-peer-user'] || peer.owner || '') } : null,
           share: !!(peer && ((peer.my || {})[port] || {}).share), chats: !!(peer && peer.chats && peer.status === 'on'), back: String(req.headers['x-peer-back'] || '') };
-        const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest')
+        const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest').replace('%%OFFICE_FLOORS%%', JSON.stringify(OFFICES.map((o) => String(o.port))))
           .replace('</head>', `<script>window.__GUEST__ = ${JSON.stringify(info).replace(/</g, '\\u003c')};</script><script type="module" src="/js/guest.js"></script></head>`);
         res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' }); return res.end(html);
       }

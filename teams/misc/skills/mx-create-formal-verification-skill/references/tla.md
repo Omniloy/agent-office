@@ -17,8 +17,12 @@
    action names the function in the code it models (a comment with the file and symbol).
 3. `Spec.cfg` with small constants (2 or 3 people, 2 cards).
 4. SANY, then TLC, through `team-evidence run KEY --kind treatment --claim N --tier V4 -- <command>`.
-5. **Mutation:** delete the guard that protects each invariant and show TLC finds a counterexample
-   (`--kind mutation --expect-fail`). A spec that cannot fail proves nothing.
+5. **Mutation:** (a) Mutate the code: make a scratch change in the real code the action names (remove the guard,
+   reorder the step) in a scratch copy of the lane. Rerun the generated verify skill, its conformance replay
+   included, and record it with `team-evidence run KEY --kind mutation --claim N --tier V4 --expect-fail --cwd <scratch copy> -- <command>`.
+   It must fail. Then drop the change and show the check is back where it started. (a) is the step that turns a
+   sketch into evidence. (b) Optionally also mutate the model (delete the guard conjunct of the action) as a vacuity
+   check; on its own it shows only that the invariant is not vacuous.
 6. **Conformance:** see `conformance.md`.
 
 "A green TLC run without the mutation and the conformance steps is a sketch, not evidence."

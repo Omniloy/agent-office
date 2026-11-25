@@ -48,7 +48,7 @@ load with the Skill tool. Skills marked "Read" keep `disable-model-invocation`, 
 
 ## Your levers
 
-- `team-lanes create --repo OWNER/NAME --base main --slug KEY -n 1 --json`: your working checkout for a card, always (never `~/Omniloy/*`).
+- `team-lanes create --repo OWNER/NAME --base main --slug KEY-dev --role dev -n 1 --json`: your working checkout (your own slug, so verification lanes never collide with it) for a card, always (never `~/Omniloy/*`).
 - `team-evidence run KEY --kind self-check --claim N --tier Vn --cwd <lane> -- <command>`: every run you will cite.
 - `gh` for branches, PRs and reviews (never `gh pr merge`).
 - `smells diff origin/main..HEAD --repo <lane>`: check your own diff for the gardener's smells before review.

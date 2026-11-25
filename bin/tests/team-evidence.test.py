@@ -100,6 +100,21 @@ class T4(unittest.TestCase):
         open(f"{REPO}/a.txt", "w").write("3\n"); sh("git", "commit", "-qam", "more"); new2 = sh("git", "rev-parse", "HEAD").stdout.strip()
         te("run", k, "--kind", "self-check", "--claim", "1", "--tier", "V0", "--", "true")
         te("verdict", k, "VERIFIED", "--by", "lorena", "--head", new2); self.assertIn(2, rules(k))
+    def test_verified_needs_a_head(self):
+        k = card(); te("run", k, "--kind", "baseline", "--claim", "1", "--tier", "V1", "--", *NOVID)
+        te("run", k, "--kind", "treatment", "--claim", "1", "--tier", "V1", "--", *GOOD)
+        r = te("verdict", k, "VERIFIED", "--by", "lorena", "--note", "ok"); self.assertEqual(r.returncode, 1); self.assertIn("--head", r.stderr)
+        self.assertIn(2, rules(k))
+    def test_treatment_at_another_sha_fails(self):
+        k = card(); te("run", k, "--kind", "baseline", "--claim", "1", "--tier", "V1", "--", *NOVID)
+        te("run", k, "--kind", "treatment", "--claim", "1", "--tier", "V1", "--", *GOOD)
+        other = sh("git", "rev-parse", "main").stdout.strip(); self.assertNotEqual(other, HEAD)
+        te("verdict", k, "VERIFIED", "--by", "lorena", "--head", other); te("page", k, "--from", "lorena"); self.assertIn(2, rules(k))
+    def test_run_syncs_a_changed_claim_file(self):
+        k = card(); open(f"{TEAM}/evidence/{k}/claim.md", "a").write("| 2 | the badge shows | V1 | board.md |\n")
+        r = te("run", k, "--kind", "baseline", "--claim", "2", "--tier", "V1", "--", *NOVID); self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([c["id"] for c in json.loads(te("show", k, "--json").stdout)["claims"]], [1, 2])
+        self.assertFalse(any(p["rule"] == 1 for p in problems(k)[1]))
     def test_claims_validation(self):
         n[0] += 1; k = f"MSC-{n[0]}"; c = f"{T}/bad.md"; open(c, "w").write("| 1 | x | V9 | a.md |\n")
         te("init", k, "--repo", "Omniloy/x", "--author", "g"); shutil.copy(c, f"{TEAM}/evidence/{k}/claim.md")

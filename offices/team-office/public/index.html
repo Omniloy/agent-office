@@ -10,7 +10,7 @@
 <script>/* touch + phone mode: see js/phone.js */(function () { var q = new URLSearchParams(location.search), e = document.documentElement, t = navigator.maxTouchPoints > 0 && matchMedia('(pointer: coarse)').matches; if (q.has('embed')) return; if (t || q.has('phone')) e.classList.add('touch'); if ((t && Math.min(screen.width, screen.height) <= 600) || q.has('phone')) e.classList.add('phone'); })();</script>
 <title>Omniloy HQ</title>
 <link rel="icon" href="data:,">
-<script>window.__TOKEN__ = '%%OFFICE_TOKEN%%';</script>
+<script>window.__TOKEN__ = '%%OFFICE_TOKEN%%'; window.__FLOORS__ = %%OFFICE_FLOORS%%;</script>
 <script type="importmap">
 { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
 </script>

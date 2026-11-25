@@ -32,7 +32,7 @@ export default class TeamDrafts extends View {
       try {
         if (!this.peopleAt || Date.now() - this.peopleAt > 60000) {
           const people = {};
-          for (const f of [".omniloy-biz", ".omniloy-team"]) {
+          for (const f of [".omniloy-biz", ".omniloy-team", ".omniloy-misc"]) {
             try { for (const p of JSON.parse(await readTextFile(`${home()}/${f}/team.json`)).personas ?? []) people[p.herdrName] = p; } catch {}
           }
           this.people = people; this.peopleAt = Date.now();

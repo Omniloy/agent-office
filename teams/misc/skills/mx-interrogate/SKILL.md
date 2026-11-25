@@ -9,7 +9,7 @@ upstream: pstack/skills/interrogate@9e278fe4
 ## In our stack (read first; this section wins over the upstream text below)
 
 - Pool: Claude helpers (`mx-worker`, effort high) in `team-lanes` lanes plus **one Codex read-only seat**
-  (`codex exec -s read-only -C <lane> "<brief>"`, stdout added with `team-evidence add`). The uncommitted change is
+  (`codex exec -s read-only --skip-git-repo-check -C <lane> "<brief>" < /dev/null`, stdout added with `team-evidence add`). The uncommitted change is
   copied into each lane (`git diff | git -C <lane> apply`).
 - A finding survives only with the command, its output and the output the intent requires, run through
   `team-evidence run`. It reports, never fixes.

@@ -140,7 +140,13 @@ def c_run(a):
     if a.ref:
         want = git(cwd, "rev-parse", a.ref)
         if not want or want != sha: die(f"--ref {a.ref} is not the checked-out commit in {cwd} (HEAD {sha}); check it out first: git -C {cwd} checkout --detach {a.ref}")
+    if os.path.exists(f"{card_dir(a.key)}/claim.md"):
+        claims, errs = parse_claims(a.key)
+        if errs: die(f"claim.md does not parse ({'; '.join(errs)}); fix it, then `team-evidence claims {a.key} --sync`. No run is recorded against stale claims.")
+    else: claims = None
     with Manifest(a.key, write=True) as m:
+        if claims is not None and claims != m["claims"]:
+            m["claims"] = claims; print(f"note: claim.md changed; synced the manifest's claims before this run", file=sys.stderr)
         n = 1 + max([int(r["id"][1:]) for r in m["runs"]] or [0]); rid = f"r{n}"
         if m["claims"] and a.claim not in [c["id"] for c in m["claims"]]: die(f"claim {a.claim} is not in claim.md ({[c['id'] for c in m['claims']]}); `team-evidence claims {a.key} --sync`")
         m["runs"].append({"id": rid, "kind": a.kind, "claim": a.claim, "tier": a.tier, "status": "running", "started": now()})
@@ -193,10 +199,15 @@ def c_verdict(a):
         u, pv = p.rsplit("=", 1)
         if pv not in ("PASS", "PASS+NOTES", "FAIL"): die(f"--pr {p}: verdict must be PASS, PASS+NOTES or FAIL")
         prs.append({"url": u, "verdict": pv})
+    head = a.head
+    if v == "VERIFIED" and not head and prs and shutil.which("gh"):
+        r = subprocess.run(["gh", "pr", "view", prs[0]["url"], "--json", "headRefOid", "-q", ".headRefOid"], capture_output=True, text=True)
+        head = r.stdout.strip() if r.returncode == 0 else None
+    if v == "VERIFIED" and not head: die("VERIFIED needs --head <PR head sha> (or a --pr URL=... that `gh pr view` can read): the gate ties the treatment run to the PR head")
     with Manifest(a.key, write=True) as m:
         if a.by == m["author"]: print(f"warning: {a.by} wrote the code; their verdict is a self-check and `team-evidence check` will refuse it", file=sys.stderr)
         m.update({"verdict": v, "verifier": a.by, "note": a.note or "", "verdictAt": now()})
-        if a.head: m["head"] = a.head
+        if head: m["head"] = head
         if prs: m["prs"] = prs
         mm = dict(m)
     open(f"{card_dir(a.key)}/verdict.md", "w").write(comment_text(mm) + "\n")
@@ -233,10 +244,11 @@ def check(m):
     runs = [r for r in m["runs"] if r.get("status") == "done"]
     counted = [r for r in runs if r["kind"] != "self-check"]
     head = m.get("head")
-    tr_all = [r for r in counted if r["kind"] == "treatment" and r["exit"] == 0]
-    if not head and tr_all: head = tr_all[-1]["sha"]
-    head_pid = next((r.get("patchId") for r in runs if r.get("sha") == head and r.get("patchId")), None)
-    def at_head(r): return r.get("sha") == head or (head_pid and r.get("patchId") == head_pid and head_pid != "empty")
+    if not head and not m.get("noBehavior"):
+        miss(2, None, "no PR head recorded, so no treatment run can be tied to it", f"team-evidence verdict {key} <VERDICT> --by <you> --head <PR head sha> --note \"...\"")
+    def same(sha): return bool(head and sha and (sha == head or (len(head) >= 7 and sha.startswith(head))))
+    head_pid = next((r.get("patchId") for r in runs if same(r.get("sha")) and r.get("patchId")), None)
+    def at_head(r): return same(r.get("sha")) or (head_pid and r.get("patchId") == head_pid and head_pid != "empty")
     if m.get("noBehavior"):
         if not any(r["exit"] == 0 and r["tier"] == "V0" for r in counted): miss(12, None, "no-behavior card without a passing V0 run", f"team-evidence run {key} --kind treatment --claim 1 --tier V0 -- <tsc/lint/test>")
     else:

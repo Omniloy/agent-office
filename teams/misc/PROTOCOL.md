@@ -55,7 +55,7 @@ exactly one of you, the one who has to act next.
 ## Runtimes and model roles
 
 All four people run on Claude Code (`runtime` in team.json; Opus 5.5, with Claude in Chrome). **Codex is a seat,
-never a person**: a read-only judge, reviewer and adversary (`codex exec -s read-only -C <dir> "<brief>"`), and one
+never a person**: a read-only judge, reviewer and adversary (`codex exec -s read-only --skip-git-repo-check -C <dir> "<brief>" < /dev/null`), and one
 arena candidate in `-s workspace-write` limited to its own lane. Its output stays in the card's evidence folder
 (`team-evidence add`), because Codex has no check on team names: never paste it outside the office.
 
@@ -94,7 +94,7 @@ this folder: `~/.omniloy-misc/.claude/skills/mx-*`, helpers in `~/.omniloy-misc/
 - **One kit per repo:** a control CLI (`control-<app>.mjs`), a `verify-<app>` skill, a Feature Map (one file per
   user-facing feature, four sections), and formal checks where they pay. Built with `mx-create-verification-skill`,
   kept true daily with `mx-maintain-verification-skill`.
-- **Lorena owns every kit and is on call for it.** "A generated skill that was never executed is a draft." Author
+- **Lorena owns every kit and is on call for it.** "A generated skill that was never executed is a draft, not a deliverable." Author
   and verifier are separate for the kit too: Álvaro reviews Lorena's kit and CLI PRs, and a fresh helper runs the
   cold-start test.
 - **The kit card.** When __OWNER__ adds a repo to `projects[0].repos`, Inés creates `Verification kit for <repo>`

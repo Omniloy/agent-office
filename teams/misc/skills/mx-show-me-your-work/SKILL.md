@@ -12,7 +12,7 @@ upstream: pstack/skills/show-me-your-work@9e278fe4
   `~/.omniloy-misc/.claude/skills/mx-show-me-your-work/scripts/log.sh <log> <phase> <decision> <why> <evidence> <result>` (it neutralizes
   cells that start with `=`, `+`, `-` or `@`).
 - At the end: audit the log against your transcript (`~/.claude-personal/projects/<slug>/*.jsonl`), then
-  `codex exec -s read-only -C ~/.omniloy-misc/evidence/<KEY> "Review decisions.tsv: which decision lacks evidence?"`,
+  `codex exec -s read-only --skip-git-repo-check -C ~/.omniloy-misc/evidence/<KEY> "Review decisions.tsv: which decision lacks evidence?" < /dev/null`,
   stdout added with `team-evidence add`. The evidence page shows the log.
 - Local by default. Never commit the log into a product repo.
 

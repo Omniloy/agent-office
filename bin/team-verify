@@ -61,6 +61,17 @@ def checkout_for(repo, given=None):
     c = given or (reg()["repos"].get(repo) or {}).get("checkout") or f"{TD}/work/{repo.split('/')[-1]}"
     return os.path.expanduser(c)
 
+def refresh_clone(path):
+    """A kit registered from <team>/work/<repo> follows origin: fetch, then fast-forward the clone's branch when it has
+    no local changes. Lanes (detached) and other checkouts are left alone."""
+    path = os.path.realpath(os.path.expanduser(path)); work = os.path.realpath(f"{TD}/work")
+    if not path.startswith(work + os.sep) or path.startswith(os.path.join(work, "lanes") + os.sep): return
+    rel = os.path.relpath(path, work).split(os.sep)[0]; clone = os.path.join(work, rel)
+    if not os.path.isdir(f"{clone}/.git"): return
+    run(["git", "fetch", "-q", "origin"], cwd=clone, timeout=120)
+    c, st, _ = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=clone, timeout=60)
+    if c == 0 and not st.strip(): run(["git", "merge", "--ff-only", "-q", "@{u}"], cwd=clone, timeout=60)
+
 # ---------------------------------------------------------------- kits
 def front(path):
     s = open(path, encoding="utf-8").read()
@@ -99,6 +110,7 @@ def validate(kit):
         if not re.search(r"^## Driving it with ", body, re.M): errs.append(f"{n}: section `## Driving it with control-<app>` is missing")
     return app, errs
 def c_add(a):
+    if not a.dry_run: refresh_clone(a.kit)
     app, errs = validate(a.kit)
     if a.formal and not os.path.isdir(os.path.expanduser(a.formal)): errs.append(f"--formal {a.formal} is not a folder")
     if errs:
@@ -121,7 +133,7 @@ def c_add(a):
         if not os.path.exists(fl): os.symlink(os.path.abspath(os.path.expanduser(a.formal)), fl)
     print(f"registered {a.repo} (verify-{app}); Read it at {kit}/SKILL.md")
 def c_doctor(a):
-    d = reg(); e = entry(a.repo, d); app, errs = validate(e["kit"]); steps = [("kit files", not errs, "; ".join(errs) or "ok")]
+    d = reg(); e = entry(a.repo, d); refresh_clone(e["kit"]); app, errs = validate(e["kit"]); steps = [("kit files", not errs, "; ".join(errs) or "ok")]
     if not errs:
         c, o, s = run(["node", "--test", f"control-{app}.test.mjs"], cwd=e["kit"], timeout=900)
         steps.append(("node --test control-%s.test.mjs" % app, c == 0, (o + s).strip().splitlines()[-1] if (o + s).strip() else f"exit {c}"))

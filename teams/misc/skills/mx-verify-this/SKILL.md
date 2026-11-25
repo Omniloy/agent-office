@@ -11,23 +11,24 @@ upstream: cursor-team-kit/skills/verify-this@41e40093
 Owner: Lorena. Never on code you wrote. Input: `evidence/<KEY>/claim.md` from **mx-verify-plan**, the PR(s), and
 the repo's kit (`team-verify status`).
 
-1. `team-lanes create --repo OWNER/NAME --base <PR head sha> --slug <KEY> -n 1 --json`; `team-verify doctor <repo>`
+1. `team-lanes create --repo OWNER/NAME --base <PR head sha> --slug <KEY>-verify --role verify -n 1 --json`; `team-verify doctor <repo>`
    (a stale build is not evidence: doctor first).
 2. For each claim, run its treatment command through the kit CLI:
    `team-evidence run KEY --kind treatment --claim N --tier <tier> --cwd <lane> -- node <kit>/control-<app>.mjs ... --json`
    with video and trace on. Drive the real user path; check side effects (DOM, network, files, a reload round trip),
-   not pixels alone. "A mock counts only behind a production boundary."
+   not pixels alone. "Mocks only where a production boundary already isolates the external system."
 3. Tier steps: V2 a mutation run (`--kind mutation --expect-fail`), V3 Bombadil (**mx-bombadil**) plus replay of
    every regression trace, V4 mutation and conformance (**mx-create-formal-verification-skill**), V5 as that skill
    says. Long runs go to Lane B.
 4. Every path you cannot reach: `team-evidence skip KEY --claim N --path "..." --blocked-by "..." --closest "..."`.
-   "A gap is not a pass." "Inconclusive is not a pass."
-5. `team-evidence verdict KEY VERIFIED|NOT_VERIFIED|INCONCLUSIVE --by lorena [--pr URL=PASS|PASS+NOTES|FAIL ...] --note "..."`.
+   "A gap does not count as a pass." "Inconclusive is not a pass."
+5. `team-evidence verdict KEY VERIFIED|NOT_VERIFIED|INCONCLUSIVE --by lorena --head <PR head sha> [--pr URL=PASS|PASS+NOTES|FAIL ...] --note "..."`
+   (`gh pr view <url> --json headRefOid`). VERIFIED is refused without a head, and the gate counts only treatment runs at that SHA or one with the same patch-id.
 6. Check every video's frames for secrets before publishing, then `team-evidence page KEY --from lorena`,
    `team-evidence check KEY`, `team-board comment KEY "$(team-evidence comment KEY)"`, `team-evidence attach KEY`.
 7. `VERIFIED` → `team-card approval KEY --as lorena "<PR links bottom-up> + evidence page"`. `NOT VERIFIED` → a
    linked Bug card with the failing run, passed to Gonzalo. `INCONCLUSIVE` → the reason and the next check on the card.
-8. `team-lanes remove --slug KEY` (evidence survives).
+8. `team-lanes remove --slug KEY-verify` (only your lane; evidence survives).
 
 The artifact layout below becomes `~/.omniloy-misc/evidence/<KEY>/` as `team-evidence` makes it. Also apply
 mx-principles `prove-it-works`.

@@ -51,20 +51,20 @@ When the model rule is missing and it matters, ask whether the user wants to pic
 ### Get set up
 
 1. Install with `/add-plugin pstack` in chat, or from Customize in the sidebar.
-2. Run [`/setup-pstack`](../setup-pstack/SKILL.md). It asks for a reasoning budget, maps a model to each role, and writes a rule. The rule applies to new chats. Then it offers once each to generate a verification skill and a formal verification skill for the project, unless the project already has one.
+2. Run [`/setup-pstack`](https://github.com/cursor/plugins/blob/main/pstack/skills/setup-pstack/SKILL.md) (Skipped in our stack: setup-pstack. Left out of mstack (docs/mstack.md); `setup/install.py` installs the floor). It asks for a reasoning budget, maps a model to each role, and writes a rule. The rule applies to new chats. Then it offers once each to generate a verification skill and a formal verification skill for the project, unless the project already has one.
 3. Start a real task with `/mx-mode`, a goal, and a check that can pass or fail.
 
-Installing changes nothing until the user invokes a skill. Only `/setup-pstack` loads from the user's words. The [README](../../README.md) and [guide page 1](../../docs/guide/01-setup.md) have the details. Offer to word their first prompt with them, per [`references/prompting.md`](references/prompting.md).
+Installing changes nothing until the user invokes a skill. Only `/setup-pstack` loads from the user's words. The [README](https://github.com/cursor/plugins/blob/main/pstack/README.md) and [guide page 1](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/01-setup.md) have the details. Offer to word their first prompt with them, per [`references/prompting.md`](references/prompting.md).
 
 If cost is the worry, say where the tokens go and how to spend fewer. pstack spends extra tokens on subagents and review panels. Rerun `/setup-pstack` and pick a smaller budget or cheaper models. A role set to `auto` or `inherit-parent` runs on the chat's model, which saves tokens when the chat runs on Auto or a cheaper model. A shorter panel list runs fewer subagents, one for each entry. Save `/mx-mode` for work that needs rigor.
 
-pstack is built for Cursor, and it also installs in Claude Code with `/plugin marketplace add cursor/plugins`, then `/plugin install pstack@cursor-plugins`. There, each command takes a `pstack:` prefix, such as `/pstack:mx-mode`. The [Claude Code adapter](../../docs/harness/claude-code.md) maps the Cursor names, and a step that needs a Cursor-only feature, such as Bugbot or Automations, is skipped with a one-line note.
+pstack is built for Cursor, and it also installs in Claude Code with `/plugin marketplace add cursor/plugins`, then `/plugin install pstack@cursor-plugins`. There, each command takes a `pstack:` prefix, such as `/pstack:poteto-mode`. The [Claude Code adapter](https://github.com/cursor/plugins/blob/main/pstack/docs/harness/claude-code.md) maps the Cursor names, and a step that needs a Cursor-only feature, such as Bugbot or Automations, is skipped with a one-line note.
 
 Other tools can read the skills, because they use the Agent Skills format. But most workflow skills, including `/mx-mode`, `mx-how`, and `mx-teach`, spawn Cursor subagents, some with per-role models, and Custom Modes and `/loop` are Cursor features, so those parts may not work there.
 
 ### Start a task with `/mx-mode`
 
-`/mx-mode` matches the task to a playbook, copies the playbook's steps into the todo list, and runs the other skills as the steps need them. A good prompt states the goal and how to tell it's done. It doesn't list skills, because a hand-written sequence tends to drop or reorder steps the playbook would keep. Read [`references/prompting.md`](references/prompting.md) before you help word one. [Guide page 2](../../docs/guide/02-mx-mode.md) has examples.
+`/mx-mode` matches the task to a playbook, copies the playbook's steps into the todo list, and runs the other skills as the steps need them. A good prompt states the goal and how to tell it's done. It doesn't list skills, because a hand-written sequence tends to drop or reorder steps the playbook would keep. Read [`references/prompting.md`](references/prompting.md) before you help word one. [Guide page 2](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/02-poteto-mode.md) has examples.
 
 Whether `/mx-mode` stays on depends on how the user starts it:
 
@@ -81,39 +81,39 @@ The default answer is `/mx-mode`, which runs most of the others when its steps n
 | The user wants to | Skill |
 |---|---|
 | Do any non-trivial task with rigor | [`/mx-mode`](../mx-mode/SKILL.md) |
-| Check that the agent understood their goal and the problem before it starts | [`mx-in-your-own-words`](../in-your-own-words/SKILL.md) |
-| Get a prompt rewritten deeper, not bigger, before sending it: what a top professional would add, their raw material and methods, and an outside check. It returns the prompt and doesn't do the task | [`mx-sharpen`](../sharpen/SKILL.md) |
-| Learn the expert words for what they're building, including words borrowed from neighboring fields, with every cited source checked, and get their description rewritten with them | [`mx-reframe`](../reframe/SKILL.md) |
-| Know how code works now, or where new code should live | [`mx-how`](../how/SKILL.md) |
-| Know why code is shaped this way, or where a number came from | [`mx-why`](../why/SKILL.md) |
-| Understand a change or subsystem, explained plainly | [`mx-teach`](../teach/SKILL.md) |
-| Catch up on their own recent work on a topic | [`mx-recall`](../recall/SKILL.md) |
-| Catch up on what changed in this chat since their last message, in plain words and small visuals, with every item waiting on them listed and decidable from the reply alone | [`mx-ketchup`](../ketchup/SKILL.md) |
-| Catch up like `mx-ketchup`, in a short subtitled video of slides, with the waiting calls as text under it | [`mx-ketchup-video`](../ketchup-video/SKILL.md) |
-| Know what a small diff could break outside itself | [`mx-blast-radius`](../blast-radius/SKILL.md) |
-| Settle types and module shape before code that crosses a function boundary | [`mx-architect`](../architect/SKILL.md) |
-| Get several attempts at one brief, merged into the best one | [`mx-arena`](../arena/SKILL.md) |
-| Run parallel checks over slices, or race workers, as cloud agents | [`mx-swarm`](../swarm/SKILL.md) |
-| Have different models review a diff and try to break it | [`mx-interrogate`](../interrogate/SKILL.md) |
-| Fix a bug test-first when a cheap local test exists | [`mx-tdd`](../tdd/SKILL.md) |
-| Apply TypeScript rules to `.ts` or `.tsx` work | [`mx-typescript-best-practices`](../typescript-best-practices/SKILL.md) |
-| Strip comments before review, using a reviewer that didn't write them | [`mx-no-comments`](../no-comments/SKILL.md) |
-| Clean AI tells out of prose | [`mx-unslop`](../unslop/SKILL.md) |
-| Write docs, an RFC, a README, a PR description, or a commit message to a standard | [`mx-technical-writing`](../technical-writing/SKILL.md) |
-| Hear the last reply again in plain words | [`mx-bro`](../bro/SKILL.md) |
-| Give agents a scripted way to drive the app and prove behavior | [`mx-create-verification-skill`](../create-verification-skill/SKILL.md) |
-| Bring a verification skill and its feature map back in line with the app | [`mx-maintain-verification-skill`](../maintain-verification-skill/SKILL.md) |
-| Formally verify a race, invariant, or other property that tests rarely reach | [`mx-create-formal-verification-skill`](../create-formal-verification-skill/SKILL.md) |
-| Bring a formal verification back in line after the code it covers changed, and learn whether a failure is drift or a bug | [`mx-maintain-formal-verification-skill`](../maintain-formal-verification-skill/SKILL.md) |
-| Show a PM or designer what the user sees as a chart checked by a TLA+ model, with the shortest path to each state that breaks a rule | [`mx-statechart`](../statechart/SKILL.md) |
-| Vet a performance number before reporting or acting on it | [`mx-benchmark-checklist`](../benchmark-checklist/SKILL.md) |
-| Run a large or cross-cutting change, or one to review after stepping away | [`mx-figure-it-out`](../figure-it-out/SKILL.md) |
-| Keep a decision log during a run, and review it afterward | [`mx-show-me-your-work`](../show-me-your-work/SKILL.md) |
-| Pick a model for each role and a reasoning budget | [`/setup-pstack`](../setup-pstack/SKILL.md) |
-| Turn their own working habits into a personal mode skill | [`/automate-me`](../automate-me/SKILL.md) |
-| Turn what a finished task taught into skill edits | [`mx-reflect`](../reflect/SKILL.md) |
-| Stop agents from repeating the same mistakes in this repo | [`mx-correct`](../correct/SKILL.md) |
-| Build a page whose buttons wake a Grok Bot over a webhook | [`/make-bot-ui`](../make-bot-ui/SKILL.md) |
+| Check that the agent understood their goal and the problem before it starts | [`mx-in-your-own-words`](../mx-in-your-own-words/SKILL.md) |
+| Get a prompt rewritten deeper, not bigger, before sending it: what a top professional would add, their raw material and methods, and an outside check. It returns the prompt and doesn't do the task | [`mx-sharpen`](../mx-sharpen/SKILL.md) |
+| Learn the expert words for what they're building, including words borrowed from neighboring fields, with every cited source checked, and get their description rewritten with them | [`mx-reframe`](../mx-reframe/SKILL.md) |
+| Know how code works now, or where new code should live | [`mx-how`](../mx-how/SKILL.md) |
+| Know why code is shaped this way, or where a number came from | [`mx-why`](../mx-why/SKILL.md) |
+| Understand a change or subsystem, explained plainly | [`mx-teach`](../mx-teach/SKILL.md) |
+| Catch up on their own recent work on a topic | [`mx-recall`](../mx-recall/SKILL.md) |
+| Catch up on what changed in this chat since their last message, in plain words and small visuals, with every item waiting on them listed and decidable from the reply alone | [`mx-ketchup`](../mx-ketchup/SKILL.md) |
+| Catch up like `mx-ketchup`, in a short subtitled video of slides, with the waiting calls as text under it | [`mx-ketchup-video`](../mx-ketchup-video/SKILL.md) |
+| Know what a small diff could break outside itself | [`mx-blast-radius`](../mx-blast-radius/SKILL.md) |
+| Settle types and module shape before code that crosses a function boundary | [`mx-architect`](../mx-architect/SKILL.md) |
+| Get several attempts at one brief, merged into the best one | [`mx-arena`](../mx-arena/SKILL.md) |
+| Run parallel checks over slices, or race workers, as cloud agents | [`mx-swarm`](../mx-swarm/SKILL.md) |
+| Have different models review a diff and try to break it | [`mx-interrogate`](../mx-interrogate/SKILL.md) |
+| Fix a bug test-first when a cheap local test exists | [`mx-tdd`](../mx-tdd/SKILL.md) |
+| Apply TypeScript rules to `.ts` or `.tsx` work | [`mx-typescript-best-practices`](../mx-typescript-best-practices/SKILL.md) |
+| Strip comments before review, using a reviewer that didn't write them | [`mx-no-comments`](../mx-no-comments/SKILL.md) |
+| Clean AI tells out of prose | [`mx-unslop`](../mx-unslop/SKILL.md) |
+| Write docs, an RFC, a README, a PR description, or a commit message to a standard | [`mx-technical-writing`](../mx-technical-writing/SKILL.md) |
+| Hear the last reply again in plain words | [`mx-bro`](../mx-bro/SKILL.md) |
+| Give agents a scripted way to drive the app and prove behavior | [`mx-create-verification-skill`](../mx-create-verification-skill/SKILL.md) |
+| Bring a verification skill and its feature map back in line with the app | [`mx-maintain-verification-skill`](../mx-maintain-verification-skill/SKILL.md) |
+| Formally verify a race, invariant, or other property that tests rarely reach | [`mx-create-formal-verification-skill`](../mx-create-formal-verification-skill/SKILL.md) |
+| Bring a formal verification back in line after the code it covers changed, and learn whether a failure is drift or a bug | [`mx-maintain-formal-verification-skill`](../mx-maintain-formal-verification-skill/SKILL.md) |
+| Show a PM or designer what the user sees as a chart checked by a TLA+ model, with the shortest path to each state that breaks a rule | [`mx-statechart`](../mx-statechart/SKILL.md) |
+| Vet a performance number before reporting or acting on it | [`mx-benchmark-checklist`](../mx-benchmark-checklist/SKILL.md) |
+| Run a large or cross-cutting change, or one to review after stepping away | [`mx-figure-it-out`](../mx-figure-it-out/SKILL.md) |
+| Keep a decision log during a run, and review it afterward | [`mx-show-me-your-work`](../mx-show-me-your-work/SKILL.md) |
+| Pick a model for each role and a reasoning budget | Skipped in our stack: `/setup-pstack`. Left out of mstack (docs/mstack.md); model roles live in PROTOCOL.md. |
+| Turn their own working habits into a personal mode skill | Skipped in our stack: `/automate-me`. Left out of mstack (docs/mstack.md). |
+| Turn what a finished task taught into skill edits | [`mx-reflect`](../mx-reflect/SKILL.md) |
+| Stop agents from repeating the same mistakes in this repo | [`mx-correct`](../mx-correct/SKILL.md) |
+| Build a page whose buttons wake a bot over a webhook | Skipped in our stack: `/make-bot-ui`. Left out of mstack (docs/mstack.md). |
 | Find their way around pstack | `/mx-help` |
 
 If a skill directory next to this one is missing from the table, read its frontmatter and route by its description. The `principle-*` directories are covered under principles below.
@@ -128,7 +128,7 @@ Close calls:
 
 Not in pstack:
 
-- `mx-deslop`, `mx-control-cli`, and `mx-control-ui` ship in the `cursor-team-kit` plugin.
+- `/deslop`, `control-cli`, and `control-ui` ship in the `cursor-team-kit` plugin. (Ours: `mx-deslop`, `mx-control-cli` and `mx-control-ui`, adapted from those.)
 - `/loop` and `/create-skill` are Cursor built-ins.
 - pstack has no `/orchestrate` skill. If the slash menu shows `/orchestrate`, another plugin provides it.
 
@@ -143,11 +143,11 @@ Playbooks are step lists inside `/mx-mode`, not skills, so they have no slash co
 - "full autopilot on this queue" runs Autopilot-full. "autopilot, don't merge" runs Autopilot-stack.
 - "run the eval playbook" runs Eval.
 
-Without `/mx-mode`, a phrase such as "babysit this pr" can start Cursor's own skill for the same job instead. The Playbooks section of [`mx-mode`](../mx-mode/SKILL.md) lists every playbook. [Guide page 6](../../docs/guide/06-verify-and-ship.md) covers opening, babysitting, and landing a PR.
+Without `/mx-mode`, a phrase such as "babysit this pr" can start Cursor's own skill for the same job instead. The Playbooks section of [`mx-mode`](../mx-mode/SKILL.md) lists every playbook. [Guide page 6](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/06-verify-and-ship.md) covers opening, babysitting, and landing a PR.
 
 pstack has no planning skill. Cursor's Plan Mode works alongside it. For work that spans phases or stacked PRs, asking `/mx-mode` for a plan runs the [Multi-phase plan playbook](../mx-mode/playbooks/multi-phase-plan.md), which writes the plan and doesn't implement it. For a design question, the Prototype playbook or `mx-architect` settles it in code first.
 
-Principles are one-rule skills that `/mx-mode` reads and cites in its replies. The user rarely invokes one. They steer with the names instead, as in "apply prove it works. show me the real output." Typing `/principle-<name>` still loads one on demand. [Guide page 8](../../docs/guide/08-principles.md) lists them.
+Principles are one-rule skills that `/mx-mode` reads and cites in its replies. The user rarely invokes one. They steer with the names instead, as in "apply prove it works. show me the real output." Typing `/principle-<name>` still loads one on demand. [Guide page 8](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/08-principles.md) lists them.
 
 ### Fix a run that went wrong
 
@@ -159,19 +159,19 @@ Principles are one-rule skills that `/mx-mode` reads and cites in its replies. T
 | Runs cost more than expected | See the cost paragraph under Get set up. |
 | A skill didn't load on its own | Only `/setup-pstack` loads from the user's words. The others load when the user types them or when `/mx-mode` runs them, and it doesn't run every skill. |
 | Parallel agents overwrote each other | Give each agent its own worktree, or run them as cloud agents, which each get their own machine. |
-| An overnight run moved but finished nothing | `/loop` needs a check that can pass or fail, not a duration. See [guide page 7](../../docs/guide/07-overnight.md). |
+| An overnight run moved but finished nothing | `/loop` needs a check that can pass or fail, not a duration. See [guide page 7](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/07-overnight.md). |
 | The reply claims success from a green build | Ask for the real command, flow, stored value, or profile. That's the prove-it-works principle. |
 
-For a run that drifts, [`references/prompting.md`](references/prompting.md) has one-line steers. [Guide page 10](../../docs/guide/10-recipes-and-pitfalls.md) has more pitfalls and the recipes worth copying.
+For a run that drifts, [`references/prompting.md`](references/prompting.md) has one-line steers. [Guide page 10](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/10-recipes-and-pitfalls.md) has more pitfalls and the recipes worth copying.
 
 ### Make pstack my own
 
-- [`/automate-me`](../automate-me/SKILL.md) drafts a personal mode skill from the user's own history, to use alongside `/mx-mode`.
-- [`mx-reflect`](../reflect/SKILL.md) after a session turns its lessons into skill edits the user approves.
+- Skipped in our stack: `/automate-me` (drafts a personal mode skill from the user's own history). Left out of mstack (docs/mstack.md).
+- [`mx-reflect`](../mx-reflect/SKILL.md) after a session turns its lessons into skill edits the user approves.
 - `/mx-mode write a skill for <workflow>` runs the authoring playbook. The eval playbook tests a skill change blind.
 - Fix a misbehaving skill in its own PR, not inside the feature work where it went wrong.
 
-[Guide page 9](../../docs/guide/09-make-it-yours.md) covers each of these.
+[Guide page 9](https://github.com/cursor/plugins/blob/main/pstack/docs/guide/09-make-it-yours.md) covers each of these.
 
 ### Reply
 

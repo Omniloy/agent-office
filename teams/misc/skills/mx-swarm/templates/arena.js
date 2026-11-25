@@ -15,5 +15,5 @@ const [high, xhigh] = await parallel(['high', 'xhigh'].map(e => () => agent(
   `Run your own checks through team-evidence run ${a.key} --kind self-check --cwd ${a.lanes[e]}.`,
   { label: `candidate opus ${e}`, schema: S, effort: e })))
 // The rubric stays hidden from candidates. Judging is cross-vendor: the coordinator runs
-// codex exec -s read-only -C <lane> "<rubric + both diffs>" itself, with the Codex candidate's lane included.
+// codex exec -s read-only --skip-git-repo-check -C <lane> "<rubric + both diffs>" itself, with the Codex candidate's lane included.
 return { candidates: { high, xhigh }, judgeWith: 'codex exec -s read-only (run by the coordinator)', rubric: a.rubric ? 'kept for the judge' : 'missing' }

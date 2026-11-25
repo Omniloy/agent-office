@@ -21,4 +21,4 @@ proves it; a generated kit changes the `CONFIG` block and adds intent verbs, and
   the driver cannot reach; reported, not faked).
 - **Errors say what to do instead** ("run cleanup first", "rebuild before driving").
 - **Tests:** at least one test per command, plus refusal tests (no checkout, double launch), plus "evidence survives
-  cleanup". "Keep it well maintained and tested."
+  cleanup". "Keep it well maintained and tested!"

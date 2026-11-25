@@ -15,11 +15,13 @@ Owner: Lorena. Trigger: the `verify-due` routine (probe `team-verify due --json`
 2. **Source wave** = the Workflow template `~/.omniloy-misc/.claude/skills/mx-swarm/templates/verify-sweep.js` (one read-only helper per
    feature file, effort low), or one message of `Explore` Agent calls when there are 5 files or fewer. Each returns
    "summary / source entry points / likely drift / one recipe".
-3. **Live pass:** you drive every feature through the kit CLI, serially, on one instance in a `team-lanes` lane at
-   main. Evidence: `team-evidence run KEY --kind self-check --claim N --tier Vn -- <command>` per feature (maintenance runs are not card verdicts).
+3. **Live pass:** drive every feature through the kit CLI, in a `team-lanes` lane at main, following the kit's
+   Launch section: one long-lived instance driven serially for servers and UIs, or a fresh isolated session per
+   drive for short-lived CLIs; doctor before the first drive, on each fresh session, and after any failed drive. Evidence: `team-evidence run KEY --kind self-check --claim N --tier Vn -- <command>` per feature (maintenance runs are not card verdicts).
 4. **Triage** each finding: doc drift → fix the map; harness gap → fix the CLI and drive it again; product
    regression → an MSC **Bug** card (`team-board create MSC Bug ...`) with the failing run, never papered over.
-5. Edits stay inside the kit folder. At most one PR (Álvaro reviews).
+5. Edits stay inside the kit folder. Where the upstream text says `features/`, read `references/features/` (our kit
+   layout), so map edits are in scope. At most one PR (Álvaro reviews).
 6. Outcome `clean` / `changed` / `blocked`, then `team-verify sync <repo> --sha <main sha> --outcome <outcome>`.
    A `blocked` or failing run reopens the repo's kit card (`team-board move <kitcard> Reopened`), and it outranks
    feature work.

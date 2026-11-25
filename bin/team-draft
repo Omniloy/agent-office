@@ -83,7 +83,7 @@ def team():
     except Exception: return {}
 def people():
     out = {}
-    for f in (D + "/team.json", os.path.expanduser("~/.omniloy-team/team.json")):
+    for f in (D + "/team.json", os.path.expanduser("~/.omniloy-team/team.json"), os.path.expanduser("~/.omniloy-misc/team.json")):
         try:
             for p in json.load(open(f)).get("personas", []): out[p["herdrName"]] = p
         except Exception: pass

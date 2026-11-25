@@ -48,3 +48,10 @@ test('ledger: a smell seen twice is a Rule card', () => {
 });
 test('a bad range is a usage error', () => { assert.equal(smells('diff', 'nope..alsonope', '--repo', REPO).code, 2); });
 test.after(() => fs.rmSync(T, { recursive: true, force: true }));
+test('a large --json result survives a slow pipe (no cut at 64 KiB)', () => {
+  const big = path.join(T, 'big'); fs.mkdirSync(big, { recursive: true });
+  for (let i = 0; i < 300; i++) fs.cpSync(path.join(FIX, 'dirty'), path.join(big, `copy${i}`), { recursive: true });
+  const out = execFileSync('bash', ['-c', `"${process.execPath}" "${CLI}" tree "${big}" --json | (sleep 1; cat)`], { encoding: 'utf8', maxBuffer: 64 << 20 });
+  assert.ok(out.length > 100 * 1024, `only ${out.length} bytes; the fixture must produce more than 100 KB`);
+  const j = JSON.parse(out); assert.equal(j.count, j.findings.length);
+});

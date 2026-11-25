@@ -8,7 +8,7 @@ upstream: pstack/skills/swarm@9e278fe4
 
 ## In our stack (read first; this section wins over the upstream text below)
 
-- **Lanes, not cloud agents.** `team-lanes create --repo OWNER/NAME --base <ref> --slug <KEY> -n N --json` gives each
+- **Lanes, not cloud agents.** `team-lanes create --repo OWNER/NAME --base <ref> --slug <KEY>-swarm --role swarm -n N --json` gives each
   worker its `path`, `port` and `profileDir`. N defaults to at most 4 (`verification.maxLanes`), never above 8.
   See `references/lanes.md` for Lanes A, B and C.
 - **Spawn.** N ≤ 5: one message of Agent calls, `subagent_type: "mx-worker"`, `run_in_background: true`,
@@ -18,7 +18,7 @@ upstream: pstack/skills/swarm@9e278fe4
 - **Each worker returns** the `mx-worker` JSON (`PASS` / `ISSUES` / `BLOCKED`, sha, method, findings, artifacts with
   its manifest path). A missing or malformed result is respawned once, then recorded as a gap
   (`team-evidence skip`).
-- **One table** at the end, as a card comment by you. Then `team-lanes remove --slug <KEY>`; evidence survives.
+- **One table** at the end, as a card comment by you. Then `team-lanes remove --slug <KEY>-swarm`; evidence survives.
 - Long CLI runs (Bombadil explorations, big TLC models, perf over 30 minutes) go to Lane B (Herdr terminals), not to
   model workers.
 

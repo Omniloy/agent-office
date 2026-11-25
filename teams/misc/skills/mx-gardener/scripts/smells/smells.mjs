@@ -24,6 +24,8 @@ Example: smells diff origin/main..HEAD --repo ~/.omniloy-misc/work/lanes/MSC-9-1
 
 function parse(argv) { const o = { _: [] }; for (let i = 0; i < argv.length; i++) { const a = argv[i]; if (a.startsWith('--')) { const k = a.slice(2); if (argv[i + 1] && !argv[i + 1].startsWith('--')) o[k] = argv[++i]; else o[k] = true; } else o._.push(a); } return o; }
 const die = (m, c = 2) => { console.error(m); process.exit(c); };
+// exit only after stdout is flushed: on a pipe Node writes asynchronously, and process.exit drops what is buffered (64 KiB)
+const finish = (c) => process.stdout.write('', () => process.exit(c));
 const git = (repo, ...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8', maxBuffer: 64 << 20 });
 const teamDir = (o) => o.team || process.env.TEAM_DIR || path.join(os.homedir(), '.omniloy-misc');
 const readJson = (p, d) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return d; } };
@@ -75,7 +77,7 @@ function context(o, repo, range, lines, files) {
 function report(o, findings, extra = {}) {
   if (o.json) console.log(JSON.stringify({ findings, count: findings.length, ...extra }));
   else { for (const f of findings) console.log(`${f.smell}\t${f.file}:${f.line}\t${f.text}\n    instead: ${f.fix}`); console.log(`${findings.length} finding(s)`); }
-  process.exit(findings.length ? 1 : 0);
+  finish(findings.length ? 1 : 0);
 }
 function cmdDiff(o) {
   const range = o._[1]; if (!range || !range.includes('..')) die('usage: smells diff <base>..<head> [--repo DIR] (see --help)');
@@ -104,7 +106,7 @@ function cmdLedger(o) {
     const ts = new Date().toISOString().slice(0, 19);
     for (const r of rows) { if (!r.smell || !ALL.includes(r.smell)) die(`unknown smell ${r.smell}; ids: ${ALL.join(', ')}`);
       fs.appendFileSync(lp, [ts, r.repo, r.pr, r.smell, `${r.file || ''}:${r.line ?? 0}`, r.class || 'candidate', r.card].map(clean).join('\t') + '\n'); }
-    console.log(o.json ? JSON.stringify({ ok: true, added: rows.length, ledger: lp }) : `${rows.length} row(s) added to ${lp}`); process.exit(0);
+    console.log(o.json ? JSON.stringify({ ok: true, added: rows.length, ledger: lp }) : `${rows.length} row(s) added to ${lp}`); return finish(0);
   }
   if (sub === 'count') {
     if (!o.smell) die('usage: smells ledger count --smell ID [--repo R]');
@@ -113,16 +115,16 @@ function cmdLedger(o) {
     const distinct = new Set(hit.map((r) => `${r.pr || r.card}|${r.file_line}`)).size;
     const res = { smell: o.smell, repo: o.repo || null, count: distinct, ruleCard: distinct >= 2, cases: hit.slice(-5) };
     if (o.json) console.log(JSON.stringify(res)); else console.log(`${o.smell}${o.repo ? ' in ' + o.repo : ''}: seen ${distinct} time(s)${res.ruleCard ? ' -> open a Rule card' : ''}`);
-    process.exit(0);
+    return finish(0);
   }
   die('usage: smells ledger add|count (see --help)');
 }
 const o = parse(process.argv.slice(2));
-if (o.help || o._[0] === 'help') { console.log(HELP); process.exit(0); }
-switch (o._[0]) {
+if (o.help || o._[0] === 'help') { console.log(HELP); finish(0); }
+else switch (o._[0]) {
   case 'diff': cmdDiff(o); break;
   case 'tree': cmdTree(o); break;
   case 'ledger': cmdLedger(o); break;
   case 'list': console.log(ALL.join('\n')); break;
-  default: console.log(HELP); process.exit(2);
+  default: console.log(HELP); finish(2);
 }

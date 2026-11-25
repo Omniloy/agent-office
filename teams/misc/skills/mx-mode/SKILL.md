@@ -14,7 +14,7 @@ folder is `~/.omniloy-misc/.claude/skills/mx-mode/`. Every tool name below that 
 
 The Principles section below grounds every trigger. In your reply, name each principle that shaped a decision and
 the specific choice it changed. Cite only principles whose reference in `mx-principles/references/` you read this
-session. "A citation that changed no decision means the rule was not applied."
+session. "A principle citation with no decision behind it means the agent named the rule without applying it."
 
 Our house rules come first and no playbook overrides them:
 
@@ -120,7 +120,7 @@ role from the table in `adapter.md` (personas on `claude-opus-5-5`; helpers `mod
 code and verification, xhigh for perf work, medium for judgment and prose, low for readers). No role runs above
 xhigh. Fable only when __OWNER__ names it for the task.
 
-**Second opinion.** A second opinion is the same brief on another vendor: `codex exec -s read-only -C <dir> "<brief>"`,
+**Second opinion.** A second opinion is the same brief on another vendor: `codex exec -s read-only --skip-git-repo-check -C <dir> "<brief>" < /dev/null`,
 its stdout captured with `team-evidence add` into the card's evidence folder. Codex output is never pasted outside
 the office.
 

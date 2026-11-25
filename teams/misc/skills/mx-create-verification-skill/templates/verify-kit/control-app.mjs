@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // control-<<app>>: drive <<App name>> the way a user does, and leave evidence behind.
-// Generated from the mstack verify-kit template (mx-create-verification-skill). Contract: references/cli-contract.md.
+// Contract: every command takes --checkout and --json; evidence goes to $EVIDENCE_OUT or --out (see SKILL.md).
 // Run `node control-<<app>>.mjs --help`. Exit codes: 0 ok, 1 usage, 2 wrong target or instance, 3 assertion failed,
 // 4 timeout, 5 MANUAL (a path this driver cannot reach; reported, never faked).
 //
@@ -249,14 +249,14 @@ Selectors are Playwright selectors (role=button[name="Save"], text=Done, css). P
 --checkout; attaching without --checkout is refused. Selectors from another repo are never valid here.
 --json prints {ok, command, target, result, assertions: {run, failed}, evidence: [paths], warnings, ms}.
 Exit: 0 ok, 1 usage, 2 wrong target or instance, 3 assertion failed, 4 timeout, 5 MANUAL.
-Example: control-${CONFIG.app} launch --checkout ~/.omniloy-misc/work/lanes/MSC-3-1 --json`;
+Example: control-${CONFIG.app} launch --checkout <lane path> --json`;
 
 async function run(o) {
   const cmd = o._[0];
   if (o.help || cmd === 'help') return { code: EXIT.ok, text: HELP };
   if (!cmd) return { code: EXIT.usage, text: HELP };
   if (cmd === '__driver') { await driver(o); return null; }
-  if (cmd === 'manual') return { code: EXIT.manual, error: `MANUAL: ${o._.slice(1).join(' ') || 'this path'} cannot be driven by control-${CONFIG.app}; name the blocker and the closest real path (team-evidence skip)` };
+  if (cmd === 'manual') return { code: EXIT.manual, error: `MANUAL: ${o._.slice(1).join(' ') || 'this path'} cannot be driven by control-${CONFIG.app}; name the blocker and the closest real path (record it as a skip)` };
   o.checkout = o.checkout || process.env.VERIFY_CHECKOUT;
   if (!o.checkout) return { code: EXIT.target, error: 'refused: --checkout <dir> is required (attaching to an instance you did not start is not allowed)' };
   if (!fs.existsSync(o.checkout)) return { code: EXIT.usage, error: `no such checkout: ${o.checkout}` };
@@ -281,13 +281,15 @@ async function run(o) {
   return { result, evidence: evidence || [], assertions, warnings, code: assertions && assertions.failed ? EXIT.assert : EXIT.ok };
 }
 
+// exit only after stdout is flushed: on a pipe Node writes asynchronously, and process.exit drops what is buffered (64 KiB)
+const finish = (c) => process.stdout.write('', () => process.exit(c));
 const t0 = Date.now(); const o = parse(process.argv.slice(2));
 const r = await run(o);
-if (r) {
-  if (r.text) { console.log(r.text); process.exit(r.code); }
+if (r && r.text) { console.log(r.text); finish(r.code); }
+else if (r) {
   const shown = o.secret && o._[0] === 'type' ? [o._[0], o._[1], '***'] : o._;
   const body = { ok: !r.code, command: shown.join(' '), target: o.checkout || null, result: r.result ?? null, assertions: r.assertions || { run: 0, failed: 0 }, evidence: r.evidence || [], warnings: r.warnings || [], ms: Date.now() - t0, ...(r.error ? { error: r.error } : {}) };
   if (o.json) console.log(JSON.stringify(body));
   else { if (r.error) console.error(r.error); else console.log(JSON.stringify(body.result, null, 1)); if (body.assertions.run) console.log(`assertions: ${body.assertions.run - body.assertions.failed}/${body.assertions.run} passed`); }
-  process.exit(r.code || 0);
+  finish(r.code || 0);
 }

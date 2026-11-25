@@ -48,8 +48,8 @@ Load the external Benny configuration supplied by the automation. If the config 
 - If worker isolation cannot enforce those limits, do the work in the coordinator.
 - Never create an issue that cannot link back to the source thread.
 - Prefer no ticket over a guessed or duplicate ticket.
-- Apply pstack's `mx-principles/references/separate-before-serializing-shared-state.md` to source coordinates.
-- Apply pstack's `mx-principles/references/minimize-reader-load.md` and `mx-unslop` skills to the final verdict.
+- Apply `mx-principles/references/separate-before-serializing-shared-state.md` (pstack `principle-separate-before-serializing-shared-state`) to source coordinates.
+- Apply `mx-principles/references/minimize-reader-load.md` (pstack `principle-minimize-reader-load`) and `mx-unslop` skills to the final verdict.
 
 ### 1. Freeze source coordinates
 
@@ -92,7 +92,7 @@ Use evidence already in the thread before asking the reporter for more.
 
 ### 3. Trace cause before routing
 
-Do a bounded source and history pass before choosing an owner or destination. Trace the path from the reported action to the observed result. Use pstack's `mx-why` skill when the report looks like a regression or touches defensive code.
+Do a bounded source and history pass before choosing an owner or destination. Trace the path from the reported action to the observed result. Use `mx-why` skill (pstack `why`) when the report looks like a regression or touches defensive code.
 
 1. Identify the likely code path from the reported action to the observed result.
 2. Check whether the visible symptom belongs to that code path or a dependency below it.

@@ -1,6 +1,6 @@
 ---
 name: mx-create-formal-verification-skill
-description: "Miscelaneous floor: builds a repo's formal checks where a bug costs most and tests reach least: TLA+ for event ordering (V4), Lean for a small pure kernel (V5), generated-input tests otherwise; mutation and conformance required. Use for V4/V5 claims."
+description: "Miscelaneous floor: builds a repo's formal checks where a bug costs most and tests reach least, in her order: a model checker (TLA+, the default) for bad event orders (V4); a verifier that runs on the code (Kani, CBMC, Dafny, ESBMC or the language's own checker) for every-input properties; generated-input tests (mx-pbt) only when no verifier runs on that language; a proof (Lean, V5) when no bound is enough. Mutation of the real code and conformance required. Use for V4/V5 claims."
 upstream: pstack/skills/create-formal-verification-skill@9e278fe4
 ---
 
@@ -8,16 +8,29 @@ upstream: pstack/skills/create-formal-verification-skill@9e278fe4
 
 ## In our stack (read first; this section wins over the upstream text below)
 
-Owner: Lorena. "Let the question choose the tool."
+Owner: Lorena. "Let the question choose the tool." Keep her order:
 
+- Whether events can happen in a bad order: a model checker over a small model of the design. TLA+ is the default.
+- Whether the code itself behaves for every input (memory safety, overflow, a data-structure invariant): a verifier
+  that runs on the code, for example Kani or CBMC for Rust/C, Dafny, ESBMC, or the language's own checker. Installed
+  per repo when a card needs one; none is vendored here.
+- Only if no verifier runs on that language: say so on the card, and test the real code with generated inputs
+  (mx-pbt, V2), not a hand model of the function.
+- A property that must hold at every size, where no bound is enough: a proof (Lean, V5).
 - TLA+: one jar, `tla2tools.jar` 1.7.4 at the path in team.json `verification.tools.tla2tools` (sha256 pinned),
   `JAVA=/usr/bin/java`. See `references/tla.md`.
 - Lean 4 only when Inés wrote V5 on the card (`references/lean.md`): `lake build` exit 0, an empty grep for
   `sorry|admit|axiom`, the theorem statement in plain words approved by __OWNER__ through one `team-ask request`,
   and a V2 differential test tying the model to the real code.
-- **Our rule: a green TLC run without the mutation and the conformance steps is a sketch, not evidence.** Show the
-  model failing on a broken variant (`team-evidence run KEY --kind mutation --claim N --tier V4 -- <command>` with `--expect-fail`), and
-  replay real event logs against it (`--kind conformance`, `references/conformance.md`).
+- **Our rule: a green TLC run without the mutation and the conformance steps is a sketch, not evidence.**
+  (a) Mutate the code: make a scratch change in the real code the action names (remove the guard, reorder the
+  step). Rerun the generated verify skill, its conformance replay included, and record it with
+  `team-evidence run KEY --kind mutation --claim N --tier V4 --expect-fail --cwd <scratch copy> -- <command>`. It must
+  fail. Then drop the change and show the check is back where it started. Step (a) is the one that turns a sketch
+  into evidence (her "Able to fail" and "Prove it before you hand off").
+  (b) Optionally also mutate the model (delete the guard conjunct) as a vacuity check; that alone shows only that the
+  invariant is not vacuous, not that the check catches a regression in the code.
+  Replay real event logs against the model (`--kind conformance`, `references/conformance.md`).
 - Output: `<repo>/.claude/skills/verify-<app>-formal/`, registered with `team-verify add <repo> --kit <kit> --formal <dir>`.
 - Draw the model with **mx-statechart** for Inés.
 
@@ -53,7 +66,7 @@ Pick the tool that answers the question at the lowest cost: a model checker, a p
 
 Write a project-local skill with frontmatter that names the area and says when to use it. Without frontmatter, the skill never registers. From the skill alone, the next agent must be able to tell whether a change touches the verified code, run the check, tell a real bug from a modeling error, and update the verification when a change is intended. Put the coverage record and the sync commit in the skill, and tell the next agent to move the sync commit forward only after it confirms that the verification describes the code at the new commit. Use this repo's real commands, paths, and nouns, and leave no placeholders.
 
-If the check is a TLA+ model, tell the next agent to read every result with the pstack [`mx-statechart`](../statechart/SKILL.md) skill. It shows each invariant violation the checker finds as its shortest path in plain words. When the check passes, `mx-statechart` draws a chart of how the system moves between states. Refer to `mx-statechart` by name. Its commands, options, and file paths change between releases and machines, so copy none of them into the generated skill or its scripts.
+If the check is a TLA+ model, tell the next agent to read every result with the [`mx-statechart`](../mx-statechart/SKILL.md) skill (pstack `statechart`). It shows each invariant violation the checker finds as its shortest path in plain words. When the check passes, `mx-statechart` draws a chart of how the system moves between states. Refer to `mx-statechart` by name. Its commands, options, and file paths change between releases and machines, so copy none of them into the generated skill or its scripts.
 
 ### Prove it before you hand off
 

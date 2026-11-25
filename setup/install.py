@@ -70,7 +70,10 @@ class Run:
         try: data = self.render(raw.decode("utf-8")).encode("utf-8")
         except UnicodeDecodeError: data = raw
         if os.path.exists(dst):
-            if open(dst, "rb").read() == data: return False
+            if open(dst, "rb").read() == data:
+                want = mode if mode else os.stat(src).st_mode & 0o777
+                if not self.dry and os.stat(dst).st_mode & 0o777 != want: os.chmod(dst, want)
+                return False
             if keep_existing:
                 if not self.dry: open(dst + ".new", "wb").write(data)
                 self.warn.append(f"{dst} already exists and differs from the repo; yours was kept and the repo's version is next to it as {os.path.basename(dst)}.new")
@@ -79,7 +82,8 @@ class Run:
         if not self.dry:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             open(dst, "wb").write(data)
-            if mode: os.chmod(dst, mode)
+            # keep the executable bit of scripts the skills call by path (mode None means: as in the repo)
+            os.chmod(dst, mode if mode else os.stat(src).st_mode & 0o777)
         return True
     def tree(self, src, dst, skip=(), **kw):
         n = 0
@@ -121,13 +125,13 @@ class Run:
             if not os.path.exists(f"{d}/team.json"):
                 t = json.loads(self.render(open(f"{src}/team.json").read()))
                 t["owner"] = c["owner"]
-                if c.get("jira") and c["jira"].get("site"): t["jira"] = {"keychainService": "herdr-jira", **c["jira"]}
+                if kind != "misc" and c.get("jira") and c["jira"].get("site"): t["jira"] = {"keychainService": "herdr-jira", **c["jira"]}
                 if kind == "dev" and c.get("projects"): t["projects"] = c["projects"]
                 if kind == "biz": t["gmailAccount"] = c.get("gmailAccount") or ""
                 if kind == "biz" and c.get("mailRound"): t["mailRound"] = c["mailRound"]
                 for p in t["personas"]:
                     want = (c.get("assign") or {}).get(p["herdrName"]) or ("claude" if "claude" in have else have[0])
-                    p["runtime"] = want if want in have or want in t.get("runtimes", {}) else have[0]
+                    p["runtime"] = want if want in have or (want == "claude-personal" and "claude" in have and want in t.get("runtimes", {})) else have[0]
                 if kind == "misc" and any(p["runtime"] == "codex" for p in t["personas"]):
                     self.warn.append("Miscelaneous floor: its people are written for Claude Code (skills, subagents, Claude in Chrome); Codex is only their second-vendor seat")
                 if not self.dry: json.dump(t, open(f"{d}/team.json", "w"), indent=2, ensure_ascii=False)
@@ -248,6 +252,9 @@ def check():
     for kind, d in OPTIONAL.items():
         if os.path.exists(f"{d}/team.json"):
             line(len(glob.glob(f"{d}/.claude/skills/mx-*/SKILL.md")) == 44, f"optional floor {d}: the 44 mstack skills")
+            for s in ("mx-statechart/scripts/statechart", "mx-show-me-your-work/scripts/log.sh", "mx-mode/scripts/watch-pr/watch-pr", "mx-mode/scripts/worktree-audit.sh"):
+                f = f"{d}/.claude/skills/{s}"
+                if os.path.exists(f): line(os.access(f, os.X_OK), f"executable {s}", "" if os.access(f, os.X_OK) else f"chmod +x {f} (or rerun setup/install.py)")
             for t in ("team-board", "team-evidence", "team-verify", "team-lanes", "team-routine"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
             opt(os.path.exists(f"{LA}/com.omniloy.team-routine.plist"), "Miscelaneous routines scheduled (only after the owner's go)")
             opt(os.access(f"{BIN}/bombadil", os.X_OK), "Bombadil (V3 evidence)", "setup/verify-tools.sh")

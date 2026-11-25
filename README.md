@@ -154,7 +154,8 @@ calls with the sign-in the Google Workspace connector already holds (it needs th
 The Miscelaneous floor's way of working, **mstack**, is our version of **pstack by Lauren Tan (@poteto)**: verification
 is all you need, per-repo verification skills with Feature Maps as materialized memory, "Build the Lever" (give agents
 CLIs, not markdown), stop-the-line loops, routines that reproduce user reports, the gardener and the bot-maker are her
-ideas. We moved, renamed and rewrote her skills for Claude Code, Codex, Herdr, the Workflow tool and this office, and
+ideas. We moved, renamed and adapted her skills, and her Claude Code adapter, to Codex, Herdr, the Workflow tool and this
+office, and
 added an evidence ladder and an evidence gate. Where her text is kept, it is hers; where it changed, the mistakes are ours.
 
 - Her talk, "All Code Is Slop (Except Mine)": https://www.youtube.com/watch?v=O_zcc6Xl12g

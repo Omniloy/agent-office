@@ -8,6 +8,10 @@ licenses require. The credit for the ideas is in [docs/mstack.md](docs/mstack.md
 Source: https://github.com/cursor/plugins/tree/main/pstack (pstack 0.15.48). Byte-for-byte copy of its license:
 [ports/pstack/LICENSE](ports/pstack/LICENSE).
 
+pstack ships its own Claude Code adapter (`pstack/docs/harness/claude-code.md`; generated tree
+`harness/pstack/claude-code`, same MIT license). `mx-mode/adapter.md` starts from it; rows marked (ours) differ on
+purpose.
+
 Derived files in `teams/misc/`: mx-mode (with worker.md and the 22 playbooks), mx-help, mx-figure-it-out, mx-create-verification-skill, mx-maintain-verification-skill, mx-triage-issue-reports, mx-reproduce-and-fix-issues, mx-swarm, mx-interrogate, mx-show-me-your-work, mx-tdd, mx-create-formal-verification-skill, mx-maintain-formal-verification-skill, mx-statechart, mx-correct, mx-reflect, mx-architect, mx-arena, mx-blast-radius, mx-benchmark-checklist, mx-how, mx-why, mx-teach, mx-recall, mx-in-your-own-words, mx-sharpen, mx-reframe, mx-bro, mx-unslop, mx-technical-writing, mx-ketchup, mx-ketchup-video, mx-no-comments, mx-typescript-best-practices, mx-principles (her 24 principle-* skills), and the subagents mx-worker and mx-comment-sicko. Vendored as-is: mx-statechart/scripts/**, mx-mode/scripts/watch-pr/**, mx-mode/scripts/worktree-audit.sh, mx-show-me-your-work/scripts/log.sh (each folder carries LICENSE-pstack).
 
 ```
@@ -77,5 +81,6 @@ SOFTWARE.
 
 Bombadil (MIT, Antithesis), the TLA+ tools `tla2tools.jar` (MIT), Playwright (Apache-2.0), fast-check (MIT),
 Hypothesis (MPL-2.0) and Lean 4 (Apache-2.0) are downloaded by `setup/verify-tools.sh` or per repo; none is in this
-repo. The statechart compiler's dependency `commander` (MIT) is installed on demand by its bootstrap, and
+repo. Code-level verifiers (for example Kani, CBMC, Dafny or ESBMC) are installed per repo when a card needs one;
+none is vendored or downloaded by `setup/verify-tools.sh`. The statechart compiler's dependency `commander` (MIT) is installed on demand by its bootstrap, and
 `pele@1.9.0` is fetched at render time.

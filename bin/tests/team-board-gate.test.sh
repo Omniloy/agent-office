@@ -31,7 +31,7 @@ team-evidence init "$K" --repo Omniloy/x --author gonzalo --claims "$T/claim.md"
 team-evidence run "$K" --kind baseline --claim 1 --tier V1 --cwd "$R" -- python3 -c 'print("{\"assertions\":{\"run\":1,\"failed\":1}}")' >/dev/null 2>&1
 team-board move "$K" Done >/dev/null 2>&1; expect 3 $? "still refused with only a baseline"
 team-evidence run "$K" --kind treatment --claim 1 --tier V1 --cwd "$R" -- python3 -c 'import os,json;open(os.environ["EVIDENCE_OUT"]+"/v.mp4","w").write("x");print(json.dumps({"assertions":{"run":2,"failed":0}}))' >/dev/null 2>&1
-team-evidence verdict "$K" VERIFIED --by lorena --no-label >/dev/null
+team-evidence verdict "$K" VERIFIED --by lorena --head "$(git -C "$R" rev-parse HEAD)" --no-label >/dev/null
 team-evidence page "$K" --from lorena >/dev/null
 team-board move "$K" Done >/dev/null 2>"$T/err"; expect 0 $? "move $K Done passes once the evidence is complete ($(head -c 200 "$T/err"))"
 K2=$(team-board create MSC Bug "Other" "x")
@@ -65,4 +65,9 @@ print(json.dumps(d,sort_keys=True))" "$1"; }
   if diff -q "$T/old.out" "$T/new.out" >/dev/null && [ "$(norm "$T/olb-old/board/board.json")" = "$(norm "$T/olb-new/board/board.json")" ]; then ok "OlivIA copy, flag absent: same output and same board as the old team-board"
   else no "OlivIA copy, flag absent: differs"; diff "$T/old.out" "$T/new.out" | head -20; fi
 else echo "skip OlivIA comparison (no ~/.omniloy-olivia board or no old team-board at $OLD)"; fi
+# ---- two local boards on one machine (OlivIA and Miscelaneous): a cwd outside both works only with TEAM_DIR
+FH="$T/home"; for n in olivia misc; do mkdir -p "$FH/.omniloy-$n"; P=$(echo "$n" | tr a-z A-Z | cut -c1-3); echo "{\"name\":\"$n\",\"localBoard\":{\"prefix\":\"$P\",\"name\":\"$n\"}}" > "$FH/.omniloy-$n/team.json"; done
+(cd /tmp && env -u TEAM_DIR HOME="$FH" "$BIN/team-board" info >/dev/null 2>&1); [ $? != 0 ] && ok "two boards, no TEAM_DIR, cwd /tmp: refused (the case omniloy-team now prevents)" || no "two boards without TEAM_DIR were not refused"
+(cd /tmp && HOME="$FH" TEAM_DIR="$FH/.omniloy-misc" "$BIN/team-board" info 2>&1 | grep -q MIS) && ok "two boards, TEAM_DIR set, cwd /tmp: the right board" || no "TEAM_DIR did not pick the board"
+grep -q '"env",f"TEAM_DIR={TEAM}"' "$BIN/omniloy-team" && ok "omniloy-team exports TEAM_DIR to every person it starts" || no "omniloy-team does not set TEAM_DIR"
 echo "$pass passed, $fail failed"; [ "$fail" = 0 ]

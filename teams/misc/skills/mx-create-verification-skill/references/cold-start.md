@@ -13,4 +13,4 @@ it with nothing else.
    ```
 
 2. Any step the worker had to guess, skip or fix is a kit bug: fix the kit, then rerun with a new fresh worker.
-3. Record the PASS run id in the kit card's comment. "A generated skill that was never executed is a draft."
+3. Record the PASS run id in the kit card's comment. "A generated skill that was never executed is a draft, not a deliverable."

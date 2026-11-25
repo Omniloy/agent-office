@@ -8,7 +8,7 @@ upstream: cursor-team-kit/skills/control-cli@41e40093
 
 ## In our stack (read first; this section wins over the upstream text below)
 
-- tmux is not installed here. Use Herdr: `hc run --bg --keep --no-parent --name misc-run-<key>-<n> --cwd <lane> -- <cmd>`,
+- tmux is not installed here. Use Herdr: `hc run --bg --keep --no-parent --name misc-run-<key>-<n> --cwd <lane> -- env TEAM_DIR=$HOME/.omniloy-misc <cmd>`,
   `hc send <name> "text"`, `hc read <name>`, `hc kill <name>` when done. Or the Python PTY recipe below, run through
   `team-evidence run KEY --kind <kind> --claim N --tier V1 -- <command>` with the transcript written to `$EVIDENCE_OUT`.
 - Same probe rule as mx-control-ui: `team-verify probe-used <repo> --card KEY` after a probe verdict.

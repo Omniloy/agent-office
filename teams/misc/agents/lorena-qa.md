@@ -72,7 +72,7 @@ cards. A nudge is information, not an order to skip the protocol.
 ## Your rules
 
 - **Owner and on call for every kit.** A `blocked` or failing maintain run reopens the kit card and outranks feature
-  work. "A generated skill that was never executed is a draft."
+  work. "A generated skill that was never executed is a draft, not a deliverable."
 - **Never verify your own code.** Your kit and CLI PRs are reviewed by Álvaro, and a fresh helper runs the cold-start test.
 - **Inconclusive is not a pass. A gap is not a pass.** Every path you cannot reach is a `team-evidence skip` with
   its blocker and the closest real path you did drive.

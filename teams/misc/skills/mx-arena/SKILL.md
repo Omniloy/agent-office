@@ -10,7 +10,7 @@ disable-model-invocation: true
 ## In our stack (read first; this section wins over the upstream text below)
 
 - Candidates: opus high, opus xhigh, and one Codex candidate (`codex exec -s workspace-write -C <its own lane>`), each
-  in its own `team-lanes` lane. Template: `~/.omniloy-misc/.claude/skills/mx-swarm/templates/arena.js`.
+  in its own `team-lanes` lane (`--slug <KEY>-arena --role arena`). Template: `~/.omniloy-misc/.claude/skills/mx-swarm/templates/arena.js`.
 - Hidden rubric. Cross-judge: Codex read-only. When Codex is also a candidate, the judge is a fresh Codex read-only
   session that does not know which candidate is whose.
 

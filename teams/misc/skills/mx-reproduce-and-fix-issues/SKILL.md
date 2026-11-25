@@ -22,10 +22,19 @@ Two people, two halves. Only the coordinator of each half writes to the card.
 **Objection window.** 45 minutes from `CONFIRMED:`. Inés or __OWNER__ may comment `REJECT:`. The `fix-ready` probe
 (`team-verify fixes-ready`) only lists cards whose window closed with no `REJECT:`.
 
-**Fix half (Gonzalo, budget 90 min, nudged by `fix-ready`).** In a `team-lanes` lane, branch `<KEY>-short-slug`: the
-failing repro test lands first (its own commit), then the smallest fix you can prove. Open the PR as a **draft**
-(`gh pr create --draft`), run your self-check twice (`team-evidence run KEY --kind self-check --claim N --tier Vn -- <command>`), then `gh pr ready`.
-`team-card pass KEY lorena`.
+**Fix half (Gonzalo, budget 90 min, nudged by `fix-ready`).** In a `team-lanes` lane, branch `<KEY>-short-slug`,
+in this order (her sections 11 to 14):
+1. Qualify (her section 11): write the gate on the card as one comment: root cause confirmed by runtime evidence, the
+   change fits the fix budget and repo scope, no fix artifact or claimant appeared, the kit runs baseline and patched
+   builds. Any condition fails: keep the repro report and stop, no PR.
+2. The failing repro test lands first, as its own commit.
+3. The smallest fix you can prove (no unrelated cleanup; stop if it outgrows the budget).
+4. After proof on the patched build: `team-evidence run KEY --kind self-check --claim N --tier V1 -- <the same kit command as the repro>`
+   **twice**, showing the symptom absent and the expected state in its place, and cross-check the same state value
+   the baseline used. A compile, unit test or plausible diff is not after evidence.
+5. Focused tests, then a blast-radius smoke (**mx-blast-radius**) around the changed behavior. No regression left,
+   else no PR.
+6. Only then `gh pr create --draft`, then `gh pr ready`. `team-card pass KEY lorena`.
 
 **Verify mode** (a PR or commit already claims the fix): the symptom twice on main, then twice absent on the PR head,
 both through `team-evidence run` (`--kind repro` on main, `--kind treatment` on the head). Never author over it.
@@ -60,8 +69,8 @@ Load the external Benny configuration supplied by the automation. If the config,
 - Existing pull requests or commits switch the run to verify mode. Do not author over them.
 - Use `github.com` pull request links.
 - Keep captures, recordings, logs, and tokens out of source control.
-- Use pstack's `mx-principles/references/guard-the-context-window.md` for delegated analysis.
-- Apply pstack's `mx-principles/references/sequence-verifiable-units.md`, `mx-principles/references/fix-root-causes.md`, and `mx-principles/references/prove-it-works.md` through repro, fix, and verification.
+- Use `mx-principles/references/guard-the-context-window.md` (pstack `principle-guard-the-context-window`) for delegated analysis.
+- Apply `mx-principles/references/sequence-verifiable-units.md` (pstack `principle-sequence-verifiable-units`), `mx-principles/references/fix-root-causes.md`, and `mx-principles/references/prove-it-works.md` through repro, fix, and verification.
 
 ### 1. Freeze source coordinates
 
@@ -190,7 +199,7 @@ Collect:
 
 Inspect screenshots and video. Use read-only parallel workers for code history, test ideas, blast-radius mapping, and media review when useful. Each worker gets a narrow question and the Slack-write prohibition.
 
-Trace the action through the repository. Use pstack's `mx-why` skill for regression history and defensive code. Form competing cause hypotheses and identify evidence that would separate them.
+Trace the action through the repository. Use `mx-why` skill (pstack `why`) for regression history and defensive code. Form competing cause hypotheses and identify evidence that would separate them.
 
 ### 7. Reproduce
 
@@ -291,7 +300,7 @@ Confirm the mechanism with runtime evidence. Eliminate competing hypotheses befo
 
 Fix the root cause with the smallest justified change.
 
-- Invoke pstack's `mx-tdd` skill when there is a cheap local test target, and write the failing test before the fix.
+- Invoke `mx-tdd` skill (pstack `tdd`) when there is a cheap local test target, and write the failing test before the fix.
 - State why TDD was skipped when the path is expensive, unclear, or integration-heavy.
 - Keep unrelated cleanup out.
 - Stop if the change grows beyond the configured effort or risk budget.
@@ -324,7 +333,7 @@ Only after before-and-after proof:
 - Link the configured tracker issue using the tracker's supported pull request syntax.
 - Use the configured public URL form, normally `https://github.com/{owner}/{repo}/pull/{number}`.
 - Include the repro steps, root cause, test result, before and after evidence, and blast-radius checks.
-- Run the pull request text and all Slack updates through pstack's `mx-unslop` skill.
+- Run the pull request text and all Slack updates through `mx-unslop` skill (pstack `unslop`).
 
 If pull request creation fails, do not claim success. Keep the commit or branch state in the run output and mark operations status `Fix did not land`.
 

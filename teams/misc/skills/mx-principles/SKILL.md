@@ -11,7 +11,7 @@ name ("apply prove-it-works") keeps working.
 
 Rules:
 - Read `references/<name>.md` in full in this session before you cite it.
-- Cite a principle only with the decision it changed. "A citation that changed no decision means the rule was not applied."
+- Cite a principle only with the decision it changed. "A principle citation with no decision behind it means the agent named the rule without applying it."
 - `never-block-on-the-human` is read together with the irreversible list in `~/.omniloy-misc/.claude/skills/mx-mode/adapter.md`:
   reversible work proceeds; the irreversible list is always one request to __OWNER__.
 

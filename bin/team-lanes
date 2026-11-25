@@ -3,17 +3,21 @@
 A lane is a detached git worktree under <team>/work/lanes/, with its own port and browser profile, derived from its
 path (the same formula the kit control CLIs use). Agent checkouts never live in ~/Omniloy (those are the owner's).
 
-  team-lanes create --repo OWNER/NAME --base REF --slug KEY -n N [--source URL|PATH] [--force-n] [--json] [--dry-run]
-        clone into <team>/work/<name> if missing (gh repo clone, or git clone --source), fetch, then
-        git worktree add --detach <team>/work/lanes/<KEY>-1..N at REF. Prints {ok, lanes: [{path, base, sha, port, profileDir}]}
+  team-lanes create --repo OWNER/NAME --base REF --slug SLUG -n N [--role ROLE] [--source URL|PATH] [--force-n] [--json] [--dry-run]
+        clone into <team>/work/<name> if missing (gh repo clone, or git clone --source), fetch, fast-forward the clone's
+        own branch, then git worktree add --detach <team>/work/lanes/<SLUG>-1..N at origin/REF (REF itself only for a
+        SHA or tag). Prints {ok, lanes: [{path, base, sha, port, profileDir}]}
+        One slug per role, so roles never share lanes: <KEY>-dev, <KEY>-verify, <KEY>-swarm, <KEY>-arena.
   team-lanes list [--json]
-  team-lanes remove --slug KEY [--dry-run]     removes only lanes it created (work/lanes/lanes.json); evidence is never touched
+  team-lanes remove --slug SLUG [--force] [--dry-run]
+        removes only lanes it created with exactly that slug (work/lanes/lanes.json); refuses a lane with uncommitted
+        changes unless --force; evidence is never touched
 
 Limits (team.json "verification"): N defaults to 1 and may go up to maxLanes (4) alone; above that it needs --force-n
 and never passes laneCap (8) lanes alive at once. Refused when free disk is under diskAlarmGiB (20).
 Port = 41000 + crc32(path) mod 2000. Profile = work/lanes/.profiles/<KEY>-<i>.
 Exit codes: 0 ok, 1 usage or refused, 2 git or clone failed. The team is TEAM_DIR, else ~/.omniloy-misc.
-Example: team-lanes create --repo Omniloy/agent-office --base main --slug MSC-4 -n 2 --json"""
+Example: team-lanes create --repo Omniloy/agent-office --base main --slug MSC-4-verify --role verify -n 2 --json"""
 import sys, os, json, re, subprocess, argparse, zlib, fcntl, shutil, datetime
 
 HOME = os.path.expanduser("~")
@@ -65,8 +69,12 @@ def c_create(a):
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode: die(f"clone failed ({' '.join(cmd[:3])}): {r.stderr.strip()[:300]}", 2)
     git("fetch", "-q", "origin", cwd=clone)
+    # keep the clone's own branch (usually main) at origin, so work/<repo> is not stale; never over local changes
+    c, st, _ = git("status", "--porcelain", "--untracked-files=no", cwd=clone)
+    if c == 0 and not st: git("merge", "--ff-only", "-q", "@{u}", cwd=clone)
     sha = None
-    for ref in (a.base, f"origin/{a.base}"):
+    # origin/<base> first: a local branch in the clone is never moved and may be the commit of the first clone
+    for ref in (f"origin/{a.base}", a.base):
         c, o, _ = git("rev-parse", "--verify", "-q", f"{ref}^{{commit}}", cwd=clone)
         if c == 0: sha = o; break
     if not sha: die(f"base {a.base} not found in {clone} (fetched origin); push it, or give a SHA", 2)
@@ -78,7 +86,7 @@ def c_create(a):
             die(f"git worktree add failed for {p}: {e}", 2)
         prof = f"{LD}/.profiles/{os.path.basename(p)}"; os.makedirs(prof, exist_ok=True)
         made.append(p)
-    lanes = [{"path": p, "slug": a.slug, "repo": a.repo, "clone": clone, "base": a.base, "sha": sha, "port": port(p), "profileDir": f"{LD}/.profiles/{os.path.basename(p)}",
+    lanes = [{"path": p, "slug": a.slug, "role": a.role, "repo": a.repo, "clone": clone, "base": a.base, "sha": sha, "port": port(p), "profileDir": f"{LD}/.profiles/{os.path.basename(p)}",
               "created": datetime.datetime.now().isoformat(timespec="seconds")} for p in made]
     with Store(True) as d: d["lanes"].extend(lanes)
     out = {"ok": True, "lanes": [{k: l[k] for k in ("path", "base", "sha", "port", "profileDir")} for l in lanes]}
@@ -94,6 +102,9 @@ def c_remove(a):
         if not mine: die(f"no lanes made by team-lanes for {a.slug} (team-lanes list); nothing else is ever removed")
         for l in mine:
             if not under(l["path"], LD): die(f"refused: {l['path']} is outside {LD}")
+            if not a.force and os.path.isdir(l["path"]):
+                c, st, _ = git("status", "--porcelain", cwd=l["path"])
+                if c == 0 and st: die(f"refused: {l['path']} has uncommitted changes (role {l.get('role') or 'unknown'}); commit or push them, or pass --force to throw them away")
             if a.dry_run: print("would remove", l["path"]); continue
             c, o, e = git("worktree", "remove", "--force", l["path"], cwd=l["clone"])
             if c and os.path.exists(l["path"]): die(f"git worktree remove failed for {l['path']}: {e}", 2)
@@ -107,9 +118,9 @@ def main():
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"): print(__doc__); sys.exit(0 if len(sys.argv) > 1 else 1)
     ap = argparse.ArgumentParser(prog="team-lanes"); sp = ap.add_subparsers(dest="c")
     p = sp.add_parser("create"); p.add_argument("--repo", required=True); p.add_argument("--base", required=True); p.add_argument("--slug", required=True)
-    p.add_argument("-n", type=int, default=1); p.add_argument("--source"); p.add_argument("--force-n", action="store_true"); p.add_argument("--json", action="store_true"); p.add_argument("--dry-run", action="store_true")
+    p.add_argument("-n", type=int, default=1); p.add_argument("--role"); p.add_argument("--source"); p.add_argument("--force-n", action="store_true"); p.add_argument("--json", action="store_true"); p.add_argument("--dry-run", action="store_true")
     p = sp.add_parser("list"); p.add_argument("--json", action="store_true")
-    p = sp.add_parser("remove"); p.add_argument("--slug", required=True); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("remove"); p.add_argument("--slug", required=True); p.add_argument("--force", action="store_true"); p.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
     {"create": c_create, "list": c_list, "remove": c_remove}[a.c](a)
 

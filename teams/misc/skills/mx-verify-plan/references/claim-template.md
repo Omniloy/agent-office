@@ -1,6 +1,6 @@
 # claim.md template
 
-`team-evidence claims KEY` parses this file. Keep the table shape: one row per claim, the id a number, the tier one of
+`team-evidence claims KEY --sync` parses this file into the manifest. Keep the table shape: one row per claim, the id a number, the tier one of
 V0 to V5 (several joined with `+`), the feature files comma-separated.
 
 ```

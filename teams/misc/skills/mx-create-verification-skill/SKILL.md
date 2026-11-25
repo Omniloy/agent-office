@@ -10,18 +10,23 @@ upstream: pstack/skills/create-verification-skill@9e278fe4
 
 Owner: Lorena, on the repo's kit card (`Verification kit for <repo>`, a Task held by her).
 
-1. **Lane.** `team-lanes create --repo OWNER/NAME --base main --slug <KEY> -n 1 --json`. Work in that lane, never in
+1. **Lane.** `team-lanes create --repo OWNER/NAME --base main --slug <KEY>-kit --role kit -n 1 --json`. Work in that lane, never in
    `~/Omniloy/*` (read-only for agents).
 2. **Interview the repo** (upstream section 1).
 3. **Generate from our template**, not from scratch: copy `~/.omniloy-misc/.claude/skills/mx-create-verification-skill/templates/verify-kit/`
    into `<lane>/.claude/skills/verify-<app>/`, rename `control-app.mjs` to `control-<app>.mjs` (and its test), and
+   move the template's `features/` to `references/features/`, and
    fill every `<<...>>` from what the interview found. The CLI is **required** and follows
    `references/cli-contract.md` (commands, `--json` shape, exit codes 0/1/2/3/4/5, isolation, `$EVIDENCE_OUT`).
    The kit layout is in `references/kit-anatomy.md`.
+   The templates name no office tool, person or path (the kit lands in a product repo): you wrap every kit
+   command in `team-evidence run`, which sets `$EVIDENCE_OUT`.
 4. **Feature Map.** `references/features/README.md` plus 3 to 6 feature files with her four H2 sections exactly
    (`Sub-features`, `How to get to it (user POV)`, `Driving it with control-<app>`, `Gotchas`) and the front matter
    `cli`, `sources` (globs) and `last-verified` (see `references/feature-map-shape.md`). Add
    `multi-surface-journeys.md` when a journey crosses surfaces.
+   Where the upstream text says `features/`, read `references/features/` (our kit layout, the one `team-verify
+   doctor` checks).
 5. **Prove it** (upstream section 4) with evidence through the lever:
    `team-evidence init <KEY> --repo OWNER/NAME --author lorena --new-feature`, then
    `team-evidence run KEY --kind self-check --claim N --tier V1 -- <command>` for launch, doctor, one feature drive, capture and cleanup.

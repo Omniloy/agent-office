@@ -71,13 +71,17 @@ Start a new person with the team's launcher: `omniloy-<team> start <herdrName>`.
 4. Register the floor everywhere it is listed: `OFFICES` in `hub.mjs`; `FLOORS` in `public/js/floors.js`;
    `OFFICES` in `public/js/phone.js`; `PORTS` in `public/js/attention.js`; `TEAMS` in `~/.local/bin/team-person`;
    `FLOORS` in `~/.local/bin/office-restart`. Copy the shared files to both apps. Also add the team folder to the
-   `DIRS` lists in `team-card`, `team-temp`, `team-watch`, `team-ask`, `team-artifact` and the Herdr mods in `~/.config/herdr-app/mods/team-*`.
+   `DIRS` lists in `team-card`, `team-temp`, `team-watch`, `team-ask`, `team-artifact` and the Herdr mods in `~/.config/herdr-app/mods/team-*`:
+   the extra-teams loop in `team-board/main.js`, the people list in `team-drafts/main.js`, `people()` in
+   `~/.local/bin/team-draft`, and the `keyRe` folder list in `team-office/server.mjs` (a local board's prefix is read
+   from its `localBoard.prefix`).
 5. Start the server (`office-restart <port>` starts it when it is not running), open the phone door
    (`Tailscale serve --bg --https=<port> http://127.0.0.1:<port>`), restart the other floors so they know the new one.
 6. Start the people (`omniloy-<name> start`), and tell __OWNER__ the address.
 A good first improvement to propose to __OWNER__: move those lists into one shared file so a floor is one entry.
 
-The optional Miscelaneous floor (4322) is registered in all of those lists already, plus `LOOK` in `peers.mjs` and the
+The optional Miscelaneous floor (4322) is registered in all of those lists already (in the repo copies; a floor
+folder that does not exist is left out of the menus and of `office-restart`), plus `LOOK` in `peers.mjs` and the
 Herdr Requests panel. Its cards live on a local board (`team-board`, prefix `MSC`, with `localBoard.evidenceGate` on:
 `team-evidence check` must pass before a card moves to Validation or Done). Its skills (mstack, our version of Lauren
 Tan's pstack) are project skills of `~/.omniloy-misc/.claude/skills`, so no other floor sees them. Its routines run from

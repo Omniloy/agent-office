@@ -34,12 +34,14 @@ project skills of the team folder (`~/.omniloy-misc/.claude/skills/mx-*`), so ot
 
 ## What we kept and what we changed on purpose
 
+pstack ships its own Claude Code adapter ([pstack/docs/harness/claude-code.md](https://github.com/cursor/plugins/blob/main/pstack/docs/harness/claude-code.md); generated tree `harness/pstack/claude-code`, installable with `/plugin install pstack@cursor-plugins`, same MIT license). `mx-mode/adapter.md` starts from it; rows marked (ours) differ on purpose.
+
 | pstack | mstack | Why |
 |---|---|---|
-| Cloud agents, one VM each | `team-lanes` worktrees passed as `cwd` to Workflow or Agent helpers; Herdr terminals for long CLI runs | agent `isolation: "worktree"` fails from a team folder (not a git repo); cloud VMs take code off the Mac |
+| Cloud agents, one VM each | `team-lanes` worktrees passed as `cwd` to Workflow or Agent helpers; Herdr terminals for long CLI runs | her Claude Code adapter maps cloud to `isolation: "worktree"`, which fails from a team folder (not a git repo); cloud VMs take code off the Mac |
 | Cursor Automations and routines | `team-routine` plus launchd, nudging people with `hc send` | the office and the board are our control room |
 | Slack as the control room | the MSC card, `team-card`, evidence pages on :4340 | cards are the record |
-| Gemini or Grok cross-judge | Codex `exec -s read-only` | Codex is our other vendor |
+| a Gemini (or Fable/Opus) panel seat | Codex `exec -s read-only` | Codex is our other vendor |
 | Model roles in `~/.cursor/rules` | PROTOCOL.md and `mx-mode/adapter.md` | `~/.claude/rules` would load into every floor |
 | Screenshot or video as proof | the V0 to V5 ladder, a manifest, `team-evidence check`, the board gate | "show me" becomes something a reviewer reruns and a tool can refuse |
 | Shipping and autopilot merge bottom-up | stop at `team-card approval` with the contiguous verified run; the owner merges | release = merge = the owner's |
@@ -82,7 +84,7 @@ autopilot-full, autopilot-stack, multi-phase-plan, session-pickup, pause-safely,
 | V1 | anything a user sees, every repro | the kit's control CLI on Playwright or CDP, video and trace on | `.mp4`, `trace.zip`, screenshots, ARIA snapshot, console and network log, assertion counts |
 | V2 | logic with an invariant or an inverse | fast-check, Hypothesis | the property, seed, shrunk counterexample as a named test, a mutation run |
 | V3 | stateful UI flows, "it got stuck", Electron, TUIs | Bombadil 0.8.0 | `.trace`, violated property, `--reproduce` command, a mutation run |
-| V4 | coordination (two actors, retries, locks, handoffs) | TLA+ (TLC 1.7.4) + mx-statechart | `.tla`, `.cfg`, TLC output, mutation log, conformance log, chart |
+| V4 | coordination (two actors, retries, locks, handoffs) | TLA+ (TLC 1.7.4) + mx-statechart | `.tla`, `.cfg`, TLC output, mutation log (a scratch break in the real code, caught by the verify skill), conformance log, chart |
 | V5 | only when the lead writes V5 on the card | Lean 4 | `lake build` log, empty `sorry/admit/axiom` grep, the theorem statement approved by the owner |
 
 A green TLC run without the mutation and the conformance steps is a sketch, not evidence. A video alone does not

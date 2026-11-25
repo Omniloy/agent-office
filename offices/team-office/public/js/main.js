@@ -46,8 +46,9 @@ function rich(s) {
     .replace(/https?:\/\/[^\s<)\]]*[^\s<)\].,;:!?]/g, (url) => (refOf(url) ? link(url, refOf(url), ' class="key"') : link(url, short(url))));
   h = h.replace(/(^|[\s(¿¡])((?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|app|ai|es|eu|cloud)(?:\/[^\s<)\]]*[^\s<)\].,;:!?])?)(?=$|[\s),.;:!?])/gim, (_m, pre, dom) => pre + link(`https://${dom}`, dom)); // "portal.azure.com" written without https:// is a link too
   const keys = state && state.projects ? state.projects.map((p) => p.key).filter(Boolean) : [];
-  if (keys.length && state.jira && state.jira.site) {
-    h = h.replace(new RegExp(`\\b(?:${keys.join('|')})-\\d+\\b`, 'g'), (k) => link(`${state.jira.site}/browse/${k}`, k, ' class="key"'));
+  if (keys.length && state.jira) {
+    const local = state.projects.filter((p) => p.local).map((p) => p.key); // cards of the local board open here, not in Jira
+    h = h.replace(new RegExp(`\\b(?:${keys.join('|')})-\\d+\\b`, 'g'), (k) => (local.includes(k.split('-')[0]) || !state.jira.site ? hold(`<a class="key" href="#" data-card="${k}">${k}</a>`) : link(`${state.jira.site}/browse/${k}`, k, ' class="key"')));
   }
   h = h.replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
   return h.replace(/\u0000(\d+)\u0000/g, (_m, i) => held[i]);
@@ -235,7 +236,7 @@ function overview(a) {
     : s === 'talking' ? 'Talking with a teammate' : 'Idle, waiting for something to do';
   const list = (items, empty) => (items && items.length ? `<ul class="plain">${items.map((i) => `<li>${md(i)}</li>`).join('')}</ul>` : `<div class="muted">${empty}</div>`);
   const tickets = a.tickets.length
-    ? a.tickets.map((t) => `<a class="ticket" href="${esc(t.url)}" target="_blank" rel="noopener"><b>${esc(t.key)}</b><i>${esc(t.status)}</i><span>${esc(t.summary)}</span></a>`).join('')
+    ? a.tickets.map((t) => `<a class="ticket" ${t.url ? `href="${esc(t.url)}" target="_blank" rel="noopener"` : `href="#" data-card="${esc(t.key)}"`}><b>${esc(t.key)}</b><i>${esc(t.status)}</i><span>${esc(t.summary)}</span></a>`).join('')
     : `<div class="muted">${state.jira.error ? `Jira could not be read: ${esc(state.jira.error)}` : `No open cards carry <code>${esc(a.label)}</code>.`}</div>`;
   return `
     <div class="sec"><h3>Right now</h3><div class="now" style="--s:${COLOR[s]}">${now}${a.online ? `<small>${LABEL[s]} for ${since(a.statusSince)} · turn ${a.turn}</small>` : ''}</div></div>
@@ -401,14 +402,14 @@ async function openCard(key) {
   const openReqs = d.requests.filter((x) => x.status === 'open');
   const PR_ICON = { approved: '✓', changes: '✗', failing: '✗', review: '…', draft: '○' };
   const EV = { take: (x) => `${personName(x.by)} took it`, pass: (x) => `${personName(x.by)} → ${personName(x.to)}: ${x.msg || ''}`, wait: (x) => `Waiting: ${x.on || ''}`, approval: (x) => `Waiting for your approval: ${x.on || ''}`, resume: () => 'Active again', done: (x) => `Closed${x.by ? ` by ${personName(x.by)}` : ''}` };
-  cardsEl.innerHTML = `<header><div class="hd"><b class="key">${esc(key)}</b><i class="pill">${esc(j.status || '')}</i><span class="sp"></span><a href="${esc(d.url)}" target="_blank" rel="noopener">Jira ↗</a><button type="button" class="x" title="Close (Esc)">✕</button></div>
+  cardsEl.innerHTML = `<header><div class="hd"><b class="key">${esc(key)}</b><i class="pill">${esc(j.status || '')}</i><span class="sp"></span>${d.url ? `<a href="${esc(d.url)}" target="_blank" rel="noopener">Jira ↗</a>` : '<i class="pill">Local board</i>'}<button type="button" class="x" title="Close (Esc)">✕</button></div>
     <div class="title">${esc(j.title || (c && c.title) || '')}</div></header>
     <div class="body">
     <div class="tiles"><div><small>Who</small><b>${c ? esc(personName(c.owner)) : '—'}</b></div><div class="s-${state[0]}"><small>Now</small><b>${state[1]}</b></div><div><small>${c && c.waiting ? 'Waiting' : 'Held'}</small><b>${c ? agoOf(c.waiting ? c.waiting.since : c.since) : '—'}</b></div></div>
     ${line ? `<div class="line">${esc(line)}</div>` : ''}
     <div class="chips2">${openReqs.map((x) => `<span class="c warn" title="${esc(x.title)}">? #${x.id} → ${esc(personName(x.to))}</span>`).join('')}${d.prs.map((x) => `<a class="c ${['changes', 'failing'].includes(x.state) ? 'bad' : x.state === 'approved' ? 'ok' : ''}" href="${esc(x.url)}" target="_blank" rel="noopener" title="${esc(PR_TEXT[x.state] || x.state)}: ${esc(x.title)}">${PR_ICON[x.state] || ''} ${esc(x.repo)} #${x.number}</a>`).join('')}<span class="c" id="card-tok" title="Estimate from the turns that mention this card in the last 3 weeks (Claude teammates only). A turn about several cards is split between them. Cache reads not included.">tokens…</span></div>
     ${lastPass ? `<div class="pass"><small>${esc(personName(lastPass.by))} → ${esc(personName(lastPass.to))} · ${dayTime(lastPass.ts)}</small>${esc(lastPass.msg || '')}</div>` : ''}
-    ${j.error ? `<div class="dim">Jira: ${esc(j.error)}</div>` : ''}
+    ${j.error ? `<div class="dim">${d.local ? 'Local board' : 'Jira'}: ${esc(j.error)}</div>` : ''}
     ${d.log.length ? `<details><summary>History <small>${d.log.length}</small></summary>${[...d.log].reverse().slice(0, 20).map((x) => `<p><time>${dayTime(x.ts)}</time>${esc((EV[x.ev] || (() => x.ev))(x))}</p>`).join('')}</details>` : ''}
     ${j.comments && j.comments.length ? `<details><summary>Comments <small>${j.commentCount}</small></summary>${j.comments.map((x) => `<p><time>${dayTime(x.at)}</time>${esc(x.text)}</p>`).join('')}</details>` : ''}
     ${j.description ? `<details><summary>Description</summary><p>${esc(j.description)}</p></details>` : ''}
@@ -421,6 +422,7 @@ async function openCard(key) {
   } catch { const el = $('#card-tok'); if (el) el.textContent = 'tokens ?'; }
 }
 cardsEl.addEventListener('click', (e) => { if (e.target.closest('.x')) closeCard(); });
+document.addEventListener('click', (e) => { const el = e.target.closest('a[data-card]'); if (el) { e.preventDefault(); openCard(el.dataset.card); } }); // a card of the local board: open it on the wall board
 addEventListener('keydown', (e) => { if (e.key === 'Escape' && cardOpen) closeCard(); });
 
 function select(slug) {

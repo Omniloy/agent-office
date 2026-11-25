@@ -5,7 +5,7 @@
 - **List what else the number could be measuring** (errors, skipped or cached work, code that never ran, an untuned side, noise, a piece too small to matter) and rule out each one with evidence.
 - **Keep the run count, the spread, and the limiter with the number.**
 
-For a performance number, run the [benchmark-checklist](../benchmark-checklist/SKILL.md) skill. For an eval result, ask whether every run did the task, whether the gap holds across trials and models, and whether the scenario matters.
+For a performance number, run the [benchmark-checklist](../../mx-benchmark-checklist/SKILL.md) skill. For an eval result, ask whether every run did the task, whether the gap holds across trials and models, and whether the scenario matters.
 
 ---
 From pstack principle-explain-the-number by Lauren Tan (MIT), text unchanged apart from skill names.
