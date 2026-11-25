@@ -4,7 +4,8 @@ phones keep working. A floor that is not running is started. Tokens stay in memo
 Only the office's own listener on 127.0.0.1 is touched: Tailscale listens on the same ports and must not be killed."""
 import sys, os, re, subprocess, time, urllib.request, signal
 H = os.path.expanduser
-FLOORS = {'4317': ('Dev', H('~/.omniloy-office/team-office'), ''), '4318': ('Business', H('~/.omniloy-office/biz-office'), H('~/.omniloy-biz'))}
+FLOORS = {'4317': ('Dev', H('~/.omniloy-office/team-office'), ''), '4318': ('Business', H('~/.omniloy-office/biz-office'), H('~/.omniloy-biz')),
+          '4322': ('Miscelaneous', H('~/.omniloy-office/team-office'), H('~/.omniloy-misc'))}
 def get(port, path): return urllib.request.urlopen(f'http://127.0.0.1:{port}{path}', timeout=5).read().decode()
 def up(port):
     try: return '"ok":true' in get(port, '/health')

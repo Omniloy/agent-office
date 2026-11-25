@@ -1,0 +1,3 @@
+#!/bin/zsh
+# Miscelaneous floor: same launcher, other team folder.  omniloy-misc start|stop|ls|runtime
+OMNILOY_TEAM_DIR="$HOME/.omniloy-misc" exec "$HOME/.local/bin/omniloy-team" "$@"

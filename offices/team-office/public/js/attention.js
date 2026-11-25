@@ -11,7 +11,7 @@ function start() {
   const office = () => window.office || {};
   const PHONE = root.classList.contains('phone');
   const LABEL = { request: 'needs your answer', note: 'left you a message', draft: 'has a draft to check', stuck: 'is waiting for you' };
-  const PORTS = new Set(['4317', '4318']);
+  const PORTS = new Set(['4317', '4318', '4322']);
 
   const css = document.createElement('style');
   css.textContent = `

@@ -28,7 +28,7 @@ A page he must open: the full https:// address."""
 import sys, os, json, time, fcntl, subprocess, datetime, re
 TEAM = os.path.expanduser("~/.omniloy-team"); STORE = f"{TEAM}/requests.json"
 NAMES, LEAD = {}, {}   # every persona of every team, and each one's team lead
-for d in ("~/.omniloy-team", "~/.omniloy-biz"):
+for d in ("~/.omniloy-team", "~/.omniloy-biz", "~/.omniloy-misc"):
     try: tj = json.load(open(os.path.expanduser(d + "/team.json")))
     except Exception: continue
     try: tj["personas"] = tj["personas"] + json.load(open(os.path.expanduser(d + "/temps.json")))   # temps hired with team-temp

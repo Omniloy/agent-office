@@ -22,6 +22,7 @@ const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = pat
 const DEFAULT_OFFICES = [
   { name: 'Dev', port: 4317, dir: '.omniloy-team' },
   { name: 'Business', port: 4318, dir: '.omniloy-biz' },
+  { name: 'Miscelaneous', port: 4322, dir: '.omniloy-misc' },
 ];
 // A computer with other floors says so in ~/.omniloy-team/floors.json: [{ "name", "port", "dir" }]
 export const OFFICES = (() => { try { const l = JSON.parse(readFileSync(path.join(SHARED, 'floors.json'), 'utf8')); return Array.isArray(l) && l.length ? l : DEFAULT_OFFICES; } catch { return DEFAULT_OFFICES; } })();

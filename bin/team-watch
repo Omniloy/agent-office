@@ -18,7 +18,7 @@ paused (team names the watchdog leaves alone; switched from each 3D office: More
 State and events (the 3D offices draw a lightning bolt from these): ~/.omniloy-team/watch.json"""
 import json, os, sys, subprocess, time, datetime
 HOME = os.path.expanduser("~"); T = f"{HOME}/.omniloy-team"; STATE = f"{T}/watch.json"; HC = f"{HOME}/.local/bin/hc"
-DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz"]
+DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz", f"{HOME}/.omniloy-misc"]
 DEF = {"interval": 60, "idleAfter": 120, "repeatAfter": 1800, "maxPings": 2}
 def rj(p, d):
     try: return json.load(open(p))
