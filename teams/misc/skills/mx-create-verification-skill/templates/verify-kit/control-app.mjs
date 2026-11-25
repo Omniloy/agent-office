@@ -55,7 +55,8 @@ function playwright() {
   return null;
 }
 function ident(checkout) {
-  const h = crc32(path.resolve(checkout));
+  let real = path.resolve(checkout); try { real = fs.realpathSync(real); } catch {}
+  const h = crc32(real); // the same formula as team-lanes: 41000 + crc32(realpath) mod 2000
   const port = Number(process.env.VERIFY_PORT || 41000 + (h % 2000));
   const dir = path.join(os.tmpdir(), `verify-${CONFIG.app}-${h.toString(16)}`);
   return { port, driverPort: 43000 + (h % 2000), dir, state: path.join(dir, 'state.json'), profile: process.env.VERIFY_PROFILE || path.join(dir, 'profile') };
