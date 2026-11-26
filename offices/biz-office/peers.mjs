@@ -14,7 +14,8 @@ import { execFile } from 'node:child_process';
 const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), BIN = path.join(HOME, '.local', 'bin');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' };
 const LOOK = { 4317: { floor: 0xead7b4, wall: 0xf3efe6, line: 0x5b6ee1 },
-  4318: { floor: 0x3f8f88, wall: 0xe9f1ee, line: 0xfb923c } }; // a floor on another port sets its own in team.json "look"
+  4318: { floor: 0x3f8f88, wall: 0xe9f1ee, line: 0xfb923c },
+  4322: { floor: 0xd8e6dc, wall: 0xf0f5f1, line: 0x0d9488 } }; // a floor on another port sets its own in team.json "look"
 const readJson = async (f, dflt) => { try { return JSON.parse(await fs.readFile(f, 'utf8')); } catch { return dflt; } };
 const json = (res, code, body) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 const readBody = (req, max = 60_000) => new Promise((resolve) => { let s = ''; req.on('data', (c) => { s += c; if (s.length > max) { resolve({}); req.destroy(); } }); req.on('end', () => { try { resolve(JSON.parse(s || '{}')); } catch { resolve({}); } }); req.on('error', () => resolve({})); });
@@ -170,7 +171,7 @@ export function createPeers({ port, agents, OFFICES, APP, chatLog }) {
         const peer = await who(req), c = await floorCard(mine), me = (await peersFile()).me || {};
         const info = { building: me.name || '', owner: me.owner || '', floor: mine.name, lead: c ? c.lead : {}, viewer: peer ? { id: peer.id, name: peer.name, user: String(req.headers['x-peer-user'] || peer.owner || '') } : null,
           share: !!(peer && ((peer.my || {})[port] || {}).share), chats: !!(peer && peer.chats && peer.status === 'on'), back: String(req.headers['x-peer-back'] || '') };
-        const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest')
+        const html = (await fs.readFile(path.join(APP, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', 'guest').replace('%%OFFICE_FLOORS%%', JSON.stringify(OFFICES.map((o) => String(o.port))))
           .replace('</head>', `<script>window.__GUEST__ = ${JSON.stringify(info).replace(/</g, '\\u003c')};</script><script type="module" src="/js/guest.js"></script></head>`);
         res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' }); return res.end(html);
       }

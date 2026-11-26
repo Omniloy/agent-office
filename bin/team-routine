@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""team-routine: routines with manners. A launchd job (com.omniloy.team-routine, every 5 minutes) runs `team-routine tick`.
+For each routine that is due it: skips a team the watchdog has paused (or a paused routine), runs the cheap probe (a CLI,
+no agent), drops items already sent (dedupe), and nudges the person with one `hc send` only when they are idle. Busy:
+retried next tick, logged skipped-busy after 2 h. Two probe failures in a row: the routine pauses itself and tells the lead.
+
+  team-routine tick [--dry-run]           run whatever is due now (what launchd calls)
+  team-routine run <id> [--dry-run]       run one routine now, schedule ignored (still probe, dedupe and idle check)
+  team-routine ls [--team misc] [--json]  routines, schedule, last run, failures, paused
+  team-routine pause <id> | resume <id>
+  team-routine add <id> --file entry.json [--dry-run]    the owner's Run button: add or replace one routine
+
+Routines live in ~/.omniloy-<team>/routines.json ({"routines": [entry, ...]}). An entry:
+  {"id": "verify-due", "to": "lorena", "schedule": {"daily": "07:30"}, "probe": ["team-verify", "due", "--json"],
+   "prompt": "Run mx-maintain-verification-skill for: {items}", "dedupe": "verify-due:{item}:{date}"}
+  schedule: {"daily": "HH:MM"} | {"weekly": "Mon HH:MM"} | {"every": "30m", "between": ["08:00", "22:00"]} | {"tick": true}
+  probe: argv run with TEAM_DIR=<team>; exit 0 + {"items": []} (or no output) means no work; nonzero is a failure.
+  Command-only routine: "to": null and "run": [argv] (no nudge). "weekdays": true limits it to Monday to Friday.
+State: <team>/routines/state.json and routines/log.jsonl. Exit codes: 0 ok, 1 usage, 2 a routine failed.
+Example: team-routine run verify-due --dry-run"""
+import sys, os, json, re, glob, subprocess, argparse, datetime, fcntl
+
+HOME = os.path.expanduser("~")
+GLOB = os.environ.get("TEAM_ROUTINE_GLOB", f"{HOME}/.omniloy-*/routines.json")
+WATCH = os.environ.get("TEAM_WATCH_CONFIG", f"{HOME}/.omniloy-team/watch-config.json")
+HC = os.environ.get("HC_BIN") or (f"{HOME}/.local/bin/hc" if os.path.exists(f"{HOME}/.local/bin/hc") else "hc")
+BUSY_GIVEUP = datetime.timedelta(hours=2)
+DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+def die(m, c=1): print(m, file=sys.stderr); sys.exit(c)
+def now(): return datetime.datetime.fromisoformat(os.environ["TEAM_ROUTINE_NOW"]) if os.environ.get("TEAM_ROUTINE_NOW") else datetime.datetime.now()
+def rj(p, d):
+    try: return json.load(open(p))
+    except Exception: return d
+def teams():
+    for f in sorted(glob.glob(GLOB)):
+        td = os.path.dirname(f); t = rj(f"{td}/team.json", {})
+        yield td, os.path.basename(td).replace(".omniloy-", ""), t, rj(f, {"routines": []}).get("routines", [])
+def find(rid):
+    for td, short, t, rs in teams():
+        for r in rs:
+            if r.get("id") == rid: return td, short, t, r
+    die(f"no routine {rid}; team-routine ls")
+class State:
+    def __init__(self, td, write=True): self.td, self.write = td, write
+    def __enter__(self):
+        os.makedirs(f"{self.td}/routines", exist_ok=True); self.p = f"{self.td}/routines/state.json"
+        self.lock = open(self.p + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
+        self.s = rj(self.p, {"routines": {}, "sent": []}); return self.s
+    def __exit__(self, et, *_):
+        if self.write:   # a dry run changes nothing
+            self.s["sent"] = self.s["sent"][-2000:]
+            tmp = self.p + ".tmp"; json.dump(self.s, open(tmp, "w"), indent=1); os.replace(tmp, self.p)
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+DRY = False
+def log(td, **kw):
+    if DRY: return
+    os.makedirs(f"{td}/routines", exist_ok=True)
+    with open(f"{td}/routines/log.jsonl", "a") as f: f.write(json.dumps({"at": now().isoformat(timespec="seconds"), **kw}) + "\n")
+def hm(s): h, m = s.split(":"); return int(h), int(m)
+def due(r, st, t):
+    s = r.get("schedule") or {}; last = st.get("lastRun"); last = datetime.datetime.fromisoformat(last) if last else None
+    if r.get("weekdays") and t.weekday() > 4: return False
+    if s.get("tick"): return True
+    if "daily" in s:
+        h, m = hm(s["daily"]); slot = t.replace(hour=h, minute=m, second=0, microsecond=0)
+        return t >= slot and (not last or last < slot)
+    if "weekly" in s:
+        d, hhmm = s["weekly"].split(); h, m = hm(hhmm); wd = DAYS.index(d[:3].lower())
+        slot = (t - datetime.timedelta(days=(t.weekday() - wd) % 7)).replace(hour=h, minute=m, second=0, microsecond=0)
+        return t >= slot and (not last or last < slot)
+    if "every" in s:
+        mm = re.fullmatch(r"(\d+)([mh])", s["every"]); step = datetime.timedelta(minutes=int(mm.group(1)) * (60 if mm.group(2) == "h" else 1))
+        if s.get("between"):
+            a, b = (t.replace(hour=hm(x)[0], minute=hm(x)[1], second=0, microsecond=0) for x in s["between"])
+            if not (a <= t <= b): return False
+        return not last or t - last >= step
+    return False
+def item_key(i):
+    if isinstance(i, str) and "\t" in i: return i.split("\t")[0]   # a team-board search row: the card key
+    if isinstance(i, dict):
+        for k in ("key", "url", "repo", "id"):
+            if i.get(k): return str(i[k])
+        return json.dumps(i, sort_keys=True)
+    return str(i)
+def probe(r, td):
+    if not r.get("probe"): return 0, [None], ""
+    try: p = subprocess.run(r["probe"], capture_output=True, text=True, timeout=int(r.get("probeTimeout", 120)), env={**os.environ, "TEAM_DIR": td}, cwd=td)
+    except Exception as e: return 127, [], str(e)
+    if p.returncode: return p.returncode, [], (p.stderr or p.stdout).strip()[:300]
+    out = p.stdout.strip()
+    if not out: return 0, [], ""
+    try:
+        j = json.loads(out); items = j.get("items", []) if isinstance(j, dict) else j
+    except Exception: items = [ln for ln in out.splitlines() if ln.strip() and ln.strip() != "nothing to do"]
+    return 0, items, ""
+def hc_status(name):
+    try:
+        j = json.loads(subprocess.run([HC, "ls", "--json"], capture_output=True, text=True, timeout=20).stdout)
+        t = next((x for x in j.get("terminals", []) if x.get("name") == name and x.get("state", "live") == "live"), None)
+        return None if not t else t.get("status", "idle")
+    except Exception: return None
+def hc_send(name, text, dry):
+    if dry: print(f"would send to {name}: {text}"); return True
+    try: return subprocess.run([HC, "send", name, text], capture_output=True, text=True, timeout=30).returncode == 0
+    except Exception: return False
+def run_one(td, short, t, r, s, dry, force=False):
+    rid = r["id"]; st = s["routines"].setdefault(rid, {"failures": 0, "paused": False}); tnow = now()
+    if r.get("paused") or st.get("paused"): return "paused"
+    if t.get("name") in rj(WATCH, {}).get("paused", []): return "team-paused"
+    if not force and not due(r, st, tnow): return "not-due"
+    if r.get("run") and not r.get("to"):
+        if dry: print(f"would run {' '.join(r['run'])}"); return "dry-run"
+        p = subprocess.run(r["run"], capture_output=True, text=True, env={**os.environ, "TEAM_DIR": td}, cwd=td)
+        st["lastRun"] = tnow.isoformat(timespec="seconds"); log(td, routine=rid, event="ran", exit=p.returncode, out=(p.stdout + p.stderr)[-300:])
+        if p.returncode == 0 and r.get("then"):          # optional follow-up command (e.g. df after prune)
+            q = subprocess.run(r["then"], capture_output=True, text=True, env={**os.environ, "TEAM_DIR": td}, cwd=td); log(td, routine=rid, event="then", exit=q.returncode)
+        return f"ran exit {p.returncode}"
+    code, items, err = probe(r, td)
+    if code:
+        st["failures"] = st.get("failures", 0) + 1; log(td, routine=rid, event="probe-failed", exit=code, err=err)
+        if st["failures"] >= 2:
+            st["paused"] = True; lead = t.get("lead")
+            msg = f"Routine {rid} paused itself after {st['failures']} probe failures in a row (last: {err[:120]}). Check it, then: team-routine resume {rid}"
+            if lead: hc_send(lead, msg, dry)
+            log(td, routine=rid, event="self-paused", told=lead)
+            return "self-paused"
+        return f"probe failed ({code})"
+    st["failures"] = 0
+    date = tnow.date().isoformat(); tmpl = r.get("dedupe") or f"{rid}:{{item}}:{{date}}"
+    fresh = [i for i in items if tmpl.format(item=item_key(i), date=date) not in s["sent"]] if items != [None] else []
+    if not fresh:
+        st["lastRun"] = tnow.isoformat(timespec="seconds"); st.pop("busySince", None); log(td, routine=rid, event="no-work", items=len(items) if items != [None] else 0); return "no-work"
+    to = r.get("to"); status = hc_status(to)
+    if status == "working":
+        bs = st.setdefault("busySince", tnow.isoformat(timespec="seconds"))
+        if tnow - datetime.datetime.fromisoformat(bs) > BUSY_GIVEUP:
+            st["lastRun"] = tnow.isoformat(timespec="seconds"); st.pop("busySince", None); log(td, routine=rid, event="skipped-busy", to=to); return "skipped-busy"
+        log(td, routine=rid, event="busy-retry", to=to); return "busy"
+    if status is None and not dry:
+        log(td, routine=rid, event="not-running", to=to); return "not-running"
+    text = r.get("prompt", "{items}").format(items="; ".join(item_key(i) for i in fresh), since=st.get("lastRun") or "never", key=item_key(fresh[0]))
+    text = f"[routine {rid}] Run the probe again first (`{' '.join(r.get('probe') or [])}`) and do only the listed items. {text}"
+    if not hc_send(to, text, dry): log(td, routine=rid, event="send-failed", to=to); return "send-failed"
+    if not dry:
+        s["sent"].extend(tmpl.format(item=item_key(i), date=date) for i in fresh)
+        st["lastRun"] = tnow.isoformat(timespec="seconds"); st.pop("busySince", None)
+    log(td, routine=rid, event="sent" if not dry else "would-send", to=to, items=[item_key(i) for i in fresh])
+    return f"sent {len(fresh)} item(s) to {to}"
+def c_tick(a, only=None):
+    bad = 0
+    for td, short, t, rs in teams():
+        with State(td, write=not a.dry_run) as s:
+            for r in rs:
+                if only and r.get("id") != only: continue
+                res = run_one(td, short, t, r, s, a.dry_run, force=bool(only))
+                if res not in ("not-due",): print(f"{short}/{r.get('id')}: {res}")
+                if res.startswith("probe failed") or res == "self-paused" or res == "send-failed": bad = 1
+    sys.exit(2 if bad else 0)
+def c_ls(a):
+    rows = []
+    for td, short, t, rs in teams():
+        if a.team and short != a.team: continue
+        s = rj(f"{td}/routines/state.json", {"routines": {}})
+        for r in rs:
+            st = s["routines"].get(r["id"], {})
+            rows.append({"team": short, "id": r["id"], "to": r.get("to"), "schedule": r.get("schedule"), "lastRun": st.get("lastRun"), "failures": st.get("failures", 0), "paused": bool(r.get("paused") or st.get("paused"))})
+    if a.json: print(json.dumps({"routines": rows})); return
+    if not rows: print("no routines (none loaded; only the owner adds them)"); return
+    for x in rows: print(f"{x['team']}/{x['id']}\tto={x['to']}\t{json.dumps(x['schedule'])}\tlast={x['lastRun'] or '-'}\tfailures={x['failures']}" + ("\tPAUSED" if x["paused"] else ""))
+def c_pause(a, on):
+    td, short, t, r = find(a.id)
+    with State(td) as s:
+        st = s["routines"].setdefault(a.id, {"failures": 0}); st["paused"] = on
+        if not on: st["failures"] = 0
+    log(td, routine=a.id, event="paused" if on else "resumed"); print(f"{a.id} {'paused' if on else 'resumed'}")
+def validate(e):
+    errs = []
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", e.get("id", "")): errs.append("id: lowercase letters, digits and -")
+    s = e.get("schedule") or {}
+    if not any(k in s for k in ("daily", "weekly", "every", "tick")): errs.append("schedule: daily | weekly | every | tick")
+    if "daily" in s and not re.fullmatch(r"\d\d:\d\d", s["daily"]): errs.append("schedule.daily: HH:MM")
+    if "weekly" in s and not re.fullmatch(r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d\d:\d\d", s["weekly"]): errs.append("schedule.weekly: 'Mon HH:MM'")
+    if "every" in s and not re.fullmatch(r"\d+[mh]", s["every"]): errs.append("schedule.every: like 30m")
+    if e.get("to") and not e.get("probe"): errs.append("a routine that nudges a person needs a probe (no nudge without work)")
+    if not e.get("to") and not e.get("run"): errs.append("a command-only routine needs run: [argv]")
+    for k in ("probe", "run", "then"):
+        if e.get(k) is not None and not (isinstance(e[k], list) and all(isinstance(x, str) for x in e[k])): errs.append(f"{k}: a list of strings (argv)")
+    return errs
+def c_add(a):
+    try: e = json.load(open(a.file))
+    except Exception as x: die(f"cannot read {a.file}: {x}")
+    e["id"] = a.id; errs = validate(e)
+    if errs: die("refused:\n  " + "\n  ".join(errs))
+    td = os.path.expanduser(f"~/.omniloy-{e.get('team', 'misc')}") if not os.environ.get("TEAM_DIR") else os.environ["TEAM_DIR"]
+    if not os.path.exists(f"{td}/team.json"): die(f"no team folder at {td}")
+    f = f"{td}/routines.json"; d = rj(f, {"routines": []})
+    d["routines"] = [r for r in d["routines"] if r.get("id") != a.id] + [{k: v for k, v in e.items() if k != "team"}]
+    if a.dry_run: print(f"valid; would write {a.id} into {f}"); return
+    tmp = f + ".tmp"; json.dump(d, open(tmp, "w"), indent=1); os.replace(tmp, f); print(f"{a.id} added to {f}")
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"): print(__doc__); sys.exit(0 if len(sys.argv) > 1 else 1)
+    ap = argparse.ArgumentParser(prog="team-routine"); sp = ap.add_subparsers(dest="c")
+    p = sp.add_parser("tick"); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("run"); p.add_argument("id"); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("ls"); p.add_argument("--team"); p.add_argument("--json", action="store_true")
+    for n in ("pause", "resume"): p = sp.add_parser(n); p.add_argument("id")
+    p = sp.add_parser("add"); p.add_argument("id"); p.add_argument("--file", required=True); p.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    global DRY; DRY = bool(getattr(a, "dry_run", False))
+    if a.c == "tick": c_tick(a)
+    elif a.c == "run": c_tick(a, only=a.id)
+    elif a.c == "ls": c_ls(a)
+    elif a.c in ("pause", "resume"): c_pause(a, a.c == "pause")
+    elif a.c == "add": c_add(a)
+
+if __name__ == "__main__": main()

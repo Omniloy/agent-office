@@ -1,0 +1,10 @@
+// Property-based UI checks for <<App name>> (Bombadil). Run only against a local or dev origin with throwaway data.
+// Pinned version: ./VERSION.
+import { extract, always, now, eventually } from "@antithesishq/bombadil";
+export * from "@antithesishq/bombadil/browser/defaults"; // uncaught exceptions, unhandled rejections, console errors, HTTP 4xx/5xx
+
+// One exported property per card claim, named after the claim. Example:
+const errorMessage = extract(s => s.document.body.querySelector("[role=alert]")?.textContent ?? null);
+export const errorDisappears = always(
+  now(() => errorMessage.current !== null).implies(
+    eventually(() => errorMessage.current === null).within(5, "seconds")));

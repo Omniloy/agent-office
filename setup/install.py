@@ -19,7 +19,10 @@ BIN = f"{HOME}/.local/bin"
 HERDR = f"{HOME}/.config/herdr-app"
 LA = f"{HOME}/Library/LaunchAgents"
 TEAMS = {"dev": f"{HOME}/.omniloy-team", "biz": f"{HOME}/.omniloy-biz", "admin": f"{HOME}/.omniloy-admin"}
-RESERVED = {"lucia", "daniel", "marta", "kenji", "irene", "pablo", "elena", "zeus", "all", "team", "owner"}
+# Optional floors: installed only when the config lists them in "floors" (see setup/SETUP.md, "Miscelaneous floor").
+OPTIONAL = {"misc": f"{HOME}/.omniloy-misc"}
+RESERVED = {"lucia", "daniel", "marta", "kenji", "irene", "pablo", "elena", "zeus", "ines", "gonzalo", "lorena", "alvaro", "all", "team", "owner"}
+REPO_ONLY = {"tests", "mstack-vendor"}   # bin/ entries that stay in the repo (dev tools and their tests)
 STAMP = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
 def which(cmd, extra=()):
@@ -67,7 +70,10 @@ class Run:
         try: data = self.render(raw.decode("utf-8")).encode("utf-8")
         except UnicodeDecodeError: data = raw
         if os.path.exists(dst):
-            if open(dst, "rb").read() == data: return False
+            if open(dst, "rb").read() == data:
+                want = mode if mode else os.stat(src).st_mode & 0o777
+                if not self.dry and os.stat(dst).st_mode & 0o777 != want: os.chmod(dst, want)
+                return False
             if keep_existing:
                 if not self.dry: open(dst + ".new", "wb").write(data)
                 self.warn.append(f"{dst} already exists and differs from the repo; yours was kept and the repo's version is next to it as {os.path.basename(dst)}.new")
@@ -76,14 +82,15 @@ class Run:
         if not self.dry:
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             open(dst, "wb").write(data)
-            if mode: os.chmod(dst, mode)
+            # keep the executable bit of scripts the skills call by path (mode None means: as in the repo)
+            os.chmod(dst, mode if mode else os.stat(src).st_mode & 0o777)
         return True
-    def tree(self, src, dst, **kw):
+    def tree(self, src, dst, skip=(), **kw):
         n = 0
         for root, dirs, files in os.walk(src):
-            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git")]
+            dirs[:] = [d for d in dirs if d not in ("node_modules", ".git") and not (root == src and d in skip)]
             for f in files:
-                if f in (".DS_Store",) or f.endswith(".log"): continue
+                if f in (".DS_Store",) or f.endswith(".log") or (root == src and f in skip): continue
                 s = os.path.join(root, f); n += self.put(s, os.path.join(dst, os.path.relpath(s, src)), **kw)
         return n
 
@@ -99,7 +106,7 @@ class Run:
                     if r.returncode: self.warn.append(f"npm install failed in {APPS}/{name}: {r.stderr.strip()[-300:]}"); continue
                 self.say(f"{name}: dependencies installed")
     def tools(self):
-        n = self.tree(f"{REPO}/bin", BIN, mode=0o755, backup=True)
+        n = self.tree(f"{REPO}/bin", BIN, skip=REPO_ONLY, mode=0o755, backup=True)
         self.say(f"tools: {n} file(s) written to {BIN}")
         for link, target in (("hc", herdr_core()), ("herdr-app", herdr_app())):
             dst = f"{BIN}/{link}"
@@ -107,21 +114,26 @@ class Run:
                 if not self.dry: os.symlink(target, dst)
                 self.say(f"{link} linked to {target}")
         if BIN not in os.environ.get("PATH", "").split(":"): self.warn.append(f"{BIN} is not on PATH: add `export PATH=\"$HOME/.local/bin:$PATH\"` to ~/.zshrc (agents need the team-* tools)")
+    def floors(self):
+        """The fixed floors plus the optional ones this config asks for ("floors": ["misc"])."""
+        return {**TEAMS, **{k: v for k, v in OPTIONAL.items() if k in (self.cfg.get("floors") or [])}}
     def teams(self):
         c = self.cfg; have = c.get("runtimes") or ["claude"]
-        for kind, d in TEAMS.items():
+        for kind, d in self.floors().items():
             src = f"{REPO}/teams/{kind}"
             if not self.dry: os.makedirs(f"{d}/memory", exist_ok=True)
             if not os.path.exists(f"{d}/team.json"):
                 t = json.loads(self.render(open(f"{src}/team.json").read()))
                 t["owner"] = c["owner"]
-                if c.get("jira") and c["jira"].get("site"): t["jira"] = {"keychainService": "herdr-jira", **c["jira"]}
+                if kind != "misc" and c.get("jira") and c["jira"].get("site"): t["jira"] = {"keychainService": "herdr-jira", **c["jira"]}
                 if kind == "dev" and c.get("projects"): t["projects"] = c["projects"]
                 if kind == "biz": t["gmailAccount"] = c.get("gmailAccount") or ""
                 if kind == "biz" and c.get("mailRound"): t["mailRound"] = c["mailRound"]
                 for p in t["personas"]:
                     want = (c.get("assign") or {}).get(p["herdrName"]) or ("claude" if "claude" in have else have[0])
-                    p["runtime"] = want if want in have else have[0]
+                    p["runtime"] = want if want in have or (want == "claude-personal" and "claude" in have and want in t.get("runtimes", {})) else have[0]
+                if kind == "misc" and any(p["runtime"] == "codex" for p in t["personas"]):
+                    self.warn.append("Miscelaneous floor: its people are written for Claude Code (skills, subagents, Claude in Chrome); Codex is only their second-vendor seat")
                 if not self.dry: json.dump(t, open(f"{d}/team.json", "w"), indent=2, ensure_ascii=False)
                 self.say(f"{d}/team.json created ({', '.join(p['herdrName'] + ':' + p['runtime'] for p in t['personas'])})")
             else: self.say(f"{d}/team.json exists: kept as it is")
@@ -131,7 +143,9 @@ class Run:
             self.carry_section(f"{src}/PROTOCOL.md", f"{d}/PROTOCOL.md", "## Commands for ")
             for p in json.load(open(f"{src}/team.json"))["personas"]:
                 m = f"{d}/memory/{p['slug']}.md"
-                if not os.path.exists(m) and not self.dry: open(m, "w").write(f"# {p['name']}: memory\n\nNotes that must survive between sessions. Newest first.\n")
+                body = f"# {p['name']}: memory\n\n## Open now\n\n## How things work here\n" if kind == "misc" else f"# {p['name']}: memory\n\nNotes that must survive between sessions. Newest first.\n"
+                if not os.path.exists(m) and not self.dry: open(m, "w").write(body)
+            if kind == "misc": self.misc(src, d)
         shared = TEAMS["dev"]
         for f, body in (("requests.json", {"next": 1, "items": []}),):
             if not os.path.exists(f"{shared}/{f}") and not self.dry: json.dump(body, open(f"{shared}/{f}", "w"))
@@ -146,11 +160,28 @@ class Run:
         if ts.get("host") and ts.get("logins"):
             if not self.dry: json.dump({"host": ts["host"], "logins": ts["logins"]}, open(f"{shared}/remote.json", "w"), indent=2)
             self.say(f"{shared}/remote.json written: the phone door is open for {len(ts['logins'])} Tailscale login(s)")
+    def misc(self, src, d):
+        """The Miscelaneous floor's own pieces: mstack as project skills of its folder (other floors never see them),
+        its two helpers, its routines (inert until the team-routine launchd job is loaded with the owner's go), and
+        the folders its levers write to."""
+        n = self.tree(f"{src}/skills", f"{d}/.claude/skills", backup=True)
+        n += self.tree(f"{src}/subagents", f"{d}/.claude/agents", backup=True)
+        self.say(f"{d}: mstack skills and helpers, {n} file(s) written to .claude/")
+        if os.path.exists(f"{src}/routines.json") and self.put(f"{src}/routines.json", f"{d}/routines.json", keep_existing=True): self.say(f"{d}/routines.json written (not running: see setup/SETUP.md)")
+        if self.dry: return
+        for sub in ("evidence", "verify", "work/lanes", "garden", "routines", "proposals", "handovers", "reports", "history"): os.makedirs(f"{d}/{sub}", exist_ok=True)
+        if not os.path.exists(f"{d}/verify/registry.json"): json.dump({"repos": {}}, open(f"{d}/verify/registry.json", "w"))
+        if not os.path.exists(f"{d}/garden/ledger.tsv"): open(f"{d}/garden/ledger.tsv", "w").write("ts\trepo\tpr\tsmell\tfile_line\tclass\tcard\n")
     def people(self):
-        n = 0
-        for kind in TEAMS:
-            for f in glob.glob(f"{REPO}/teams/{kind}/agents/*.md"): n += self.put(f, f"{HOME}/.claude/agents/{os.path.basename(f)}", backup=True)
-        self.say(f"role instructions: {n} file(s) written to ~/.claude/agents (Codex people are sent the same text)")
+        n = 0; linked = 0
+        personal = f"{HOME}/.claude-personal/agents"
+        for kind in self.floors():
+            for f in glob.glob(f"{REPO}/teams/{kind}/agents/*.md"):
+                dst = f"{HOME}/.claude/agents/{os.path.basename(f)}"; n += self.put(f, dst, backup=True)
+                if kind in OPTIONAL and os.path.isdir(personal) and not os.path.lexists(f"{personal}/{os.path.basename(f)}"):
+                    if not self.dry: os.symlink(dst, f"{personal}/{os.path.basename(f)}")
+                    linked += 1
+        self.say(f"role instructions: {n} file(s) written to ~/.claude/agents (Codex people are sent the same text)" + (f"; {linked} linked into {personal}" if linked else ""))
     def skills(self):
         have = self.cfg.get("runtimes") or ["claude"]
         dests = [f"{HOME}/.claude/skills"] + ([f"{HOME}/.codex/skills", f"{HOME}/.agents/skills"] if "codex" in have else [])
@@ -218,6 +249,16 @@ def check():
     for name in ("team-office", "biz-office", "artifacts"): line(os.path.exists(f"{APPS}/{name}/server.mjs") and os.path.isdir(f"{APPS}/{name}/node_modules"), f"app {name}")
     for t in ("team-ask", "team-card", "team-person", "team-peer", "omniloy-team", "office-restart", "office-up", "team-artifact", "team-memory", "team-names"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
     for kind, d in TEAMS.items(): line(os.path.exists(f"{d}/team.json"), f"team folder {d}")
+    for kind, d in OPTIONAL.items():
+        if os.path.exists(f"{d}/team.json"):
+            line(len(glob.glob(f"{d}/.claude/skills/mx-*/SKILL.md")) == 44, f"optional floor {d}: the 44 mstack skills")
+            for s in ("mx-statechart/scripts/statechart", "mx-show-me-your-work/scripts/log.sh", "mx-mode/scripts/watch-pr/watch-pr", "mx-mode/scripts/worktree-audit.sh"):
+                f = f"{d}/.claude/skills/{s}"
+                if os.path.exists(f): line(os.access(f, os.X_OK), f"executable {s}", "" if os.access(f, os.X_OK) else f"chmod +x {f} (or rerun setup/install.py)")
+            for t in ("team-board", "team-evidence", "team-verify", "team-lanes", "team-routine"): line(os.access(f"{BIN}/{t}", os.X_OK), f"tool {t}")
+            opt(os.path.exists(f"{LA}/com.omniloy.team-routine.plist"), "Miscelaneous routines scheduled (only after the owner's go)")
+            opt(os.access(f"{BIN}/bombadil", os.X_OK), "Bombadil (V3 evidence)", "setup/verify-tools.sh")
+            opt(bool(glob.glob(f"{HOME}/.local/share/tla/tla2tools-*.jar")), "TLA+ tools (V4 evidence)", "setup/verify-tools.sh")
     line(os.path.isdir(f"{HERDR}/mods/team-requests"), "Herdr panels")
     try: on = subprocess.run(["/usr/bin/python3", f"{BIN}/team-names", "status"], capture_output=True, text=True).stdout
     except Exception: on = ""
@@ -228,6 +269,7 @@ def check():
     line(up(4317), "Dev floor answers on 4317", "" if up(4317) else "office-restart all")
     line(up(4318), "Business floor answers on 4318")
     line(up(4340, "/"), "artifacts server answers on 4340")
+    if os.path.exists(f"{OPTIONAL['misc']}/team.json"): opt(up(4322), "Miscelaneous floor answers on 4322", "" if up(4322) else "office-restart 4322")
     opt(up(4330, "/health") or up(4330, "/"), "voice transcriber on 4330 (optional)")
     opt(bool(tailscale()), "Tailscale (optional, for the phone)", tailscale())
     opt(os.path.exists(f"{LA}/com.omniloy.mail-round.plist"), "email rounds scheduled (optional)")

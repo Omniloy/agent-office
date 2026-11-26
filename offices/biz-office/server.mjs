@@ -11,7 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { createHub } from './hub.mjs';
+import { createHub, OFFICES } from './hub.mjs';
 
 const HOME = os.homedir();
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -503,7 +503,7 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     if (p === '/' || p === '/index.html') {
-      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN);
+      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN).replace('%%OFFICE_FLOORS%%', JSON.stringify(OFFICES.map((o) => String(o.port))));
       res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
       return res.end(html);
     }

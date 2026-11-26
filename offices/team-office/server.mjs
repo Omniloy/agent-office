@@ -23,6 +23,10 @@ process.env.PATH = `${LOCAL_BIN}:${process.env.PATH || ''}`;
 const bin = (n) => (existsSync(path.join(LOCAL_BIN, n)) ? path.join(LOCAL_BIN, n) : n);
 const HC = bin('hc');
 const TEAM_JIRA = bin('team-jira');
+const TEAM_BOARD = bin('team-board'); // the team's local board (team.json `localBoard`): same commands and output as team-jira, no Jira
+const localKey = (team, key) => !!(team && team.localBoard && String(key).startsWith(`${team.localBoard.prefix}-`));
+// a card's Jira link; '' for a local-board card, or for a floor with no `jira` block (Miscelaneous has none)
+const cardUrl = (team, key) => (localKey(team, key) || !(team && team.jira && team.jira.site) ? '' : `${team.jira.site}/browse/${key}`);
 const expand = (p) => (p && p.startsWith('~') ? path.join(HOME, p.slice(1)) : p);
 
 // The office is named after the Herdr space its tabs live in (the one holding a tab with this
@@ -41,9 +45,9 @@ async function spaceName(team) {
   } catch { /* keep the last name */ }
   return spaceCache.name || fallback;
 }
-function run(cmd, args, { timeout = 8000 } = {}) {
+function run(cmd, args, { timeout = 8000, env } = {}) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024, cwd: HOME }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024, cwd: HOME, ...(env ? { env } : {}) }, (err, stdout, stderr) => {
       resolve({ ok: !err, stdout: stdout || '', stderr: (stderr || (err && err.message) || '').trim() });
     });
   });
@@ -284,14 +288,17 @@ async function refreshJira(team) {
   const held = Object.entries(cards).filter(([k, c]) => mine.has(c.owner) && /^[A-Z][A-Z0-9]+-\d+$/.test(k));
   const labels = [...mine];
   if (!held.length) { jira = { updatedMs: Date.now(), error: null, byLabel: Object.fromEntries(labels.map((l) => [l, []])) }; return; }
-  const jql = `key in (${held.map(([k]) => k).slice(0, 90).join(', ')}) ORDER BY updated DESC`;
-  const r = await run(TEAM_JIRA, ['search', jql, '100'], { timeout: 25000 });
+  const jql = (ks) => `key in (${ks.slice(0, 90).join(', ')}) ORDER BY updated DESC`;
+  const inJira = held.map(([k]) => k).filter((k) => !localKey(team, k)), inLocal = held.map(([k]) => k).filter((k) => localKey(team, k));
+  const r = inJira.length ? await run(TEAM_JIRA, ['search', jql(inJira), '100'], { timeout: 25000 }) : { ok: true, stdout: '' };
+  const rl = inLocal.length ? await run(TEAM_BOARD, ['search', jql(inLocal), '100'], { timeout: 8000, env: { ...process.env, TEAM_DIR } }) : { ok: true, stdout: '' };
+  if (!rl.ok) { jira = { ...jira, error: clip(oneLine(rl.stderr) || 'local board search failed', 200), updatedMs: Date.now() }; return; }
   if (!r.ok) { jira = { ...jira, error: clip(oneLine(r.stderr) || 'Jira search failed', 200), updatedMs: Date.now() }; return; }
   const byLabel = Object.fromEntries(labels.map((l) => [l, []]));
-  for (const line of r.stdout.split('\n')) {
+  for (const line of `${r.stdout}\n${rl.stdout}`.split('\n')) {
     const [key, status, type, labs, ...rest] = line.split('\t');
     if (!key || !/^[A-Z][A-Z0-9]+-\d+$/.test(key)) continue;
-    const t = { key, status, type, summary: rest.join(' '), url: `${team.jira.site}/browse/${key}` };
+    const t = { key, status, type, summary: rest.join(' '), url: cardUrl(team, key) };
     const c = cards[key]; if (c && c.waiting) t.status = `${t.status} · waiting`;
     if (c && byLabel[c.owner]) byLabel[c.owner].push(t);
   }
@@ -354,7 +361,7 @@ async function refreshPrs(team, force) {
     if (!ghMe) { const r = await run('gh', ['api', 'user', '-q', '.login'], { timeout: 20000 }); if (r.ok) ghMe = r.stdout.trim(); }
     const me = ghMe;
     const projOf = (repo) => team.projects.filter((p) => (p.repos || []).includes(repo)).map((p) => p.name);
-    const keys = new Set(team.projects.map((p) => p.jiraProject).filter(Boolean));
+    const keys = new Set([...team.projects.map((p) => p.jiraProject), team.localBoard && team.localBoard.prefix].filter(Boolean));
     // merged today (local day): so a pull request that closed is seen as closed, not just gone
     const d = new Date(), today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const mergedP = Promise.all(repos.map(async (repo) => {
@@ -440,7 +447,7 @@ async function buildAgent(p, team, names) {
     turn: term ? term.turn : 0, startedMs: term ? term.created_ms : 0,
     screen: [], activity: [], nowDoing: '', lastSaid: '', nudges: [],
     memory: await withPlate(await loadMemory(p.slug), hn),
-    tickets: p.temp ? [Object.values(jira.byLabel).flat().find((t) => t.key === p.ticket) || { key: p.ticket, status: p.state === 'done' ? 'finished' : 'temp', type: '', summary: p.task, url: `${team.jira.site}/browse/${p.ticket}` }] : (jira.byLabel[p.herdrName] || []),
+    tickets: p.temp ? [Object.values(jira.byLabel).flat().find((t) => t.key === p.ticket) || { key: p.ticket, status: p.state === 'done' ? 'finished' : 'temp', type: '', summary: p.task, url: cardUrl(team, p.ticket) }] : (jira.byLabel[p.herdrName] || []),
   };
   if (!agent.online) return agent;
 
@@ -494,13 +501,19 @@ let doneCache = { at: 0, today: [], week: [] };
 async function doneCards(team) {
   if (Date.now() - doneCache.at < 300_000) return doneCache;
   const projects = [...new Set((team.projects || []).map((p) => p.jiraProject).filter(Boolean))];
-  if (!projects.length) return doneCache;
+  if (!projects.length && !team.localBoard) return doneCache;
   const q = async (since) => {
     const r = await run(TEAM_JIRA, ['search', `project in (${projects.join(', ')}) AND ((statusCategory = Done AND statusCategoryChangedDate >= ${since}) OR (status = Validation AND status CHANGED TO Validation AFTER ${since})) ORDER BY updated DESC`, '2000'], { timeout: 90000, maxBuffer: 16e6 });
     if (!r.ok) return null;
     return r.stdout.split('\n').map((l) => l.split('\t')).filter((x) => /^[A-Z][A-Z0-9]+-\d+$/.test(x[0] || '')).map(([key, status, type, , ...rest]) => ({ key, status, type, title: rest.join(' ') }));
   };
-  const [today, week] = await Promise.all([q('startOfDay()'), q('-7d')]);
+  const ql = async (since) => { // finished on the local board
+    if (!team.localBoard) return [];
+    const r = await run(TEAM_BOARD, ['search', `(statusCategory = Done OR status = Validation) AND statusCategoryChangedDate >= ${since} ORDER BY updated DESC`, '500'], { timeout: 8000, env: { ...process.env, TEAM_DIR } });
+    return r.ok ? r.stdout.split('\n').map((l) => l.split('\t')).filter((x) => /^[A-Z][A-Z0-9]+-\d+$/.test(x[0] || '')).map(([key, status, type, , ...rest]) => ({ key, status, type, title: rest.join(' ') })) : [];
+  };
+  let [today, week] = await Promise.all([projects.length ? q('startOfDay()') : [], projects.length ? q('-7d') : []]);
+  if (today && week) { const [lt, lw] = await Promise.all([ql('startOfDay()'), ql('-7d')]); today = [...lt, ...today]; week = [...lw, ...week]; }
   if (today && week) doneCache = { at: Date.now(), today, week };
   return doneCache;
 }
@@ -529,7 +542,7 @@ async function cardDetail(key, team) {
   try { log = (await fs.readFile(path.join(SHARED, 'cards-log.jsonl'), 'utf8')).split('\n').filter((l) => l.includes(`"${key}"`)).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((x) => x && x.key === key); } catch {}
   let j = detailCache.get(key);
   if (!j || Date.now() - j.at > 60_000) {
-    const r = await run(TEAM_JIRA, ['get', key], { timeout: 25000 });
+    const r = localKey(team, key) ? await run(TEAM_BOARD, ['get', key], { timeout: 8000, env: { ...process.env, TEAM_DIR } }) : await run(TEAM_JIRA, ['get', key], { timeout: 25000 });
     let info = { error: r.ok ? '' : clip(oneLine(r.stderr) || 'Jira read failed', 200) };
     if (r.ok) {
       const out = r.stdout, head = out.split('\n')[0] || '', m = /^(\S+) \[([^\]]*)\] (.*)$/.exec(head) || [];
@@ -542,7 +555,7 @@ async function cardDetail(key, team) {
     j = { at: Date.now(), info }; detailCache.set(key, j);
   }
   return {
-    key, url: `${team.jira.site}/browse/${key}`, card: cards[key] || null, log: log.slice(-40),
+    key, url: cardUrl(team, key), local: localKey(team, key), card: cards[key] || null, log: log.slice(-40),
     requests: (reqs.items || []).filter((x) => x.ticket === key).slice(-8).map((x) => ({ id: x.id, kind: x.kind, from: x.from, to: x.to || '__OWNER_ID__', title: x.title, status: x.status, answer: x.answer, created: x.created })),
     prs: prs.list.filter((x) => `${x.branch} ${x.title}`.includes(key)).map((x) => ({ repo: x.repo, number: x.number, title: x.title, url: x.url, state: prState(x) })),
     caught: (watch.events || []).filter((e) => (e.cards || []).includes(key)).slice(-5).map((e) => ({ ts: e.ts, agent: e.agent, idleMin: e.idleMin })),
@@ -556,7 +569,9 @@ let KEY_RE = null;
 async function keyRe() {
   if (KEY_RE) return KEY_RE;
   const pre = new Set();
-  for (const d of ['.omniloy-team']) for (const p of ((await readJsonOr(path.join(HOME, d, 'team.json'), {})).projects || [])) if (p.jiraProject) pre.add(p.jiraProject);
+  const dirs = ['.omniloy-team', '.omniloy-misc'];
+  for (const d of dirs) for (const p of ((await readJsonOr(path.join(HOME, d, 'team.json'), {})).projects || [])) if (p.jiraProject) pre.add(p.jiraProject);
+  for (const d of dirs) { const lb = (await readJsonOr(path.join(HOME, d, 'team.json'), {})).localBoard; if (lb && lb.prefix) pre.add(lb.prefix); }
   KEY_RE = new RegExp(`\\b(?:${[...pre].join('|') || 'NOKEY'})-\\d+\\b`, 'g');
   return KEY_RE;
 }
@@ -626,7 +641,7 @@ async function refresh() {
       prs: await assignPrs(agents), prsError: prs.error, prsAt: prs.at, prsMerged: prs.merged,
       team: { name: await spaceName(team) },
       jira: { site: team.jira && team.jira.site, error: jira.error, updatedMs: jira.updatedMs },
-      projects: team.projects.map((p) => ({ id: p.id, name: p.name, key: p.jiraProject })),
+      projects: [...team.projects.map((p) => ({ id: p.id, name: p.name, key: p.jiraProject })), ...(team.localBoard ? [{ id: 'local-board', name: team.localBoard.name || 'Local board', key: team.localBoard.prefix, local: true }] : [])],
     };
     const json = JSON.stringify(next);
     if (json !== stateJson) {
@@ -746,7 +761,7 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     if (p === '/' || p === '/index.html') {
-      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN);
+      const html = (await fs.readFile(path.join(ROOT, 'public', 'index.html'), 'utf8')).replace('%%OFFICE_TOKEN%%', TOKEN).replace('%%OFFICE_FLOORS%%', JSON.stringify(OFFICES.map((o) => String(o.port))));
       res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
       return res.end(html);
     }

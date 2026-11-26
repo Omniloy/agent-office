@@ -154,32 +154,38 @@ elif cmd == "thread":
     def data(p):
         try: return base64.urlsafe_b64decode(p.get("body", {}).get("data", "") + "==").decode("utf-8", errors="replace")
         except Exception: return ""
-    def untag(h):
+    def untag(h, keep_quote=False):
         h = re.sub(r"(?is)<(style|script|head)\b.*?</\1>", "", h)
-        h = re.sub(r"(?is)<blockquote\b.*", "", h)                                   # what it quotes: the earlier mail is shown on its own
-        h = re.sub(r'(?is)<div[^>]+class="[^"]*gmail_quote.*', "", h)
+        if not keep_quote:                                                           # the oldest message keeps it: see own()
+            h = re.sub(r"(?is)<blockquote\b.*", "", h)                               # what it quotes: the earlier mail is shown on its own
+            h = re.sub(r'(?is)<div[^>]+class="[^"]*gmail_quote.*', "", h)
         h = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</tr>|</li>|</h\d>", "\n", h)
         return html.unescape(re.sub(r"<[^>]+>", "", h))
     QUOTE = re.compile(r"^\s*(?:El .{5,90} escribi[oó]:|On .{5,90} wrote:|-{2,}\s*(?:Original Message|Mensaje original|Forwarded message|Mensaje reenviado)\s*-{2,}|De:\s.+|From:\s.+|_{10,})\s*$", re.I)
     def own(text):
-        out = []
-        for l in text.replace("\r", "").split("\n"):
-            if QUOTE.match(l) and len(out) > 1: break
+        """(its own text, what it quotes). The quote is kept so the oldest message can show mail that never reached
+        this mailbox (the thread started elsewhere and we were copied in later): only the quote holds it."""
+        out, lines = [], text.replace("\r", "").split("\n")
+        for i, l in enumerate(lines):
+            if QUOTE.match(l) and len(out) > 1:
+                q = "\n".join(x[1:] if x.startswith(">") else x for x in (y.rstrip() for y in lines[i:]))
+                return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip(), re.sub(r"\n{3,}", "\n\n", q).strip()
             if l.lstrip().startswith(">"): continue
             out.append(l.rstrip())
-        return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip(), ""
     out = []
     for m in t.get("messages", []):
         if "DRAFT" in m.get("labelIds", []): continue
         h = {x["name"].lower(): x["value"] for x in m.get("payload", {}).get("headers", [])}
         ps = list(parts(m.get("payload", {})))
         plain = next((data(p) for p in ps if p.get("mimeType") == "text/plain" and not p.get("filename")), "")
-        if not plain.strip(): plain = untag(next((data(p) for p in ps if p.get("mimeType") == "text/html" and not p.get("filename")), ""))
-        text = own(plain)
+        if not plain.strip(): plain = untag(next((data(p) for p in ps if p.get("mimeType") == "text/html" and not p.get("filename")), ""), keep_quote=not out)
+        text, quoted = own(plain)
         out.append({"id": m["id"], "from": h.get("from", ""), "to": h.get("to", ""), "cc": h.get("cc", ""),
                     "date": datetime.datetime.fromtimestamp(int(m.get("internalDate", 0)) / 1000).isoformat(timespec="minutes"),
                     "mine": "SENT" in m.get("labelIds", []), "text": text[:8000] + ("\n[…]" if len(text) > 8000 else ""),
-                    "attachments": files_of(m.get("payload", {}))})
+                    "attachments": files_of(m.get("payload", {})),
+                    **({"quoted": quoted[:20000] + ("\n[…]" if len(quoted) > 20000 else "")} if quoted and not out else {})})
     print(json.dumps({"messages": out[-40:]}, ensure_ascii=False))
 elif cmd == "files":
     d = call("GET", f"/drafts/{a[1]}?format=full", ok404=True)

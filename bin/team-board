@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""team-board: a LOCAL board that behaves like the team's Jira board. Same commands and output as team-jira,
+but the cards live in a file on this Mac and nothing reaches Jira. No network calls.
+
+  team-board search '<JQL>' [max]        team-board get KEY
+  team-board comment KEY 'text'          team-board create PROJECT Type 'Summary' 'Description' [label,label] [parentKey]
+  team-board label KEY +backend -frontend   team-board transitions KEY   team-board move KEY 'Status name'
+  team-board link KEY OTHERKEY [Relates]  team-board attach KEY file...
+  team-board board [product|dev]         the board as columns, like the Jira board
+  team-board info                        prefix, card types and their statuses
+
+PROJECT is the local prefix (`team-board info`). Card types, statuses and the two boards (Product, Dev) copy the
+team's Jira project. Writing rules are the same as in Jira (no signatures, no teammate names): a card may be
+copied to Jira later. Who holds a card is still `team-card`, with the local key.
+JQL: the common part works (project, key, status, statusCategory, type, labels, parent, summary, description,
+text, created, updated; = != ~ !~ in, not in, is empty, >= <=; AND OR NOT, brackets; ORDER BY). Anything else
+is refused with a message, never ignored.
+The team: the folder you are in (or TEAM_DIR) must have `localBoard` in its team.json. Store: <team>/board/.
+
+Evidence gate (only when team.json has "localBoard": {..., "evidenceGate": true}; otherwise nothing changes):
+  a move into Validation / Ready for release / Released (Feature, Implementation), Done (Task, Bug, Sub-task) or
+  Passed (Verification) runs `team-evidence check KEY` and is refused (exit 3) until the evidence is complete. A move
+  of a Feature or Implementation card with a repo-<name> label into Ready for development runs
+  `team-verify ready-check KEY` (the kit rule). Rejected and Duplicated are never gated.
+  team-board move KEY 'Status' --override "reason"   __OWNER__'s only: moves anyway, writes the comment
+        "GATE OVERRIDE: reason" and a line in <team>/board/gate-overrides.jsonl."""
+import sys, json, os, re, fcntl, datetime, shutil, subprocess
+HOME = os.path.expanduser("~")
+# ---- which team
+def team_dir():
+    c = [os.environ.get("TEAM_DIR")] if os.environ.get("TEAM_DIR") else []
+    d = os.getcwd()
+    while d and d != "/": c.append(d); d = os.path.dirname(d)
+    for d in c:
+        try:
+            if json.load(open(f"{d}/team.json")).get("localBoard"): return d
+        except Exception: pass
+    have = []
+    for n in sorted(os.listdir(HOME)):
+        if n.startswith(".omniloy-"):
+            try:
+                if json.load(open(f"{HOME}/{n}/team.json")).get("localBoard"): have.append(f"{HOME}/{n}")
+            except Exception: pass
+    if len(have) == 1: return have[0]
+    sys.exit("no local board here: run it from a team folder whose team.json has `localBoard`, or set TEAM_DIR" if not have else f"several teams have a local board ({', '.join(have)}): run it from your team folder or set TEAM_DIR")
+TD = team_dir(); CFG = json.load(open(f"{TD}/team.json"))["localBoard"]; PRE = CFG["prefix"]
+DIR = f"{TD}/board"; STORE = f"{DIR}/board.json"
+# ---- the workflow: a copy of Jira project OMC (types, statuses with their category, board columns)
+N, I, D = "new", "indeterminate", "done"
+FEATURE = [("Later", N), ("Next", N), ("Discovery", N), ("Ready for development", N), ("In Progress", I), ("Verification", I), ("Validation", I), ("Ready for release", I), ("Released", D), ("Reopened", N), ("Rejected", D)]
+TASK = [("Discovery", N), ("Ready for development", N), ("In Progress", I), ("Blocked", I), ("Verification", I), ("Done", D), ("Reopened", N), ("Rejected", D), ("Duplicated", D)]
+TYPES = CFG.get("types") or {
+    "Epic": [("Discovery", N), ("Ready for development", N), ("In Progress", I), ("Done", D)],
+    "Feature": FEATURE, "Implementation": FEATURE, "Task": TASK, "Bug": TASK,
+    "Sub-task": [("Ready for development", N), ("In Progress", I), ("Verification", I), ("Done", D), ("Rejected", D), ("Duplicated", D)],
+    "Validation": [("Validation Plan", N), ("Approved Plan", N), ("In Progress", I), ("Issues", I), ("Validated", D)],
+    "Verification": [("Discovery", N), ("Ready for development", N), ("Test Design", I), ("In execution", I), ("Failed", I), ("Passed", D), ("Rejected", D), ("Duplicated", D)],
+}
+BOARDS = {
+    "product": {"name": "Product board", "types": ["Validation", "Feature", "Implementation"],
+                "columns": [("Later", ["Later"]), ("Next", ["Next"]), ("Discovery", ["Discovery", "Validation Plan"]), ("Ready for development", ["Ready for development", "Approved Plan"]), ("In Progress", ["In Progress", "Issues", "Reopened"]), ("Verification", ["Verification"]), ("Validation", ["Validation"]), ("Ready for release", ["Ready for release"]), ("Released", ["Released", "Validated", "Rejected"])]},
+    "dev": {"name": "Dev Board", "types": ["Task", "Bug", "Verification", "Sub-task"],
+            "columns": [("To Do", ["Discovery", "Reopened"]), ("Ready for development", ["Ready for development"]), ("In Progress", ["In Progress", "Blocked", "Test Design", "In execution", "Failed"]), ("Verification", ["Verification"]), ("Finished", ["Done", "Passed", "Rejected", "Duplicated"])]},
+}
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def cat(c): return dict(TYPES.get(c["type"], [])).get(c["status"], I)
+def tname(t):
+    for k in TYPES:
+        if k.lower() == t.lower(): return k
+    sys.exit(f"no card type '{t}'; options: {', '.join(TYPES)}")
+class Box:
+    def __init__(self, write=False): self.write = write
+    def __enter__(self):
+        os.makedirs(DIR, exist_ok=True)
+        self.lock = open(STORE + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try: self.d = json.load(open(STORE))
+        except FileNotFoundError: self.d = {"prefix": PRE, "next": 1, "cards": {}}
+        return self.d
+    def __exit__(self, et, *_):
+        if et is None and self.write:
+            tmp = STORE + ".tmp"; json.dump(self.d, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, STORE)
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+def card(d, key):
+    c = d["cards"].get(key.upper())
+    if not c: sys.exit(f"HTTP 404: {key} is not on the local board ({PRE}-n). A Jira card? Use team-jira.")
+    return c
+# ---- the same writing rules as team-jira
+def _clean(text):
+    if re.match(r"\s*\*\*\[[^\]]*\]\*\*", text): sys.exit("refused: no signatures on a card. Write the comment as __OWNER__, first person, without names (see PROTOCOL.md).")
+def _labels(ls):
+    bad = [l for l in ls if re.match(r"[+-]?(agent-|temp$)", l) and not l.startswith("-")]
+    if bad: sys.exit(f"refused: {bad} would show an agent on the card. Who holds a card is kept in team-card, not in labels.")
+    return ls
+def _names(*texts):
+    try: r = subprocess.run([f"{HOME}/.local/bin/team-names", "check", "--text", "\n".join(t for t in texts if t)], capture_output=True, text=True)
+    except Exception: return
+    if r.returncode == 1: sys.exit("refused: " + r.stderr.strip())
+# ---- JQL (the common part)
+TOK = re.compile(r'\s*(?:("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')|(\(|\)|,)|(!=|!~|>=|<=|=|~|>|<)|([^\s(),=!~<>]+(?:\(\))?))')
+def lex(s):
+    out, i = [], 0
+    while i < len(s):
+        m = TOK.match(s, i)
+        if not m:
+            if not s[i:].strip(): break
+            sys.exit(f"JQL not understood near: {s[i:i+30]}")
+        i = m.end()
+        if m.group(1): out.append(("str", m.group(1)[1:-1]))
+        elif m.group(2): out.append(("p", m.group(2)))
+        elif m.group(3): out.append(("op", m.group(3)))
+        else: out.append(("w", m.group(4)))
+    return out
+def when(v):
+    v = v.strip(); t = datetime.datetime.now(); low = v.lower()
+    if low == "now()": return t.isoformat()
+    if low == "startofday()": return t.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    if low == "startofweek()": return (t - datetime.timedelta(days=t.weekday())).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    m = re.fullmatch(r"([+-]?\d+)([mhdw])", low)
+    if m: return (t + datetime.timedelta(**{{"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}[m.group(2)]: int(m.group(1))})).isoformat()
+    if re.match(r"\d{4}-\d\d-\d\d", v): return v.replace(" ", "T")
+    sys.exit(f"date not understood: {v}")
+FIELDS = {"project": lambda k, c: PRE, "key": lambda k, c: k, "issuekey": lambda k, c: k, "id": lambda k, c: k, "issue": lambda k, c: k,
+          "status": lambda k, c: c["status"], "statuscategory": lambda k, c: {N: "To Do", I: "In Progress", D: "Done"}[cat(c)],
+          "type": lambda k, c: c["type"], "issuetype": lambda k, c: c["type"], "labels": lambda k, c: c["labels"], "parent": lambda k, c: c.get("parent") or "",
+          "summary": lambda k, c: c["summary"], "description": lambda k, c: c["description"],
+          "text": lambda k, c: "\n".join([c["summary"], c["description"]] + [x["text"] for x in c["comments"]]),
+          "comment": lambda k, c: "\n".join(x["text"] for x in c["comments"]),
+          "created": lambda k, c: c["created"], "updated": lambda k, c: c["updated"],
+          "statuscategorychangeddate": lambda k, c: c.get("statusChanged") or c["created"], "assignee": None, "reporter": None}
+DATES = ("created", "updated", "statuscategorychangeddate")
+def parse(toks):
+    pos = [0]
+    def peek(): return toks[pos[0]] if pos[0] < len(toks) else (None, None)
+    def take(): t = peek(); pos[0] += 1; return t
+    def kw(w): t = peek(); return t[0] == "w" and t[1].lower() == w
+    def value():
+        t = take()
+        if t[0] not in ("str", "w"): sys.exit("JQL: a value was expected")
+        return t[1]
+    def cond():
+        if peek() == ("p", "("):
+            take(); f = expr()
+            if take() != ("p", ")"): sys.exit("JQL: a bracket is not closed")
+            return f
+        if kw("not"): take(); f = cond(); return lambda k, c: not f(k, c)
+        name = value(); fl = name.lower()
+        if fl not in FIELDS: sys.exit(f"JQL: the local board does not know the field '{name}'. Known: {', '.join(FIELDS)}")
+        get = FIELDS[fl]; t = take(); neg = False
+        if get is None:   # assignee, reporter: every local card is __OWNER__'s, as in Jira
+            while peek()[0] is not None and not (kw("and") or kw("or") or peek() == ("p", ")")): take()
+            return lambda k, c: True
+        def same(a, v):
+            if fl in DATES: return a[:len(v)] == v
+            return v.lower() in [x.lower() for x in a] if isinstance(a, list) else a.lower() == v.lower()
+        if t[0] == "op":
+            op = t[1]; v = value()
+            if fl in DATES: v = when(v)
+            if op == "=": return lambda k, c: same(get(k, c), v)
+            if op == "!=": return lambda k, c: not same(get(k, c), v)
+            if op in ("~", "!~"):
+                words = v.lower().replace("*", "").split()
+                f = lambda k, c: all(w in str(get(k, c)).lower() for w in words)
+                return f if op == "~" else (lambda k, c: not f(k, c))
+            return lambda k, c: {">=": get(k, c) >= v, "<=": get(k, c) <= v, ">": get(k, c) > v, "<": get(k, c) < v}[op]
+        if t[0] == "w" and t[1].lower() == "not": neg = True; t = take()
+        if t[0] == "w" and t[1].lower() == "in":
+            if take() != ("p", "("): sys.exit("JQL: `in` needs a list in brackets")
+            vals = []
+            while True:
+                vals.append(value()); t = take()
+                if t == ("p", ")"): break
+                if t != ("p", ","): sys.exit("JQL: list not closed")
+            return lambda k, c: any(same(get(k, c), v) for v in vals) != neg
+        if t[0] == "w" and t[1].lower() == "is":
+            if kw("not"): take(); neg = True
+            if not (kw("empty") or kw("null")): sys.exit("JQL: `is` needs EMPTY")
+            take(); return lambda k, c: (not get(k, c)) != neg
+        sys.exit(f"JQL: the local board does not do '{name} {t[1]}…' (for example CHANGED / WAS are Jira only)")
+    def conj():
+        fs = [cond()]
+        while kw("and"): take(); fs.append(cond())
+        return lambda k, c: all(f(k, c) for f in fs)
+    def expr():
+        fs = [conj()]
+        while kw("or"): take(); fs.append(conj())
+        return lambda k, c: any(f(k, c) for f in fs)
+    f = expr()
+    if pos[0] < len(toks): sys.exit(f"JQL not understood near: {toks[pos[0]][1]}")
+    return f
+def search(d, jql):
+    m = re.search(r"\border\s+by\b(.*)$", jql, re.I | re.S); order = "updated desc"
+    if m: order = m.group(1).strip().split(",")[0]; jql = jql[:m.start()]
+    f = parse(lex(jql)) if jql.strip() else (lambda k, c: True)
+    hits = [(k, c) for k, c in d["cards"].items() if f(k, c)]
+    w = order.lower().split(); fld = w[0] if w else "updated"; desc = len(w) > 1 and w[1] == "desc"
+    num = lambda k: int(k.rsplit("-", 1)[1])
+    keyf = {"updated": lambda x: x[1]["updated"], "created": lambda x: x[1]["created"], "status": lambda x: x[1]["status"]}.get(fld, lambda x: num(x[0]))
+    return sorted(hits, key=keyf, reverse=desc)
+# ---- the evidence gate (opt-in: localBoard.evidenceGate)
+GATED = {"Feature": {"Validation", "Ready for release", "Released"}, "Implementation": {"Validation", "Ready for release", "Released"},
+         "Task": {"Done"}, "Bug": {"Done"}, "Sub-task": {"Done"}, "Verification": {"Passed"}}
+OVERRIDE = None
+def tool(n):
+    e = os.environ.get(n.upper().replace("-", "_") + "_BIN")   # TEAM_EVIDENCE_BIN / TEAM_VERIFY_BIN, for tests
+    return e or (f"{HOME}/.local/bin/{n}" if os.path.exists(f"{HOME}/.local/bin/{n}") else n)
+def gate(key, target):
+    """Refuse (exit 3) a gated move whose evidence is incomplete. Reads the card, never holds the lock while it runs the checks."""
+    with Box() as d: x = dict(card(d, key))
+    target = next((s for s, _ in TYPES.get(x["type"], []) if s.lower() == target.lower()), target)
+    why = None
+    if target in GATED.get(x["type"], set()):
+        r = subprocess.run([tool("team-evidence"), "check", key.upper(), "--json"], capture_output=True, text=True, env={**os.environ, "TEAM_DIR": TD})
+        if r.returncode:
+            try: why = "\n".join(f"  rule {p['rule']}: {p['missing']}\n    fix: {p['fix']}" for p in json.loads(r.stdout)["problems"])
+            except Exception: why = "  " + (r.stderr.strip() or r.stdout.strip() or f"team-evidence exit {r.returncode}")
+            why = f"the evidence for {key.upper()} is not complete:\n{why}"
+    elif target == "Ready for development" and x["type"] in ("Feature", "Implementation") and any(l.startswith("repo-") for l in x["labels"]):
+        r = subprocess.run([tool("team-verify"), "ready-check", key.upper()], capture_output=True, text=True, env={**os.environ, "TEAM_DIR": TD})
+        if r.returncode: why = "the kit rule: " + (r.stderr.strip() or r.stdout.strip())
+    if not why: return
+    if OVERRIDE is None:
+        print(f"refused: {key.upper()} cannot move to {target}: {why}\n(only __OWNER__ may write --override \"reason\")", file=sys.stderr); sys.exit(3)
+    if not OVERRIDE.strip(): sys.exit("refused: --override needs a reason")
+    with Box(True) as d:
+        y = card(d, key); y["comments"].append({"at": now(), "text": f"GATE OVERRIDE: {OVERRIDE}"}); y["updated"] = now()
+    with open(f"{DIR}/gate-overrides.jsonl", "a") as f: f.write(json.dumps({"at": now(), "key": key.upper(), "to": target, "reason": OVERRIDE, "missing": why}) + "\n")
+# ---- commands
+a = sys.argv[1:]
+if "--override" in a:
+    i = a.index("--override"); OVERRIDE = a[i + 1] if i + 1 < len(a) else ""; del a[i:i + 2]
+if not a or a[0] in ("-h", "--help"): print(__doc__); sys.exit()
+c = a[0]
+if c == "comment" and len(a) > 2: _clean(a[2]); _names(a[2])
+if c == "create" and len(a) > 5: _labels(a[5].split(","))
+if c == "create" and len(a) > 3: _names(*a[3:5])
+if c == "label": _labels(a[2:])
+if c == "search":
+    with Box() as d: hits = search(d, a[1] if len(a) > 1 else "")
+    for k, x in hits[:int(a[2]) if len(a) > 2 else 50]: print(f'{k}\t{x["status"]}\t{x["type"]}\t{",".join(x["labels"])}\t{x["summary"]}')
+elif c == "get":
+    with Box() as d:
+        x = card(d, a[1]); key = a[1].upper()
+        print(f'{key} [{x["type"]}] {x["summary"]}\nStatus: {x["status"]}  Labels: {", ".join(x["labels"])}')
+        if x.get("parent"): print("Parent:", x["parent"])
+        for l in x["links"]: print("Link:", l["type"], l["key"], (d["cards"].get(l["key"]) or {}).get("summary", ""))
+        for k2, y in d["cards"].items():
+            for l in y["links"]:
+                if l["key"] == key: print("Link:", l["type"], k2, y["summary"])
+        for at in x["attachments"]: print("Attachment:", at)
+        print("\n--- Description ---\n" + x["description"] + "\n")
+        for cm in x["comments"]: print(f'--- {cm["at"][:16]} ---\n{cm["text"]}\n')
+elif c == "comment":
+    with Box(True) as d:
+        x = card(d, a[1]); x["comments"].append({"at": now(), "text": a[2]}); x["updated"] = now(); print("commented", len(x["comments"]))
+elif c == "create":
+    if len(a) < 5: sys.exit("usage: team-board create PROJECT Type 'Summary' 'Description' [label,label] [parentKey]")
+    proj, typ, summ, desc = a[1:5]
+    if proj.upper() != PRE: sys.exit(f"the local board's project is {PRE} (for Jira project {proj} use team-jira)")
+    typ = tname(typ); labels = a[5].split(",") if len(a) > 5 and a[5] else []
+    with Box(True) as d:
+        if len(a) > 6: card(d, a[6])
+        key = f'{PRE}-{d["next"]}'; d["next"] += 1; t = now()
+        d["cards"][key] = {"type": typ, "summary": summ, "description": desc, "status": TYPES[typ][0][0], "labels": labels, "parent": a[6].upper() if len(a) > 6 else None,
+                           "links": [], "attachments": [], "comments": [], "created": t, "updated": t, "statusChanged": t}
+    print(key)
+elif c == "label":
+    with Box(True) as d:
+        x = card(d, a[1])
+        for op in a[2:]:
+            if op[0] == "+" and op[1:] not in x["labels"]: x["labels"].append(op[1:])
+            if op[0] == "-" and op[1:] in x["labels"]: x["labels"].remove(op[1:])
+        x["updated"] = now()
+    print("ok")
+elif c == "transitions":
+    with Box() as d: x = card(d, a[1])
+    for i, (s, _) in enumerate(TYPES[x["type"]], 1):
+        if s != x["status"]: print(i, s, "->", s)
+elif c == "move":
+    if CFG.get("evidenceGate"): gate(a[1], a[2])
+    with Box(True) as d:
+        x = card(d, a[1]); opts = [s for s, _ in TYPES[x["type"]]]
+        hit = [s for s in opts if s.lower() == a[2].lower()]
+        if not hit: sys.exit("no transition to " + a[2] + "; options: " + ", ".join(s for s in opts if s != x["status"]))
+        was = cat(x); x["status"] = hit[0]; x["updated"] = now()
+        if cat(x) != was: x["statusChanged"] = now()
+    print("moved to", hit[0])
+elif c == "link":
+    with Box(True) as d:
+        x = card(d, a[1]); card(d, a[2]); l = {"type": a[3] if len(a) > 3 else "Relates", "key": a[2].upper()}
+        if l not in x["links"]: x["links"].append(l); x["updated"] = now()
+    print("linked")
+elif c == "attach":
+    with Box(True) as d:
+        x = card(d, a[1]); dest = f"{DIR}/files/{a[1].upper()}"; os.makedirs(dest, exist_ok=True)
+        for p in a[2:]:
+            shutil.copy2(p, dest); n = os.path.basename(p)
+            if n not in x["attachments"]: x["attachments"].append(n)
+            print("attached", p)
+        x["updated"] = now()
+elif c == "board":
+    which = [a[1].lower()] if len(a) > 1 else list(BOARDS)
+    with Box() as d: cards = d["cards"]
+    for w in which:
+        b = BOARDS.get(w) or sys.exit("boards: " + ", ".join(BOARDS))
+        print(f'== {b["name"]} ({CFG.get("name", PRE)}, local) ==')
+        for col, sts in b["columns"]:
+            rows = [(k, x) for k, x in cards.items() if x["type"] in b["types"] and x["status"] in sts]
+            print(f"{col} ({len(rows)})")
+            for k, x in sorted(rows, key=lambda r: int(r[0].rsplit("-", 1)[1])): print(f'  {k:9} {x["type"]:14} {x["summary"][:90]}' + (f'  [{x["status"]}]' if x["status"] != col else ""))
+elif c == "info":
+    print(f'Local board "{CFG.get("name", PRE)}"  project/prefix: {PRE}  store: {STORE}')
+    for t, sts in TYPES.items(): print(f"{t}: " + " | ".join(s for s, _ in sts))
+    for w, b in BOARDS.items(): print(f'{b["name"]} (team-board board {w}): ' + ", ".join(b["types"]))
+else: print(__doc__); sys.exit(1)

@@ -1,0 +1,28 @@
+---
+cli: control-<<app>>
+sources: [<<src/feature/**>>, <<src/api/feature.*>>]
+last-verified: <<sha>>
+---
+
+# <<Feature name>>
+
+<<One sentence from the user's point of view: what it is and why they use it.>>
+
+## Sub-features
+
+- <<each thing a user can do here, one line each>>
+
+## How to get to it (user POV)
+
+<<Every entry point a user has: menu, URL, shortcut, command. Preconditions (login, seed data).>>
+
+## Driving it with control-<<app>>
+
+    node <<kit>>/control-<<app>>.mjs <<command>> '<<selector>>' --checkout <lane> --json
+    node <<kit>>/control-<<app>>.mjs assert <<kind>> '<<selector>>' <<want>> --checkout <lane> --json
+
+The observable end state that proves it works: <<...>>.
+
+## Gotchas
+
+- <<preconditions the seed data lacks, timing, flaky spots; a journey that cannot pass says why here, never weakened>>

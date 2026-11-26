@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""team-evidence: one evidence folder and manifest per card, and the rules a verdict must meet. Every command whose
+result you will cite runs through `team-evidence run`, which records what ran, where, at which commit, and what it left.
+
+  team-evidence init KEY --repo OWNER/NAME --author <herdrName> [--claims FILE] [--new-feature "reason"] [--no-behavior]
+  team-evidence claims KEY [--sync] [--json]   read and validate claim.md (each claim: id, text, tier V0-V5, features)
+  team-evidence run KEY --kind KIND --claim N --tier Vn [--ref SHA] [--cwd DIR] [--expect-fail] -- CMD...
+        KIND: baseline | treatment | self-check | repro | mutation | conformance | main-recheck
+        runs CMD with EVIDENCE_OUT=<card>/runs/<rid>/out; records argv, cwd, git SHA and patch-id, exit, duration,
+        stdout/stderr, new files under out/, and the assertion counts a kit CLI prints with --json.
+        Exits with CMD's own exit code (70 if recording failed).
+  team-evidence add KEY --run RID FILE...      add files a tool made elsewhere (video, spec, theorem statement)
+  team-evidence skip KEY --claim N --path "..." --blocked-by "..." --closest "..."
+  team-evidence verdict KEY VERIFIED|NOT_VERIFIED|INCONCLUSIVE --by <herdrName> [--head SHA] [--pr URL=PASS|PASS+NOTES|FAIL ...] --note "..."
+  team-evidence approve KEY --theorem <team-ask request id>     V5: the statement __OWNER__ answered yes to
+  team-evidence check KEY [--json]             the gate rules; exit 0, or 2 with each missing item and the command that fixes it
+  team-evidence comment KEY                    the verdict comment, ready for `team-board comment KEY "..."`
+  team-evidence page KEY --from <herdrName> [--dry-run]   build page/index.html and publish it on :4340 (team-artifact)
+  team-evidence attach KEY [--dry-run]         team-board attach: manifest.json, verdict.md, mp4s (zips over 20 MB are linked)
+  team-evidence rerun KEY --ref main [--cwd DIR] [--dry-run]   replay the recorded treatment commands as kind main-recheck
+  team-evidence prune --older 14d [--dry-run]  delete raw traces and webm of cards in a done status; keep manifests, verdicts, attached files
+  team-evidence df                             free disk; exit 3 below verification.diskAlarmGiB
+  team-evidence show KEY [--json]              the manifest
+
+Folder: <team>/evidence/<KEY>/{claim.md, manifest.json, runs/<rid>/{argv.json, stdout.txt, stderr.txt, out/}, verdict.md, decisions.tsv, page/}.
+The team is TEAM_DIR, else ~/.omniloy-misc. Exit codes: 0 ok, 1 usage, 2 check failed, 3 disk alarm, 70 recording failed.
+Example: team-evidence run MSC-12 --kind treatment --claim 1 --tier V1 --cwd ~/.omniloy-misc/work/lanes/MSC-12-1 -- node control-office.mjs assert text '#count' 4 --json"""
+import sys, os, json, re, subprocess, shutil, time, datetime, fcntl, glob, argparse, urllib.request, html
+
+HOME = os.path.expanduser("~")
+TD = os.environ.get("TEAM_DIR") or f"{HOME}/.omniloy-misc"
+def team():
+    try: return json.load(open(f"{TD}/team.json"))
+    except Exception: return {}
+VER = team().get("verification") or {}
+EVD = os.path.join(TD, VER.get("evidenceDir", "evidence"))
+KINDS = ("baseline", "treatment", "self-check", "repro", "mutation", "conformance", "main-recheck")
+TIERS = ("V0", "V1", "V2", "V3", "V4", "V5")
+ARTIFACTS = os.environ.get("TEAM_ARTIFACTS_URL", "http://127.0.0.1:4340")
+REQUESTS = os.environ.get("TEAM_REQUESTS", f"{HOME}/.omniloy-team/requests.json")
+DONE = {"Done", "Released", "Passed", "Rejected", "Duplicated", "Validated"}
+
+def die(msg, code=1): print(msg, file=sys.stderr); sys.exit(code)
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+def card_dir(key):
+    if not re.fullmatch(r"[A-Z][A-Z0-9]+-\d+", key or ""): die(f"not a card key: {key!r} (like MSC-12)")
+    return os.path.join(EVD, key)
+class Manifest:
+    """manifest.json under a lock; written atomically."""
+    def __init__(self, key, write=False, must=True): self.key, self.write, self.must = key, write, must
+    def __enter__(self):
+        d = card_dir(self.key); self.path = f"{d}/manifest.json"
+        if self.must and not os.path.exists(self.path): die(f"no evidence folder for {self.key}: run `team-evidence init {self.key} --repo OWNER/NAME --author <who writes the code>` first")
+        os.makedirs(d, exist_ok=True)
+        self.lock = open(f"{d}/.lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try: self.m = json.load(open(self.path))
+        except FileNotFoundError: self.m = None
+        return self.m
+    def __exit__(self, et, *_):
+        if et is None and self.write and self.m is not None:
+            tmp = self.path + ".tmp"; json.dump(self.m, open(tmp, "w"), indent=1, ensure_ascii=False); os.replace(tmp, self.path)
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+def load(key):
+    with Manifest(key) as m: return m
+def git(cwd, *a):
+    try:
+        r = subprocess.run(["git", "-C", cwd, *a], capture_output=True, text=True, timeout=30)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except Exception: return None
+def patch_id(cwd, sha):
+    # the nearest merge-base among the usual main refs (a lane's local main can be stale, origin/main can be too)
+    bases = [x for x in (git(cwd, "merge-base", b, sha) for b in ("origin/main", "main", "origin/master", "master")) if x]
+    if not bases: return None
+    base = min(bases, key=lambda b: int(git(cwd, "rev-list", "--count", f"{b}..{sha}") or 10**9))
+    try:
+        d = subprocess.run(["git", "-C", cwd, "diff", f"{base}..{sha}"], capture_output=True, timeout=60).stdout
+        if not d.strip(): return "empty"
+        p = subprocess.run(["git", "patch-id", "--stable"], input=d, capture_output=True, timeout=60).stdout.decode().split()
+        return p[0] if p else None
+    except Exception: return None
+
+# ---------------------------------------------------------------- claims
+ROW = re.compile(r"^\|\s*(\d+)\s*\|(.+?)\|\s*([V0-5+ ]+?)\s*\|(.*?)\|\s*$")
+def parse_claims(key):
+    f = f"{card_dir(key)}/claim.md"
+    if not os.path.exists(f): return None, [f"claim.md is missing: write {f} (template: mx-verify-plan/references/claim-template.md)"]
+    claims, errs = [], []
+    for ln in open(f, encoding="utf-8"):
+        m = ROW.match(ln.strip())
+        if not m: continue
+        tiers = [t.strip() for t in m.group(3).split("+") if t.strip()]
+        bad = [t for t in tiers if t not in TIERS]
+        if not tiers or bad: errs.append(f"claim {m.group(1)}: tier {m.group(3).strip()!r} is not V0-V5 (join several with +)"); continue
+        claims.append({"id": int(m.group(1)), "text": m.group(2).strip(), "tier": "+".join(tiers), "features": [x.strip() for x in m.group(4).split(",") if x.strip()]})
+    if not claims and not errs: errs.append("claim.md has no claim rows: | id | claim | tier | features |")
+    ids = [c["id"] for c in claims]
+    if len(ids) != len(set(ids)): errs.append("claim ids repeat")
+    return claims, errs
+def top(tier): return max(int(t[1]) for t in tier.split("+"))
+def has(tier, n): return any(int(t[1]) >= n for t in tier.split("+"))
+
+# ---------------------------------------------------------------- commands
+def c_init(a):
+    d = card_dir(a.key)
+    with Manifest(a.key, write=True, must=False) as m:
+        if m is not None: die(f"{a.key} already has an evidence folder ({d}); `team-evidence show {a.key}`")
+    os.makedirs(f"{d}/runs", exist_ok=True)
+    if a.claims: shutil.copyfile(a.claims, f"{d}/claim.md")
+    man = {"key": a.key, "repo": a.repo, "author": a.author, "verifier": None, "created": now(),
+           "newFeature": a.new_feature, "noBehavior": a.no_behavior, "claims": [], "runs": [], "skips": [], "prs": [],
+           "head": None, "verdict": None, "note": "", "page": None, "approvals": {}, "attached": []}
+    json.dump(man, open(f"{d}/manifest.json", "w"), indent=1, ensure_ascii=False)
+    if a.claims: c_claims(argparse.Namespace(key=a.key, sync=True, json=False), quiet=True)
+    print(d)
+def c_claims(a, quiet=False):
+    claims, errs = parse_claims(a.key)
+    if a.sync and claims is not None and not errs:
+        with Manifest(a.key, write=True) as m: m["claims"] = claims
+    if a.json: print(json.dumps({"ok": not errs, "claims": claims or [], "errors": errs}))
+    elif not quiet:
+        for c in claims or []: print(f'{c["id"]}\t{c["tier"]}\t{",".join(c["features"])}\t{c["text"]}')
+        for e in errs: print("ERROR " + e, file=sys.stderr)
+    if errs: sys.exit(2)
+def assertion_counts(text):
+    run = failed = 0
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if not (ln.startswith("{") and '"assertions"' in ln): continue
+        try: x = json.loads(ln).get("assertions") or {}
+        except Exception: continue
+        run += int(x.get("run", 0)); failed += int(x.get("failed", 0))
+    return run, failed
+def c_run(a):
+    if not a.cmd: die("nothing to run: put the command after --")
+    if a.kind not in KINDS: die(f"--kind must be one of {', '.join(KINDS)}")
+    if a.tier not in TIERS: die("--tier must be V0..V5")
+    cwd = os.path.abspath(os.path.expanduser(a.cwd or os.getcwd()))
+    if not os.path.isdir(cwd): die(f"--cwd {cwd} does not exist")
+    sha = git(cwd, "rev-parse", "HEAD")
+    if a.ref:
+        want = git(cwd, "rev-parse", a.ref)
+        if not want or want != sha: die(f"--ref {a.ref} is not the checked-out commit in {cwd} (HEAD {sha}); check it out first: git -C {cwd} checkout --detach {a.ref}")
+    if os.path.exists(f"{card_dir(a.key)}/claim.md"):
+        claims, errs = parse_claims(a.key)
+        if errs: die(f"claim.md does not parse ({'; '.join(errs)}); fix it, then `team-evidence claims {a.key} --sync`. No run is recorded against stale claims.")
+    else: claims = None
+    with Manifest(a.key, write=True) as m:
+        if claims is not None and claims != m["claims"]:
+            m["claims"] = claims; print(f"note: claim.md changed; synced the manifest's claims before this run", file=sys.stderr)
+        n = 1 + max([int(r["id"][1:]) for r in m["runs"]] or [0]); rid = f"r{n}"
+        if m["claims"] and a.claim not in [c["id"] for c in m["claims"]]: die(f"claim {a.claim} is not in claim.md ({[c['id'] for c in m['claims']]}); `team-evidence claims {a.key} --sync`")
+        m["runs"].append({"id": rid, "kind": a.kind, "claim": a.claim, "tier": a.tier, "status": "running", "started": now()})
+    rd = f"{card_dir(a.key)}/runs/{rid}"; out = f"{rd}/out"; os.makedirs(out, exist_ok=True)
+    rec = {"id": rid, "kind": a.kind, "claim": a.claim, "tier": a.tier, "sha": sha, "patchId": patch_id(cwd, sha) if sha else None,
+           "argv": a.cmd, "cwd": cwd, "expectFail": a.expect_fail, "started": now()}
+    json.dump(rec, open(f"{rd}/argv.json", "w"), indent=1)
+    t0 = time.time(); code = 70
+    try:
+        with open(f"{rd}/stdout.txt", "wb") as so, open(f"{rd}/stderr.txt", "wb") as se:
+            p = subprocess.Popen(a.cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={**os.environ, "EVIDENCE_OUT": out, "EVIDENCE_KEY": a.key, "EVIDENCE_RUN": rid})
+            import threading
+            def pump(src, dst, echo):
+                for chunk in iter(lambda: src.read1(65536), b""): dst.write(chunk); dst.flush(); echo.buffer.write(chunk); echo.flush()
+            ts = [threading.Thread(target=pump, args=(p.stdout, so, sys.stdout)), threading.Thread(target=pump, args=(p.stderr, se, sys.stderr))]
+            for t in ts: t.start()
+            code = p.wait()
+            for t in ts: t.join()
+    except FileNotFoundError: print(f"command not found: {a.cmd[0]}", file=sys.stderr); code = 127
+    except Exception as e: print(f"team-evidence: recording failed: {e}", file=sys.stderr); code = 70
+    ar, af = assertion_counts(open(f"{rd}/stdout.txt", errors="replace").read())
+    files = sorted(os.path.relpath(p, card_dir(a.key)) for p in glob.glob(f"{out}/**", recursive=True) if os.path.isfile(p))
+    rec.update({"exit": code, "ms": int((time.time() - t0) * 1000), "assertions": ar, "failed": af, "files": files, "status": "done", "ended": now()})
+    json.dump(rec, open(f"{rd}/argv.json", "w"), indent=1)
+    with Manifest(a.key, write=True) as m:
+        m["runs"] = [rec if r["id"] == rid else r for r in m["runs"]]
+    print(f"team-evidence: {rid} {a.kind} claim {a.claim} {a.tier} exit {code}" + (f", assertions {ar - af}/{ar}" if ar else "") + f", {len(files)} file(s)" + (" (expected to fail)" if a.expect_fail else ""), file=sys.stderr)
+    sys.exit(code)
+def c_add(a):
+    with Manifest(a.key, write=True) as m:
+        r = next((r for r in m["runs"] if r["id"] == a.run), None)
+        if not r: die(f"no run {a.run} on {a.key}; runs: {', '.join(x['id'] for x in m['runs']) or 'none'}")
+        out = f"{card_dir(a.key)}/runs/{a.run}/out"; os.makedirs(out, exist_ok=True)
+        for f in a.files:
+            if not os.path.isfile(f): die(f"no such file: {f}")
+            shutil.copy2(f, out); rel = os.path.relpath(f"{out}/{os.path.basename(f)}", card_dir(a.key))
+            r.setdefault("files", []); r["files"].append(rel) if rel not in r["files"] else None
+            print("added", rel)
+def c_skip(a):
+    if not (a.path and a.blocked_by and a.closest): die("a skip needs --path, --blocked-by and --closest (the closest real path you did drive)")
+    with Manifest(a.key, write=True) as m:
+        m["skips"].append({"claim": a.claim, "path": a.path, "blockedBy": a.blocked_by, "closest": a.closest, "at": now()})
+    print("skip recorded")
+def c_verdict(a):
+    v = a.verdict.upper().replace(" ", "_")
+    if v not in ("VERIFIED", "NOT_VERIFIED", "INCONCLUSIVE"): die("verdict: VERIFIED, NOT_VERIFIED or INCONCLUSIVE")
+    prs = []
+    for p in a.pr or []:
+        if "=" not in p: die(f"--pr {p}: use URL=PASS|PASS+NOTES|FAIL")
+        u, pv = p.rsplit("=", 1)
+        if pv not in ("PASS", "PASS+NOTES", "FAIL"): die(f"--pr {p}: verdict must be PASS, PASS+NOTES or FAIL")
+        prs.append({"url": u, "verdict": pv})
+    head = a.head
+    if v == "VERIFIED" and not head and prs and shutil.which("gh"):
+        r = subprocess.run(["gh", "pr", "view", prs[0]["url"], "--json", "headRefOid", "-q", ".headRefOid"], capture_output=True, text=True)
+        head = r.stdout.strip() if r.returncode == 0 else None
+    if v == "VERIFIED" and not head: die("VERIFIED needs --head <PR head sha> (or a --pr URL=... that `gh pr view` can read): the gate ties the treatment run to the PR head")
+    with Manifest(a.key, write=True) as m:
+        if a.by == m["author"]: print(f"warning: {a.by} wrote the code; their verdict is a self-check and `team-evidence check` will refuse it", file=sys.stderr)
+        m.update({"verdict": v, "verifier": a.by, "note": a.note or "", "verdictAt": now()})
+        if head: m["head"] = head
+        if prs: m["prs"] = prs
+        mm = dict(m)
+    open(f"{card_dir(a.key)}/verdict.md", "w").write(comment_text(mm) + "\n")
+    tiers = sorted({f"tier-v{t[1]}" for c in mm["claims"] for t in c["tier"].split("+")})
+    if tiers and not a.no_label and shutil.which("team-board"):
+        r = subprocess.run(["team-board", "label", a.key, *[f"+{t}" for t in tiers]], capture_output=True, text=True, env={**os.environ, "TEAM_DIR": TD})
+        if r.returncode: print(f"note: could not label the card ({r.stderr.strip()[:120]}); labels wanted: {' '.join(tiers)}", file=sys.stderr)
+    print(f"{v.replace('_', ' ')} recorded for {a.key}")
+def c_approve(a):
+    with Manifest(a.key, write=True) as m: m["approvals"]["theorem"] = str(a.theorem)
+    print("theorem approval request recorded:", a.theorem)
+
+# ---------------------------------------------------------------- the gate
+def kit_for(repo):
+    try: return (json.load(open(f"{TD}/verify/registry.json")).get("repos") or {}).get(repo, {}).get("kit")
+    except Exception: return None
+def request_answered_yes(rid):
+    try: items = json.load(open(REQUESTS)).get("items", [])
+    except Exception: return False
+    x = next((i for i in items if str(i.get("id")) == str(rid)), None)
+    return bool(x and x.get("status") in ("answered", "read") and re.match(r"\s*(yes|approved|approve|ok|s[ií])\b", x.get("answer", ""), re.I))
+def page_ok(url):
+    if not url or not url.startswith(ARTIFACTS): return False
+    try: return urllib.request.urlopen(url, timeout=4).status == 200
+    except Exception: return False
+def check(m):
+    """Every gate rule; returns a list of problems {rule, claim, missing, fix}."""
+    P = []; key = m["key"]
+    def miss(rule, claim, what, fix): P.append({"rule": rule, "claim": claim, "missing": what, "fix": fix})
+    claims, errs = parse_claims(key)
+    if errs: miss(1, None, "; ".join(errs), f"write claim.md, then team-evidence claims {key} --sync"); return P
+    if [c["id"] for c in claims] != [c["id"] for c in m["claims"]] or any(c["tier"] != d["tier"] for c, d in zip(claims, m["claims"])):
+        miss(1, None, "claim.md and the manifest disagree", f"team-evidence claims {key} --sync")
+    runs = [r for r in m["runs"] if r.get("status") == "done"]
+    counted = [r for r in runs if r["kind"] != "self-check"]
+    head = m.get("head")
+    if not head and not m.get("noBehavior"):
+        miss(2, None, "no PR head recorded, so no treatment run can be tied to it", f"team-evidence verdict {key} <VERDICT> --by <you> --head <PR head sha> --note \"...\"")
+    def same(sha): return bool(head and sha and (sha == head or (len(head) >= 7 and sha.startswith(head))))
+    head_pid = next((r.get("patchId") for r in runs if same(r.get("sha")) and r.get("patchId")), None)
+    def at_head(r): return same(r.get("sha")) or (head_pid and r.get("patchId") == head_pid and head_pid != "empty")
+    if m.get("noBehavior"):
+        if not any(r["exit"] == 0 and r["tier"] == "V0" for r in counted): miss(12, None, "no-behavior card without a passing V0 run", f"team-evidence run {key} --kind treatment --claim 1 --tier V0 -- <tsc/lint/test>")
+    else:
+        for c in claims:
+            cid, tier = c["id"], c["tier"]
+            mine = [r for r in counted if r["claim"] == cid]
+            tr = [r for r in mine if r["kind"] == "treatment" and r["exit"] == 0 and at_head(r)]
+            skips = [s for s in m["skips"] if s["claim"] == cid]
+            if not tr:
+                if skips: miss(9, cid, "covered only by skips: the best verdict is INCONCLUSIVE", "drive the closest real path, or record INCONCLUSIVE")
+                else: miss(2, cid, f"no passing treatment run at the head {head or '(unknown)'} (or a commit with the same patch-id); self-check runs never count",
+                           f"team-evidence run {key} --kind treatment --claim {cid} --tier {tier.split('+')[-1]} --cwd <lane at the PR head> -- <command>")
+            if not m.get("newFeature") and not any(r["kind"] == "baseline" for r in mine):
+                miss(3, cid, "no baseline run", f"team-evidence run {key} --kind baseline --claim {cid} --tier {tier.split('+')[0]} --cwd <lane at main> -- <command> (or init with --new-feature \"reason\")")
+            if has(tier, 1):
+                vid = any(f.endswith(".mp4") for r in tr for f in r.get("files", []))
+                asr = any(r.get("assertions", 0) > 0 and r.get("failed", 0) == 0 for r in tr)
+                if not vid: miss(4, cid, "V1: no .mp4 video in a passing treatment run", "record start / record stop through the kit CLI inside team-evidence run")
+                if not asr: miss(4, cid, "V1: no assertion run (assertions > 0, failed = 0); a video alone does not judge", "kit CLI assert ... --json inside team-evidence run")
+            def failed_mut(): return any(r["kind"] == "mutation" and r.get("expectFail") and r["exit"] != 0 for r in mine)
+            if has(tier, 2) and not failed_mut(): miss(5, cid, f"{tier}: no mutation run that failed as expected", f"team-evidence run {key} --kind mutation --claim {cid} --tier {tier.split('+')[-1]} --expect-fail --cwd <mutant> -- <same check>")
+            if "V3" in tier.split("+"):
+                if not any(r["tier"] == "V3" for r in tr): miss(6, cid, "V3: no passing Bombadil run (exit 0, no violated property)", "mx-bombadil step 3")
+                kit = kit_for(m["repo"])
+                regs = glob.glob(f"{kit}/bombadil/regressions/*.trace") if kit else []
+                for t in regs:
+                    if not any(os.path.basename(t) in " ".join(r["argv"]) and r["exit"] == 0 for r in mine): miss(6, cid, f"V3: regression {os.path.basename(t)} was not replayed", f"bombadil browser test --reproduce={t} <origin> inside team-evidence run")
+            if "V4" in tier.split("+"):
+                if not any(r["kind"] == "conformance" and r["exit"] == 0 for r in mine): miss(7, cid, "V4: no passing conformance run (real events against the model)", "mx-create-formal-verification-skill references/conformance.md")
+            if "V5" in tier.split("+"):
+                if not any("lake" in r["argv"][:2] and "build" in r["argv"] and r["exit"] == 0 for r in mine): miss(8, cid, "V5: no `lake build` with exit 0", f"team-evidence run {key} --kind treatment --claim {cid} --tier V5 -- lake build")
+                if not any(r["argv"][:1] == ["grep"] and "sorry" in " ".join(r["argv"]) and r["exit"] == 1 for r in mine): miss(8, cid, "V5: no empty grep for sorry|admit|axiom", f"team-evidence run {key} --kind treatment --claim {cid} --tier V5 --expect-fail -- grep -RnE 'sorry|admit|axiom' <dir>")
+                th = m["approvals"].get("theorem")
+                if not th or not request_answered_yes(th): miss(8, cid, "V5: the theorem statement is not approved by __OWNER__", f"team-ask request --to __OWNER_ID__ ... then team-evidence approve {key} --theorem <id>")
+    for s in m["skips"]:
+        if not (s.get("blockedBy") and s.get("closest")): miss(9, s["claim"], f"skip {s.get('path')!r} lacks blocked-by or closest path", "team-evidence skip with both")
+    if m.get("verdict") != "VERIFIED": miss(10, None, f"verdict is {m.get('verdict') or 'not recorded'}", f"team-evidence verdict {key} VERIFIED --by <verifier> ...")
+    elif m.get("verifier") == m.get("author"): miss(10, None, "the verifier wrote the code; only a verdict from someone else counts", "a different person runs mx-verify-this")
+    if any(p["verdict"] == "FAIL" for p in m.get("prs", [])): miss(10, None, "a PR in the stack is FAIL", "fix it, or leave it out of the verified run")
+    if not page_ok(m.get("page")): miss(11, None, f"evidence page not published or not answering ({m.get('page') or 'none'})", f"team-evidence page {key} --from <you>")
+    return P
+def c_check(a):
+    m = load(a.key); P = check(m)
+    if a.json: print(json.dumps({"ok": not P, "key": a.key, "problems": P}))
+    else:
+        for p in P: print(f"rule {p['rule']}" + (f" claim {p['claim']}" if p["claim"] is not None else "") + f": {p['missing']}\n    fix: {p['fix']}")
+        print(f"{a.key}: " + ("all gate rules hold" if not P else f"{len(P)} problem(s)"))
+    sys.exit(2 if P else 0)
+
+# ---------------------------------------------------------------- reports
+def comment_text(m):
+    v = (m.get("verdict") or "NO VERDICT").replace("_", " ")
+    head = m.get("head") or next((r["sha"] for r in reversed(m["runs"]) if r.get("kind") == "treatment" and r.get("sha")), None)
+    bar = "+".join(sorted({t for c in m["claims"] for t in c["tier"].split("+")})) or "?"
+    L = [f"{v}: {m['key']} at {(head or '?')[:7]}. Bar: {bar}.", "| tier | what ran | result | evidence |"]
+    for c in m["claims"]:
+        rs = [r for r in m["runs"] if r.get("claim") == c["id"] and r.get("kind") != "self-check" and r.get("status") == "done"]
+        tr = [r for r in rs if r["kind"] == "treatment"]; ok = [r for r in tr if r["exit"] == 0]
+        asr = sum(r.get("assertions", 0) for r in ok); kinds = sorted({r["kind"] for r in rs})
+        ev = sorted({("video" if f.endswith(".mp4") else "trace" if f.endswith((".zip", ".trace")) else "chart" if f.endswith(".mmd") else None) for r in rs for f in r.get("files", [])} - {None})
+        L.append(f"| {c['tier']} | claim {c['id']}: {c['text'][:70]} ({', '.join(kinds) or 'nothing'}) | {len(ok)}/{len(tr)} treatment pass" + (f", {asr} assertions" if asr else "") + f" | {', '.join(ev) or 'logs'} |")
+    if m.get("prs"): L.append("PRs: " + ", ".join(f"{p['url'].rsplit('/', 1)[-1] if '/pull/' in p['url'] else p['url']} {p['verdict']}" for p in m["prs"]))
+    for s in m["skips"]: L.append(f"Not covered: {s['path']} ({s['blockedBy']}); covered {s['closest']} instead.")
+    if m.get("note"): L.append(m["note"])
+    if m.get("page"): L.append(f"Page: {m['page']}")
+    return "\n".join(L)
+def c_comment(a): print(comment_text(load(a.key)))
+def c_show(a):
+    m = load(a.key); print(json.dumps(m, indent=1, ensure_ascii=False) if a.json else comment_text(m))
+def c_page(a):
+    m = load(a.key); d = card_dir(a.key); pg = f"{d}/page"
+    if os.path.isdir(pg): shutil.rmtree(pg)
+    os.makedirs(f"{pg}/files", exist_ok=True)
+    def esc(s): return html.escape(str(s))
+    rows = []
+    for r in m["runs"]:
+        if r.get("status") != "done": continue
+        media = []
+        for f in r.get("files", []):
+            src = f"{d}/{f}"; name = f"{r['id']}-{os.path.basename(f)}"
+            if f.endswith((".mp4", ".png", ".jpg", ".gif", ".mmd", ".md", ".json", ".txt", ".out")) and os.path.getsize(src) < 50_000_000:
+                shutil.copy2(src, f"{pg}/files/{name}")
+                if f.endswith(".mp4"): media.append(f'<video controls preload="metadata" src="files/{esc(name)}"></video>')
+                elif f.endswith((".png", ".jpg", ".gif")): media.append(f'<img alt="{esc(name)}" src="files/{esc(name)}">')
+                elif f.endswith(".mmd"): media.append(f'<pre class="mermaid">{esc(open(src).read())}</pre>')
+                else: media.append(f'<a href="files/{esc(name)}">{esc(os.path.basename(f))}</a>')
+            elif f.endswith(".zip"): media.append(f'<code>npx playwright show-trace {esc(src)}</code>')
+            elif f.endswith(".trace"): media.append(f'<code>bombadil browser inspect {esc(src)}</code>')
+        cls = "ok" if r["exit"] == 0 or (r.get("expectFail") and r["exit"] != 0) else "bad"
+        rows.append(f'<tr class="{cls}"><td>{esc(r["id"])}</td><td>{esc(r["kind"])}</td><td>{esc(r["claim"])}</td><td>{esc(r["tier"])}</td><td>{esc((r.get("sha") or "")[:7])}</td><td>{esc(r["exit"])}{" (expected fail)" if r.get("expectFail") else ""}</td><td>{esc(r.get("assertions", 0) - r.get("failed", 0))}/{esc(r.get("assertions", 0))}</td><td><code>{esc(" ".join(r["argv"]))[:300]}</code><div class="media">{"".join(media)}</div></td></tr>')
+    dec = f"{d}/decisions.tsv"
+    dec_html = "<pre>" + esc(open(dec).read()) + "</pre>" if os.path.exists(dec) else "<p>No decision log.</p>"
+    claims = "".join(f"<li><b>{esc(c['id'])}</b> [{esc(c['tier'])}] {esc(c['text'])}</li>" for c in m["claims"])
+    skips = "".join(f"<li>{esc(s['path'])}: blocked by {esc(s['blockedBy'])}; closest {esc(s['closest'])}</li>" for s in m["skips"])
+    P = check({**m, "page": ARTIFACTS + "/placeholder"})  # every rule but the page itself
+    gate = "<p class='ok'>All gate rules hold.</p>" if all(p["rule"] == 11 for p in P) else "<ul>" + "".join(f"<li class='bad'>rule {p['rule']}: {esc(p['missing'])}</li>" for p in P if p["rule"] != 11) + "</ul>"
+    open(f"{pg}/index.html", "w").write(f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{esc(a.key)} evidence</title><style>
+:root{{--bg:#fbfaf7;--fg:#1d1d1b;--mut:#6b6b66;--ok:#15803d;--bad:#b91c1c;--line:#e6e3dc}}
+@media (prefers-color-scheme: dark){{:root{{--bg:#151513;--fg:#ecebe6;--mut:#a3a29b;--ok:#4ade80;--bad:#f87171;--line:#2c2b27}}}}
+body{{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif;margin:0;padding:24px 16px;max-width:1100px;margin:auto}}
+h1{{font-size:22px}} table{{border-collapse:collapse;width:100%}} td,th{{border-bottom:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}}
+tr.bad td:first-child{{border-left:3px solid var(--bad)}} tr.ok td:first-child{{border-left:3px solid var(--ok)}} .ok{{color:var(--ok)}} .bad{{color:var(--bad)}}
+video,img{{max-width:100%;margin-top:6px;border:1px solid var(--line)}} code,pre{{font-size:12px;white-space:pre-wrap;word-break:break-all}} .mut{{color:var(--mut)}}
+.wrap{{overflow-x:auto}}</style></head><body>
+<h1>{esc(a.key)}: {esc((m.get('verdict') or 'no verdict yet').replace('_', ' '))}</h1>
+<p class="mut">{esc(m['repo'])} · author {esc(m['author'])} · verifier {esc(m.get('verifier') or '-')} · head {esc((m.get('head') or '')[:7])}</p>
+<h2>Claims</h2><ol>{claims}</ol>
+<h2>Gate</h2>{gate}
+<h2>Runs</h2><div class="wrap"><table><tr><th>run</th><th>kind</th><th>claim</th><th>tier</th><th>sha</th><th>exit</th><th>asserts</th><th>command and evidence</th></tr>{''.join(rows)}</table></div>
+<h2>Not covered</h2><ul>{skips or '<li>Nothing skipped.</li>'}</ul>
+<h2>Decision log</h2>{dec_html}
+<script type="module">import m from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs"; m.initialize({{startOnLoad:true}});</script>
+</body></html>""")
+    slug = f"{a.key.lower()}-evidence"; url = f"{ARTIFACTS}/{a.__dict__['from']}/{slug}/"
+    if a.dry_run: print(f"would publish {pg} as {url}"); return
+    r = subprocess.run(["team-artifact", "new", pg, "--from", a.__dict__["from"], "--title", f"{a.key} evidence", "--slug", slug], capture_output=True, text=True)
+    if r.returncode: die(f"team-artifact failed: {r.stderr.strip() or r.stdout.strip()}", 70)
+    link = re.search(r"https?://\S+?/", r.stdout + " ")
+    with Manifest(a.key, write=True) as mm: mm["page"] = link.group(0).rstrip(")]") if link else url
+    print(mm["page"])
+def c_attach(a):
+    m = load(a.key); d = card_dir(a.key); files = [f"{d}/manifest.json"] + ([f"{d}/verdict.md"] if os.path.exists(f"{d}/verdict.md") else [])
+    links = []
+    for r in m["runs"]:
+        for f in r.get("files", []):
+            p = f"{d}/{f}"
+            if f.endswith(".mp4"): files.append(p)
+            elif f.endswith(".zip"): (files if os.path.getsize(p) <= 20_000_000 else links).append(p)
+    if a.dry_run:
+        for f in files: print("would attach", f)
+        for f in links: print("over 20 MB, linked from the page only:", f)
+        return
+    r = subprocess.run(["team-board", "attach", a.key, *files], capture_output=True, text=True, env={**os.environ, "TEAM_DIR": TD})
+    if r.returncode: die(f"team-board attach failed: {r.stderr.strip()}", 70)
+    with Manifest(a.key, write=True) as mm: mm["attached"] = sorted(set(mm.get("attached", []) + [os.path.relpath(f, d) for f in files]))
+    print(r.stdout.strip())
+def c_rerun(a):
+    m = load(a.key); tr = [r for r in m["runs"] if r["kind"] == "treatment" and r.get("status") == "done" and r["exit"] == 0]
+    if not tr: die(f"{a.key} has no passing treatment run to replay")
+    last = {}
+    for r in tr: last[r["claim"]] = r
+    cwd = os.path.expanduser(a.cwd) if a.cwd else None
+    if not cwd:
+        repo = m["repo"].split("/")[-1]; cwd = f"{TD}/work/{repo}"
+    if not os.path.isdir(cwd): die(f"no checkout at {cwd}: give --cwd <a lane or clone of {m['repo']}>")
+    if not a.dry_run:
+        git(cwd, "fetch", "--quiet", "origin")
+        want = git(cwd, "rev-parse", a.ref) or git(cwd, "rev-parse", f"origin/{a.ref}")
+        if want != git(cwd, "rev-parse", "HEAD"): die(f"{cwd} is not at {a.ref} ({want}); run: git -C {cwd} checkout --detach {want}")
+    worst = 0
+    for cid, r in sorted(last.items()):
+        cmd = [sys.executable, os.path.abspath(__file__), "run", a.key, "--kind", "main-recheck", "--claim", str(cid), "--tier", r["tier"], "--cwd", cwd, "--", *r["argv"]]
+        if a.dry_run: print("would run:", " ".join(cmd[2:])); continue
+        c = subprocess.run(cmd).returncode; worst = worst or c
+    sys.exit(worst)
+def free_gib(p):
+    st = os.statvfs(p if os.path.exists(p) else HOME); return st.f_bavail * st.f_frsize / 2**30
+def c_df(a):
+    g = free_gib(TD); alarm = float(VER.get("diskAlarmGiB", 20))
+    print(json.dumps({"freeGiB": round(g, 1), "alarmGiB": alarm, "ok": g >= alarm}) if a.json else f"{g:.1f} GiB free (alarm below {alarm:g} GiB)")
+    sys.exit(0 if g >= alarm else 3)
+def card_status(key):
+    try:
+        r = subprocess.run(["team-board", "get", key], capture_output=True, text=True, timeout=20, env={**os.environ, "TEAM_DIR": TD})
+        m = re.search(r"^Status: (.+?)  Labels", r.stdout, re.M); return m.group(1) if m else None
+    except Exception: return None
+def c_prune(a):
+    m_ = re.fullmatch(r"(\d+)d", a.older or "")
+    if not m_: die("--older takes days, like 14d")
+    cutoff = time.time() - int(m_.group(1)) * 86400; freed = 0; n = 0
+    for d in sorted(glob.glob(f"{EVD}/*/manifest.json")):
+        key = os.path.basename(os.path.dirname(d))
+        st = card_status(key)
+        if st not in DONE: continue
+        man = json.load(open(d)); keep = set(man.get("attached", []))
+        for p in glob.glob(f"{os.path.dirname(d)}/runs/*/out/**", recursive=True):
+            rel = os.path.relpath(p, os.path.dirname(d))
+            if os.path.isfile(p) and p.endswith((".webm", ".zip", ".trace")) and rel not in keep and os.path.getmtime(p) < cutoff:
+                freed += os.path.getsize(p); n += 1
+                print(("would delete " if a.dry_run else "deleted ") + p)
+                if not a.dry_run: os.remove(p)
+    print(f"{n} file(s), {freed / 2**20:.1f} MiB" + (" would be freed" if a.dry_run else " freed"))
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"): print(__doc__); sys.exit(0 if argv else 1)
+    cmd_tail = []
+    if "--" in argv: i = argv.index("--"); argv, cmd_tail = argv[:i], argv[i + 1:]
+    ap = argparse.ArgumentParser(prog="team-evidence", add_help=True); sp = ap.add_subparsers(dest="c")
+    p = sp.add_parser("init"); p.add_argument("key"); p.add_argument("--repo", required=True); p.add_argument("--author", required=True); p.add_argument("--claims"); p.add_argument("--new-feature", nargs="?", const="new feature", default=None); p.add_argument("--no-behavior", action="store_true")
+    p = sp.add_parser("claims"); p.add_argument("key"); p.add_argument("--sync", action="store_true"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("run"); p.add_argument("key"); p.add_argument("--kind", required=True); p.add_argument("--claim", type=int, required=True); p.add_argument("--tier", required=True); p.add_argument("--ref"); p.add_argument("--cwd"); p.add_argument("--expect-fail", action="store_true")
+    p = sp.add_parser("add"); p.add_argument("key"); p.add_argument("--run", required=True); p.add_argument("files", nargs="+")
+    p = sp.add_parser("skip"); p.add_argument("key"); p.add_argument("--claim", type=int, required=True); p.add_argument("--path"); p.add_argument("--blocked-by"); p.add_argument("--closest")
+    p = sp.add_parser("verdict"); p.add_argument("key"); p.add_argument("verdict"); p.add_argument("--by", required=True); p.add_argument("--head"); p.add_argument("--pr", action="append"); p.add_argument("--note"); p.add_argument("--no-label", action="store_true")
+    p = sp.add_parser("approve"); p.add_argument("key"); p.add_argument("--theorem", required=True)
+    for n in ("check", "show"): p = sp.add_parser(n); p.add_argument("key"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("comment"); p.add_argument("key")
+    p = sp.add_parser("page"); p.add_argument("key"); p.add_argument("--from", required=True); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("attach"); p.add_argument("key"); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("rerun"); p.add_argument("key"); p.add_argument("--ref", required=True); p.add_argument("--cwd"); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("prune"); p.add_argument("--older", required=True); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("df"); p.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    if hasattr(a, "key"): a.key = a.key.upper()
+    a.cmd = cmd_tail
+    {"init": c_init, "claims": c_claims, "run": c_run, "add": c_add, "skip": c_skip, "verdict": c_verdict, "approve": c_approve, "check": c_check,
+     "comment": c_comment, "show": c_show, "page": c_page, "attach": c_attach, "rerun": c_rerun, "prune": c_prune, "df": c_df}[a.c](a)
+
+if __name__ == "__main__": main()

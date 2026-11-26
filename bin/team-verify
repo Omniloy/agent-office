@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""team-verify: the registry of per-repo verification kits (control CLI + verify-<app> skill + Feature Map + formal
+checks), and the cheap probes the floor's routines run before they nudge anyone. It never nudges: that is team-routine.
+
+  team-verify status [--json]                        per repo: kit yes/no, health, last maintain, syncSha vs main, kit card, probe cards
+  team-verify add REPO --kit DIR [--formal DIR] [--checkout DIR] [--dry-run]
+                                                     validate the kit (SKILL.md, control CLI, its test, features/README.md,
+                                                     `sources:` front matter), record the paths, symlink it into <team>/.claude/skills/
+  team-verify doctor REPO [--checkout DIR]           validate + `node --test control-<app>.test.mjs` (+ doctor and probe-selectors when
+                                                     an instance runs for --checkout); records health; exit 0/1
+  team-verify features-for REPO <base>..<head> [--checkout DIR] [--json]   changed files -> feature files (glob match on `sources:`)
+  team-verify formal-for REPO <base>..<head> [--checkout DIR] [--json]     changed files -> formal checks they cover
+  team-verify sync REPO --sha SHA --outcome clean|changed|blocked [--no-board]
+  team-verify probe-used REPO --card KEY [--no-board] counts a probe verdict; opens or reuses "Verification kit for <repo>"
+  team-verify ready-check KEY                        the kit rule for one card (exit 0, or 1 with the reason)
+  team-verify due [--json] [--no-fetch]              PROBE: repos past maintainEvery, or with merges touching mapped sources since syncSha
+  team-verify reports [--json]                       PROBE: untriaged `report` cards + open GitHub issues labeled bug with no card yet (read-only)
+  team-verify fixes-ready [--json]                   PROBE: CONFIRMED cards whose objection window closed with no REJECT and no PR yet
+  team-verify garden-due [--json]                    PROBE: floor repos with PRs opened, updated or merged since the newest garden ledger row
+  team-verify rechecks [--json]                      PROBE: Validation cards whose PR is merged and that have no main-recheck run yet
+
+Probes print {"items": [...]} with --json and exit 0 (an empty list means no work); a nonzero exit is a probe failure.
+Registry: <team>/verify/registry.json. The team is TEAM_DIR, else ~/.omniloy-misc.
+Example: team-verify features-for Omniloy/agent-office main..MSC-4-hold-guard --json"""
+import sys, os, json, re, subprocess, glob, argparse, datetime, fnmatch, fcntl, shutil
+
+HOME = os.path.expanduser("~")
+TD = os.environ.get("TEAM_DIR") or f"{HOME}/.omniloy-misc"
+def team():
+    try: return json.load(open(f"{TD}/team.json"))
+    except Exception: return {}
+T = team(); VER = T.get("verification") or {}
+REG = os.path.join(TD, VER.get("registry", "verify/registry.json"))
+PREFIX = (T.get("localBoard") or {}).get("prefix", "MSC")
+def die(m, c=1): print(m, file=sys.stderr); sys.exit(c)
+def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+class Reg:
+    def __init__(self, write=False): self.write = write
+    def __enter__(self):
+        os.makedirs(os.path.dirname(REG), exist_ok=True)
+        self.lock = open(REG + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try: self.d = json.load(open(REG))
+        except FileNotFoundError: self.d = {"repos": {}}
+        return self.d
+    def __exit__(self, et, *_):
+        if et is None and self.write:
+            tmp = REG + ".tmp"; json.dump(self.d, open(tmp, "w"), indent=1); os.replace(tmp, REG)
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+def reg():
+    with Reg() as d: return d
+def entry(repo, d=None):
+    d = d or reg(); e = d["repos"].get(repo)
+    if not e: die(f"{repo} has no kit in the registry: `team-verify add {repo} --kit <dir>` (or run mx-create-verification-skill)")
+    return e
+def run(cmd, cwd=None, timeout=600, env=None):
+    try: r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env={**os.environ, "TEAM_DIR": TD, **(env or {})}); return r.returncode, r.stdout, r.stderr
+    except FileNotFoundError: return 127, "", f"{cmd[0]} not found"
+    except subprocess.TimeoutExpired: return 124, "", "timeout"
+def board(*a): return run(["team-board", *a], timeout=60)
+def checkout_for(repo, given=None):
+    c = given or (reg()["repos"].get(repo) or {}).get("checkout") or f"{TD}/work/{repo.split('/')[-1]}"
+    return os.path.expanduser(c)
+
+def refresh_clone(path):
+    """A kit registered from <team>/work/<repo> follows origin: fetch, then fast-forward the clone's branch when it has
+    no local changes. Lanes (detached) and other checkouts are left alone."""
+    path = os.path.realpath(os.path.expanduser(path)); work = os.path.realpath(f"{TD}/work")
+    if not path.startswith(work + os.sep) or path.startswith(os.path.join(work, "lanes") + os.sep): return
+    rel = os.path.relpath(path, work).split(os.sep)[0]; clone = os.path.join(work, rel)
+    if not os.path.isdir(f"{clone}/.git"): return
+    run(["git", "fetch", "-q", "origin"], cwd=clone, timeout=120)
+    c, st, _ = run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=clone, timeout=60)
+    if c == 0 and not st.strip(): run(["git", "merge", "--ff-only", "-q", "@{u}"], cwd=clone, timeout=60)
+
+# ---------------------------------------------------------------- kits
+def front(path):
+    s = open(path, encoding="utf-8").read()
+    if not s.startswith("---"): return {}
+    fm = s.split("---", 2)[1]; out = {}
+    for ln in fm.splitlines():
+        m = re.match(r"\s*([A-Za-z_-]+):\s*(.*)$", ln)
+        if not m: continue
+        v = m.group(2).strip()
+        if v.startswith("[") and v.endswith("]"): v = [x.strip().strip("'\"") for x in v[1:-1].split(",") if x.strip()]
+        out[m.group(1)] = v
+    return out
+def features(kit):
+    out = []
+    for f in sorted(glob.glob(f"{kit}/references/features/*.md")):
+        if os.path.basename(f) == "README.md": continue
+        out.append((os.path.basename(f), front(f)))
+    return out
+def validate(kit):
+    errs = []; kit = os.path.abspath(os.path.expanduser(kit))
+    sk = f"{kit}/SKILL.md"
+    if not os.path.isfile(sk): return None, [f"{sk} is missing"]
+    name = front(sk).get("name", "")
+    if not re.fullmatch(r"verify-[a-z0-9-]+", name): errs.append(f"SKILL.md front matter `name` must be verify-<app> (got {name!r})")
+    app = name[len("verify-"):] if name.startswith("verify-") else None
+    if app and not os.path.isfile(f"{kit}/control-{app}.mjs"): errs.append(f"control-{app}.mjs is missing (the CLI is required: references/cli-contract.md)")
+    if app and not os.path.isfile(f"{kit}/control-{app}.test.mjs"): errs.append(f"control-{app}.test.mjs is missing (one test per command)")
+    if not os.path.isfile(f"{kit}/references/features/README.md"): errs.append("references/features/README.md is missing")
+    fs = features(kit)
+    if not fs: errs.append("no feature files in references/features/")
+    for n, fm in fs:
+        if not fm.get("sources"): errs.append(f"{n}: front matter `sources:` is missing (globs, so features-for can map diffs)")
+        body = open(f"{kit}/references/features/{n}", encoding="utf-8").read()
+        for h in ("## Sub-features", "## How to get to it (user POV)", "## Gotchas"):
+            if h not in body: errs.append(f"{n}: section `{h}` is missing (her four H2 sections)")
+        if not re.search(r"^## Driving it with ", body, re.M): errs.append(f"{n}: section `## Driving it with control-<app>` is missing")
+    return app, errs
+def c_add(a):
+    if not a.dry_run: refresh_clone(a.kit)
+    app, errs = validate(a.kit)
+    if a.formal and not os.path.isdir(os.path.expanduser(a.formal)): errs.append(f"--formal {a.formal} is not a folder")
+    if errs:
+        for e in errs: print("KIT " + e, file=sys.stderr)
+        sys.exit(1)
+    kit = os.path.abspath(os.path.expanduser(a.kit)); link = f"{TD}/.claude/skills/verify-{app}"
+    if a.dry_run: print(f"would register {a.repo}: kit {kit}" + (f", formal {a.formal}" if a.formal else "") + f"; symlink {link}"); return
+    with Reg(True) as d:
+        e = d["repos"].setdefault(a.repo, {"probeCards": 0, "probeCardKeys": [], "kitCard": None, "syncSha": None, "lastMaintain": None})
+        e.update({"kit": kit, "app": app, "added": now()})
+        if a.formal: e["formal"] = os.path.abspath(os.path.expanduser(a.formal))
+        if a.checkout: e["checkout"] = os.path.abspath(os.path.expanduser(a.checkout))
+    os.makedirs(os.path.dirname(link), exist_ok=True)
+    if os.path.islink(link): os.remove(link)
+    elif os.path.exists(link): die(f"{link} exists and is not a symlink: move it away first")
+    os.symlink(kit, link)
+    if a.formal:
+        fl = f"{TD}/.claude/skills/verify-{app}-formal"
+        if os.path.islink(fl): os.remove(fl)
+        if not os.path.exists(fl): os.symlink(os.path.abspath(os.path.expanduser(a.formal)), fl)
+    print(f"registered {a.repo} (verify-{app}); Read it at {kit}/SKILL.md")
+def c_doctor(a):
+    d = reg(); e = entry(a.repo, d); refresh_clone(e["kit"]); app, errs = validate(e["kit"]); steps = [("kit files", not errs, "; ".join(errs) or "ok")]
+    if not errs:
+        c, o, s = run(["node", "--test", f"control-{app}.test.mjs"], cwd=e["kit"], timeout=900)
+        steps.append(("node --test control-%s.test.mjs" % app, c == 0, (o + s).strip().splitlines()[-1] if (o + s).strip() else f"exit {c}"))
+        if a.checkout:
+            for sub in ("doctor", "probe-selectors"):
+                c, o, s = run(["node", f"{e['kit']}/control-{app}.mjs", sub, "--checkout", a.checkout, "--json"], timeout=120)
+                steps.append((sub, c == 0, (o or s).strip()[:200]))
+    ok = all(x[1] for x in steps)
+    with Reg(True) as dd: dd["repos"][a.repo].update({"health": "ok" if ok else "failed", "doctorAt": now()})
+    for n, good, det in steps: print(f"{'ok ' if good else 'NO '} {n}: {det}")
+    sys.exit(0 if ok else 1)
+def globre(g):
+    i, out = 0, ""
+    while i < len(g):
+        if g[i:i + 3] == "**/": out += "(?:.*/)?"; i += 3
+        elif g[i:i + 2] == "**": out += ".*"; i += 2
+        elif g[i] == "*": out += "[^/]*"; i += 1
+        elif g[i] == "?": out += "[^/]"; i += 1
+        else: out += re.escape(g[i]); i += 1
+    return re.compile(out + "$")
+def changed(repo, rng, checkout):
+    c = checkout_for(repo, checkout)
+    if not os.path.isdir(c): die(f"no checkout of {repo} at {c}: give --checkout, or clone it with team-lanes")
+    code, o, s = run(["git", "-C", c, "diff", "--name-only", rng])
+    if code: die(f"git diff {rng} failed in {c}: {s.strip()}")
+    return [x for x in o.splitlines() if x]
+def match(files, items):
+    out = {}
+    for name, srcs in items:
+        rs = [globre(g) for g in srcs]
+        hit = [f for f in files if any(r.match(f) for r in rs)]
+        if hit: out[name] = hit
+    return out
+def c_features_for(a):
+    e = entry(a.repo); files = changed(a.repo, a.range, a.checkout)
+    m = match(files, [(n, fm.get("sources") or []) for n, fm in features(e["kit"])])
+    unmapped = [f for f in files if not any(f in v for v in m.values())]
+    if a.json: print(json.dumps({"features": m, "unmapped": unmapped}))
+    else:
+        for n, fs in m.items(): print(f"{n}\t{len(fs)} file(s)")
+        if unmapped: print(f"(not covered by any feature's sources: {len(unmapped)} file(s))")
+def c_formal_for(a):
+    e = entry(a.repo)
+    if not e.get("formal"): out = {}
+    else:
+        files = changed(a.repo, a.range, a.checkout)
+        checks = [(os.path.relpath(f, e["formal"]), front(f).get("sources") or []) for f in glob.glob(f"{e['formal']}/**/*.md", recursive=True) if os.path.basename(f) != "SKILL.md"]
+        out = match(files, checks)
+    print(json.dumps({"checks": out}) if a.json else "\n".join(out) or "no formal check covers these changes")
+def c_sync(a):
+    if a.outcome not in ("clean", "changed", "blocked"): die("--outcome clean|changed|blocked")
+    with Reg(True) as d:
+        e = entry(a.repo, d); e.update({"syncSha": a.sha, "lastMaintain": now(), "lastOutcome": a.outcome}); kc = e.get("kitCard")
+    if a.outcome == "blocked" and kc and not a.no_board:
+        c, o, s = board("move", kc, "Reopened"); print(f"kit card {kc} reopened" if c == 0 else f"could not reopen {kc}: {s.strip()}")
+    print(f"{a.repo}: synced at {a.sha[:12]} ({a.outcome})")
+def kit_card(repo, d):
+    e = d["repos"].setdefault(repo, {"probeCards": 0, "probeCardKeys": [], "kitCard": None, "syncSha": None, "lastMaintain": None})
+    return e
+def c_probe_used(a):
+    with Reg(True) as d:
+        e = kit_card(a.repo, d)
+        if a.card.upper() not in e["probeCardKeys"]: e["probeCardKeys"].append(a.card.upper()); e["probeCards"] = len(e["probeCardKeys"])
+        kc = e.get("kitCard"); n = e["probeCards"]
+    if not kc and not a.no_board:
+        name = a.repo.split("/")[-1]
+        c, o, s = board("search", f'summary ~ "Verification kit for {a.repo}"', "5")
+        found = [ln.split("\t")[0] for ln in o.splitlines() if ln.strip()]
+        if found: kc = found[0]
+        else:
+            c, o, s = board("create", PREFIX, "Task", f"Verification kit for {a.repo}",
+                            f"Build the verification kit for {a.repo} with mx-create-verification-skill: control CLI, verify skill, Feature Map, proof, cold-start test, interrogate, team-verify add, one PR.", f"repo-{name}")
+            if c: die(f"could not create the kit card: {s.strip()}")
+            kc = o.strip().split()[-1]
+            run(["team-card", "take", kc, "--as", "lorena", f"Verification kit for {a.repo}"], timeout=30)
+        with Reg(True) as d: d["repos"][a.repo]["kitCard"] = kc
+    print(json.dumps({"repo": a.repo, "probeCards": n, "kitCard": kc, "threshold": int(VER.get("kitAfterProbeCards", 3))}))
+def card_info(key):
+    c, o, s = board("get", key)
+    if c: die(f"team-board get {key} failed: {s.strip()}")
+    m = re.match(r"(\S+) \[([^\]]+)\] (.*)\nStatus: (.*?)  Labels: (.*)", o)
+    if not m: die(f"could not read {key} from team-board")
+    labels = [x.strip() for x in m.group(5).split(",") if x.strip()]
+    comments = [(t, b.strip()) for t, b in re.findall(r"^--- (\d{4}-\d\d-\d\dT\d\d:\d\d) ---\n(.*?)(?=^--- \d{4}-|\Z)", o, re.M | re.S)]
+    return {"key": m.group(1), "type": m.group(2), "summary": m.group(3), "status": m.group(4), "labels": labels, "comments": comments, "text": o}
+def repo_of(labels, d):
+    names = [l[len("repo-"):] for l in labels if l.startswith("repo-")]
+    for r in d["repos"]:
+        if r.split("/")[-1] in names: return r
+    for p in T.get("projects", []):
+        for r in p.get("repos", []):
+            if r.split("/")[-1] in names: return r
+    return None
+def c_ready_check(a):
+    ci = card_info(a.key); d = reg()
+    if "no-behavior" in ci["labels"]: print(f"{a.key}: no-behavior card, the kit rule does not apply"); return
+    repo = repo_of(ci["labels"], d)
+    if not repo: print(f"{a.key}: no repo-<name> label, the kit rule does not apply"); return
+    e = d["repos"].get(repo) or {}; healthy = bool(e.get("kit")) and e.get("health") == "ok"
+    thr = int(VER.get("kitAfterProbeCards", 3)); feat = ci["type"] in ("Feature", "Implementation")
+    if healthy: print(f"{a.key}: {repo} has a healthy kit"); return
+    if feat: die(f"{a.key}: {repo} needs a healthy kit before a Feature or Implementation card enters Ready for development. Kit card: {e.get('kitCard') or 'none yet (team-verify probe-used opens it)'}; then `team-verify doctor {repo}` must exit 0")
+    if e.get("probeCards", 0) >= thr: die(f"{a.key}: {repo} already has {e['probeCards']} probe-verified cards (threshold {thr}); the kit comes first: {e.get('kitCard') or 'open it with team-verify probe-used'}")
+    print(f"{a.key}: allowed with a probe ({e.get('probeCards', 0)}/{thr} probe cards used on {repo})")
+
+# ---------------------------------------------------------------- probes
+def interval(s):
+    m = re.fullmatch(r"(\d+)([mhd])", s or "24h"); n, u = (int(m.group(1)), m.group(2)) if m else (24, "h")
+    return datetime.timedelta(**{{"m": "minutes", "h": "hours", "d": "days"}[u]: n})
+def out(items, a, text):
+    if a.json: print(json.dumps({"items": items}))
+    else: print("\n".join(text(i) for i in items) or "nothing to do")
+def c_due(a):
+    d = reg(); items = []; every = interval(VER.get("maintainEvery", "24h"))
+    for repo, e in d["repos"].items():
+        if not e.get("kit"): continue
+        last = e.get("lastMaintain")
+        if not last or datetime.datetime.now() - datetime.datetime.fromisoformat(last) > every: items.append({"repo": repo, "reason": f"last maintained {last or 'never'}"}); continue
+        c = checkout_for(repo)
+        if e.get("syncSha") and os.path.isdir(c):
+            if not a.no_fetch: run(["git", "-C", c, "fetch", "--quiet", "origin"], timeout=120)
+            code, o, s = run(["git", "-C", c, "diff", "--name-only", f"{e['syncSha']}..origin/main"])
+            if code == 0:
+                hit = match([x for x in o.splitlines() if x], [(n, fm.get("sources") or []) for n, fm in features(e["kit"])])
+                if hit: items.append({"repo": repo, "reason": "merges touched mapped sources", "features": sorted(hit)})
+    out(items, a, lambda i: f"{i['repo']}: {i['reason']}")
+def c_reports(a):
+    items = []
+    c, o, s = board("search", "labels = report AND labels != triaged AND statusCategory != Done", "50")
+    if c: die(f"team-board search failed: {s.strip()}")
+    for ln in o.splitlines():
+        f = ln.split("\t")
+        if len(f) >= 5: items.append({"kind": "card", "key": f[0], "summary": f[4]})
+    repos = [r for p in T.get("projects", []) for r in p.get("repos", [])]
+    for r in repos:
+        code, j, s = run(["gh", "issue", "list", "--repo", r, "--label", "bug", "--state", "open", "--json", "url,title,number", "--limit", "30"], timeout=60)
+        if code: die(f"gh issue list --repo {r} failed: {s.strip()[:200]}")
+        for i in json.loads(j or "[]"):
+            c2, o2, _ = board("search", f'text ~ "{i["url"]}"', "1")
+            if c2 == 0 and not o2.strip(): items.append({"kind": "github", "repo": r, "url": i["url"], "title": i["title"]})
+    out(items, a, lambda i: f"{i.get('key') or i['url']}: {i.get('summary') or i['title']}")
+def c_fixes_ready(a):
+    win = int(((T.get("reports") or {}).get("budgetsMin") or {}).get("objectionWindow", 45))
+    c, o, s = board("search", "labels = report AND statusCategory != Done", "50")
+    if c: die(f"team-board search failed: {s.strip()}")
+    items = []
+    for ln in o.splitlines():
+        key = ln.split("\t")[0]
+        if not key: continue
+        ci = card_info(key); conf = [t for t, b in ci["comments"] if b.startswith("CONFIRMED:")]
+        if not conf: continue
+        t0 = conf[-1]
+        later = [b for t, b in ci["comments"] if t >= t0]
+        if any(b.startswith("REJECT:") for b in later) or any("/pull/" in b for b in later): continue
+        if datetime.datetime.now() - datetime.datetime.fromisoformat(t0) >= datetime.timedelta(minutes=win): items.append({"key": key, "confirmed": t0})
+    out(items, a, lambda i: f"{i['key']}: confirmed {i['confirmed']}, window closed")
+def c_garden_due(a):
+    led = f"{TD}/garden/ledger.tsv"; since = None
+    if os.path.exists(led):
+        rows = [l.split("\t") for l in open(led).read().splitlines()[1:] if l.strip()]
+        if rows: since = max(r[0] for r in rows)[:10]
+    since = since or (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    items = []
+    for r in [r for p in T.get("projects", []) for r in p.get("repos", [])]:
+        code, j, s = run(["gh", "pr", "list", "--repo", r, "--state", "all", "--search", f"updated:>={since}", "--json", "number,url,state,mergedAt", "--limit", "50"], timeout=60)
+        if code: die(f"gh pr list --repo {r} failed: {s.strip()[:200]}")
+        for pr in json.loads(j or "[]"): items.append({"repo": r, "url": pr["url"], "state": pr["state"]})
+    out(items, a, lambda i: f"{i['url']} {i['state']}")
+def c_rechecks(a):
+    c, o, s = board("search", "status = Validation", "100")
+    if c: die(f"team-board search failed: {s.strip()}")
+    items = []
+    for ln in o.splitlines():
+        key = ln.split("\t")[0]
+        m = None
+        try: m = json.load(open(f"{TD}/{VER.get('evidenceDir', 'evidence')}/{key}/manifest.json"))
+        except Exception: continue
+        if any(r.get("kind") == "main-recheck" for r in m.get("runs", [])): continue
+        for pr in m.get("prs", []):
+            code, j, _ = run(["gh", "pr", "view", pr["url"], "--json", "mergedAt,mergeCommit"], timeout=60)
+            if code == 0 and json.loads(j or "{}").get("mergedAt"):
+                items.append({"key": key, "pr": pr["url"], "merge": (json.loads(j).get("mergeCommit") or {}).get("oid")}); break
+    out(items, a, lambda i: f"{i['key']}: {i['pr']} merged")
+def c_status(a):
+    d = reg(); rows = []
+    for repo, e in sorted(d["repos"].items()):
+        rows.append({"repo": repo, "kit": e.get("kit"), "health": e.get("health", "unknown"), "lastMaintain": e.get("lastMaintain"), "syncSha": e.get("syncSha"),
+                     "lastOutcome": e.get("lastOutcome"), "kitCard": e.get("kitCard"), "probeCards": e.get("probeCards", 0), "formal": e.get("formal")})
+    for p in T.get("projects", []):
+        for r in p.get("repos", []):
+            if r not in d["repos"]: rows.append({"repo": r, "kit": None, "health": "no kit", "probeCards": 0, "kitCard": None})
+    if a.json: print(json.dumps({"repos": rows})); return
+    if not rows: print("no repos yet (team.json projects[0].repos is empty, registry empty)"); return
+    for x in rows: print(f"{x['repo']}\tkit={'yes' if x['kit'] else 'no'}\thealth={x['health']}\tmaintained={x.get('lastMaintain') or '-'}\tsync={(x.get('syncSha') or '-')[:7]}\tkitCard={x.get('kitCard') or '-'}\tprobeCards={x['probeCards']}" + (f"\n  Read {x['kit']}/SKILL.md" if x['kit'] else ""))
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"): print(__doc__); sys.exit(0 if len(sys.argv) > 1 else 1)
+    ap = argparse.ArgumentParser(prog="team-verify"); sp = ap.add_subparsers(dest="c")
+    p = sp.add_parser("status"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("add"); p.add_argument("repo"); p.add_argument("--kit", required=True); p.add_argument("--formal"); p.add_argument("--checkout"); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("doctor"); p.add_argument("repo"); p.add_argument("--checkout")
+    for n in ("features-for", "formal-for"): p = sp.add_parser(n); p.add_argument("repo"); p.add_argument("range"); p.add_argument("--checkout"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("sync"); p.add_argument("repo"); p.add_argument("--sha", required=True); p.add_argument("--outcome", required=True); p.add_argument("--no-board", action="store_true")
+    p = sp.add_parser("probe-used"); p.add_argument("repo"); p.add_argument("--card", required=True); p.add_argument("--no-board", action="store_true")
+    p = sp.add_parser("ready-check"); p.add_argument("key")
+    p = sp.add_parser("due"); p.add_argument("--json", action="store_true"); p.add_argument("--no-fetch", action="store_true")
+    for n in ("reports", "fixes-ready", "garden-due", "rechecks"): p = sp.add_parser(n); p.add_argument("--json", action="store_true")
+    a = ap.parse_args()
+    {"status": c_status, "add": c_add, "doctor": c_doctor, "features-for": c_features_for, "formal-for": c_formal_for, "sync": c_sync,
+     "probe-used": c_probe_used, "ready-check": c_ready_check, "due": c_due, "reports": c_reports, "fixes-ready": c_fixes_ready, "garden-due": c_garden_due, "rechecks": c_rechecks}[a.c](a)
+
+if __name__ == "__main__": main()

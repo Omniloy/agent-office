@@ -9,6 +9,7 @@
     "claude",
     "codex"
   ],
+  "floors": [],
   "assign": {
     "kenji": "codex"
   },

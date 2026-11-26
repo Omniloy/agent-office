@@ -95,9 +95,9 @@ export default class TeamBoard extends View {
         const text = await readTextFile(`${home()}/.omniloy-team/team.json`);
         if (text === null) throw new Error("~/.omniloy-team/team.json not found");
         this.config = JSON.parse(text); this.configError = null;
-        // Other dev floors (none by default) have their own agents: their cards are tagged and filtered with them.
+        // Other floors with their own agents (the optional Miscelaneous floor): their cards are tagged and filtered with them.
         this.otherIds = []; const extra = [];
-        for (const d of []) { try { const x = JSON.parse(await readTextFile(`${home()}/${d}/team.json`)); const own = (x.projects ?? []).map((y) => y.id); this.otherIds.push(...own); extra.push(...x.personas.map((y) => ({ ...y, own }))); } catch {} }
+        for (const d of [".omniloy-misc"]) { try { const x = JSON.parse(await readTextFile(`${home()}/${d}/team.json`)); const own = (x.projects ?? []).map((y) => y.id); this.otherIds.push(...own); extra.push(...x.personas.map((y) => ({ ...y, own }))); } catch {} }
         this.config.personas = [...(this.config.personas ?? []), ...extra];
         if (!this.config.projects?.some((p) => p.id === this.project)) this.project = this.config.projects?.[0]?.id ?? null;
       } catch (e) { this.configError = String(e.message || e); cx.notify(); return; }

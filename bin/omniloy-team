@@ -41,7 +41,7 @@ elif cmd == "start":
             argv.append(p.get("kickoff", KICKOFF))
         res = sh("hc","run","--bg","--keep","--no-parent","--name",n,"--cwd",TEAM,
                  "--label",f"herdr.space={space}","--label",f"herdr.tab={PREFIX}{n}",
-                 "--label",f'team.persona={p["slug"]}',"--label",f'team.runtime={p["runtime"]}',"--",*argv)
+                 "--label",f'team.persona={p["slug"]}',"--label",f'team.runtime={p["runtime"]}',"--","env",f"TEAM_DIR={TEAM}",*argv)
         print(f'{n} ({p["name"]}, {p["runtime"]}):', "started" if res.returncode == 0 else "FAILED " + res.stderr.strip()[:200])
         if res.returncode == 0 and p.get("tabName"):
             import time; time.sleep(2); sh("herdr-app","do","tab.rename",json.dumps({"id": f"{PREFIX}{n}", "name": p["tabName"]}))

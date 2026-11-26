@@ -54,6 +54,7 @@ Ask these in one go (use your question tool if you have one). Skip what step 1 a
 | 6 | Do they want the office on their phone? | Needs Tailscale (free for personal use; a company network needs an invite from its admin). |
 | 7 | Do they want to talk to the office by voice? | Local transcription. On Apple Silicon with 16 GB it downloads about 2 GB. |
 | 8 | Is there another computer (a server, a second Mac) whose terminals they want inside Herdr? | Needs ssh access to it already working. If that computer has its own agent office, the two can also show up to each other as buildings (step 11). |
+| 9 | Do they want the optional **Miscelaneous floor** (port 4322): a verification-first dev team on a local board, using mstack, our version of Lauren Tan's pstack? | Only with Claude Code. If yes: `"floors": ["misc"]` in the config, then the section "Miscelaneous floor (optional)" after step 11. Its people names (ines, gonzalo, lorena, alvaro) cannot be the owner id. |
 
 ### Claude Code, Codex or both
 
@@ -245,6 +246,46 @@ that computer is the one whose Herdr lists the other machine, `node peer-link.mj
 user unit with `ExecStart=<node> %h/.omniloy-office/team-office/peer-link.mjs`, `Restart=always` and
 `~/.local/bin` on its `PATH`. A computer whose floors are not the default two lists them in
 `~/.omniloy-team/floors.json`: `[{ "name": "Dev", "port": 4317, "dir": ".omniloy-team" }]`.
+
+## Miscelaneous floor (optional, only if ASK 9 was yes)
+
+A fourth floor on port 4322 with Inés (product lead), Gonzalo (development), Lorena (verification) and Álvaro
+(infrastructure and gardener). Its cards live on a local board (`team-board`, prefix `MSC`), never in Jira, and it
+works with **mstack**, our version of Lauren Tan's (@poteto) pstack (credit and license: `docs/mstack.md`,
+`THIRD_PARTY_NOTICES.md`). Every claim is proved with evidence through `team-evidence`, and the board refuses to move
+a card to Validation or Done until the evidence is complete. The installer (with `"floors": ["misc"]`) already
+copied the floor's folder `~/.omniloy-misc` (team.json, protocol, routines, memory, the 44 `mx-*` skills in
+`.claude/skills/` and two helpers in `.claude/agents/`), the four people into `~/.claude/agents` (and linked into
+`~/.claude-personal/agents` when that account exists), and the levers into `~/.local/bin` (`team-board`,
+`team-evidence`, `team-verify`, `team-lanes`, `team-routine`, `omniloy-misc`). Then:
+
+1. **Toolchain** (downloads only, no go needed): `bash setup/verify-tools.sh`. It downloads Bombadil 0.8.0 into
+   `~/.local/bin` and `tla2tools.jar` 1.7.4 into `~/.local/share/tla/`, checks the jar's sha256 against the pin, and
+   checks Java, Node, ffmpeg, Bun and Playwright. Verify: `bash setup/verify-tools.sh --check` exits 0.
+2. **Board**: `cd ~/.omniloy-misc && team-board info` shows prefix `MSC`. If the user's Jira already has a project
+   `MSC`, change `localBoard.prefix` to `MSL` (or `MIX`) in `~/.omniloy-misc/team.json` before any card exists.
+3. **Start the floor**: `office-restart 4322`, then `office-restart status`. The floor runs on the team-office app.
+   Note for this repo's copy of the app: the office's own board view lists Jira and local cards only where the app
+   supports `localBoard`; the cards themselves always work from the terminal with `team-board`.
+4. **Phone** (if step 9 was done, and with the user's go): `tailscale serve --bg --https=4322 http://127.0.0.1:4322`.
+   Then restart the other floors one at a time (`office-restart 4317`, ...) so they list Miscelaneous.
+5. **Check skill discovery once** (a paid call, ask first):
+   `cd ~/.omniloy-misc && claude -p "List the skills and agents you can use, names only"` must list the `mx-` skills
+   and `mx-worker`, `mx-comment-sicko`. If it does not, copy `~/.omniloy-misc/.claude/skills/mx-*` into the
+   account's `skills` folder and ask again.
+6. **Routines** (only with the user's go, and best after the first repo has a kit): they nudge people on a schedule
+   with a cheap probe first. Until then only `team-routine tick --dry-run`. To turn them on:
+
+       cp services/launchd/com.omniloy.team-routine.plist ~/Library/LaunchAgents/
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.omniloy.team-routine.plist
+
+7. **Workflow fan-out** is paid: the user writes their own opt-in under the heading "standing opt-in for Workflow
+   use" in the persona files of whoever may use it (Lorena, Álvaro, Gonzalo). Do not write it for them.
+8. **Repos**: the user lists the floor's repos in `projects[0].repos` of `~/.omniloy-misc/team.json` (a low-risk
+   pilot first). Inés then opens `Verification kit for <repo>` as each repo's first card.
+9. **People** (go-ahead required, each is a paid session): `omniloy-misc start`. Verify with `omniloy-misc ls`.
+
+Tests of the floor's tools, safe to run on any machine (temporary folders only): `bash bin/tests/run-all.sh`.
 
 ## Step 12. Hand over
 

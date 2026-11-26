@@ -4,3 +4,4 @@ node_modules/
 *.bak*
 office.config.json
 .token
+__pycache__/

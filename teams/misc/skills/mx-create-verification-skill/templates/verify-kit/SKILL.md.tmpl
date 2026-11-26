@@ -1,0 +1,54 @@
+---
+name: verify-<<app>>
+description: "Drive <<App name>> (<<surface: web UI | Electron | CLI | API>>) the way a user does and capture evidence: launch, doctor, drive a feature from the Feature Map, record video and trace, clean up. Use to verify or reproduce anything a user of <<App name>> sees."
+---
+
+# verify-<<app>>
+
+The control CLI is `control-<<app>>.mjs` in this folder. Every command takes `--checkout <dir>` and `--json`;
+evidence goes to `$EVIDENCE_OUT` (set by the wrapper that records the run) or `--out`. Exit codes: 0 ok, 1 usage, 2 wrong target or
+instance, 3 assertion failed, 4 timeout, 5 MANUAL.
+
+## Launch
+
+    node <<kit>>/control-<<app>>.mjs launch --checkout <lane> --json
+
+<<What it starts (command, port formula, seed data, migrations), how ready is detected (log line + app marker), and
+how long it takes. Launch must reach a usable state from an empty data dir.>>
+
+## Doctor
+
+    node <<kit>>/control-<<app>>.mjs doctor --checkout <lane> --json
+
+Read-only. Checks the instance is ours, the port owner, the origin is local or dev, and the build is fresh (a stale
+bundle prints `STALE BUILD`). Run it first, and again after any surprising drive.
+
+## Drive
+
+<<The real selectors and intent verbs for this app, from the Feature Map. Prefer roles, labels and data-* handles.>>
+
+    node <<kit>>/control-<<app>>.mjs record start --checkout <lane>
+    node <<kit>>/control-<<app>>.mjs click 'role=button[name="<<...>>"]' --checkout <lane> --json
+    node <<kit>>/control-<<app>>.mjs assert text '<<selector>>' '<<expected>>' --checkout <lane> --json
+    node <<kit>>/control-<<app>>.mjs record stop <<journey-name>> --checkout <lane> --json
+
+## Evidence
+
+Run every drive with `$EVIDENCE_OUT` set to the run's evidence folder, so each command's files land in one place. Proof
+standards: the real user path (no internal setters, no test-only endpoints, `eval` only to read state after the
+path); the action and the resulting state; side effects (<<files, rows, network calls this app makes>>); mocks only
+behind a production boundary. A video alone does not judge: pair it with assertions.
+
+## Cleanup
+
+    node <<kit>>/control-<<app>>.mjs cleanup --checkout <lane> --json
+
+Kills only what launch started (never by process name) and removes scratch state. Evidence survives in the evidence
+folder.
+
+## Helpers
+
+- `control-<<app>>.test.mjs`: `node --test` runs one test per command (the kit's own V0 step).
+- `bombadil/spec.ts`: property-based UI checks (Bombadil); `bombadil/VERSION` pins the tool; `bombadil/regressions/` holds
+  shrunk counterexamples with their `--reproduce` commands.
+- Feature Map: `references/features/README.md`.

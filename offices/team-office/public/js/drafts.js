@@ -100,6 +100,7 @@ style.textContent = `
 #drafts .files .fi .nm { padding: 5px 8px 6px; font-size: 11.5px; line-height: 1.3; } #drafts .files .fi .nm b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } #drafts .files .fi .nm span { color: #8fa3a0; }
 #drafts .files .fi:hover { border-color: #2dd4bf; }
 #drafts .files .more { align-self: center; color: #8fa3a0; font-size: 12px; }
+#drafts details.quoted { margin-top: 10px; border-left: 3px solid rgba(255,255,255,.18); padding-left: 10px; } #drafts details.quoted summary { cursor: pointer; color: #8fa3a0; font-size: 12.5px; } #drafts details.quoted .tx { color: #b8c7c4; margin-top: 6px; }
 #dr-files h4 { margin: 0; }
 #dr-files .note, #dr-thread .note { color: #8fa3a0; padding: 8px 0; }
 #dr-inline-thread { border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 0 12px 12px; max-height: 50vh; overflow: auto; flex: none; }
@@ -170,7 +171,7 @@ function filesHtml(msg, files) {
 }
 const LEGAL = /confidencial|confidential|destinatari|intended recipient|privileged|protecci[oó]n de datos|data protection|RGPD|GDPR|LOPD|prohibida|prohibited|aviso legal|legal notice|disclaimer|this (e-?mail|message) (and any|is)|este (mensaje|correo)|aquest missatge|el seu contingut/i;
 function textHtml(t) {
-  const clean = String(t || '').replace(/\[cid:[^\]\n]+\]/g, '').replace(/<(?:https?:|mailto:)[^>\s]+>/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n'); // Outlook's picture slots and link tails
+  const clean = String(t || '').replace(/\[cid:[^\]\n]+\]/g, '').replace(/<(?:https?:|mailto:|tel:|\+)[^>\s]+>/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n'); // Outlook's picture slots and link tails
   const ps = clean.split(/\n\s*\n/), keep = [], legal = [];
   ps.forEach((p, i) => ((i > 0 && p.length > 140 && LEGAL.test(p)) ? legal : keep).push(p));
   return `<div class="tx">${esc(keep.join('\n\n').trim()) || '<i>(no text)</i>'}</div>${legal.length ? `<details class="legal"><summary>Legal notice (${legal.length})</summary><div>${esc(legal.join('\n\n'))}</div></details>` : ''}`;
@@ -185,7 +186,7 @@ function msgsHtml(ms) {
       <div class="mh"><i class="av" style="background:${m.mine ? '#2dd4bf' : hue(mailOf(m.from))}">${esc((name[0] || '?').toUpperCase())}</i>
         <div class="who"><b>${esc(name)}</b><span class="snip">${esc(m.text.replace(/\s+/g, ' ').slice(0, 180))}</span><span class="to">${esc(m.mine ? '' : mailOf(m.from) + ' · ')}to ${esc(m.to)}${m.cc ? ` · cc ${esc(m.cc)}` : ''}</span></div>
         ${fresh.length ? `<span class="clip">📎 ${fresh.length}</span>` : ''}<time>${esc(when(m.date))}</time></div>
-      <div class="mb">${textHtml(m.text)}${fresh.length ? filesHtml(m.id, fresh) : ''}${again ? `<div class="files"><span class="more">${again} ${again === 1 ? 'file' : 'files'} already sent earlier in the thread</span></div>` : ''}</div></div>`;
+      <div class="mb">${textHtml(m.text)}${m.quoted ? `<details class="quoted"><summary>Earlier mail quoted here (not in this thread in your inbox)</summary>${textHtml(m.quoted)}</details>` : ''}${fresh.length ? filesHtml(m.id, fresh) : ''}${again ? `<div class="files"><span class="more">${again} ${again === 1 ? 'file' : 'files'} already sent earlier in the thread</span></div>` : ''}</div></div>`;
   }).join('')}</div>`;
 }
 function threadHtml(x) {

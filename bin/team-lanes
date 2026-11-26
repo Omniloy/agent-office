@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""team-lanes: the only way this floor makes parallel checkouts ("lanes") for helpers and verification runs.
+A lane is a detached git worktree under <team>/work/lanes/, with its own port and browser profile, derived from its
+path (the same formula the kit control CLIs use). Agent checkouts never live in ~/Omniloy (those are the owner's).
+
+  team-lanes create --repo OWNER/NAME --base REF --slug SLUG -n N [--role ROLE] [--source URL|PATH] [--force-n] [--json] [--dry-run]
+        clone into <team>/work/<name> if missing (gh repo clone, or git clone --source), fetch, fast-forward the clone's
+        own branch, then git worktree add --detach <team>/work/lanes/<SLUG>-1..N at origin/REF (REF itself only for a
+        SHA or tag). Prints {ok, lanes: [{path, base, sha, port, profileDir}]}
+        One slug per role, so roles never share lanes: <KEY>-dev, <KEY>-verify, <KEY>-swarm, <KEY>-arena.
+  team-lanes list [--json]
+  team-lanes remove --slug SLUG [--force] [--dry-run]
+        removes only lanes it created with exactly that slug (work/lanes/lanes.json); refuses a lane with uncommitted
+        changes unless --force; evidence is never touched
+
+Limits (team.json "verification"): N defaults to 1 and may go up to maxLanes (4) alone; above that it needs --force-n
+and never passes laneCap (8) lanes alive at once. Refused when free disk is under diskAlarmGiB (20).
+Port = 41000 + crc32(path) mod 2000. Profile = work/lanes/.profiles/<KEY>-<i>.
+Exit codes: 0 ok, 1 usage or refused, 2 git or clone failed. The team is TEAM_DIR, else ~/.omniloy-misc.
+Example: team-lanes create --repo Omniloy/agent-office --base main --slug MSC-4-verify --role verify -n 2 --json"""
+import sys, os, json, re, subprocess, argparse, zlib, fcntl, shutil, datetime
+
+HOME = os.path.expanduser("~")
+TD = os.path.realpath(os.environ.get("TEAM_DIR") or f"{HOME}/.omniloy-misc")
+def team():
+    try: return json.load(open(f"{TD}/team.json"))
+    except Exception: return {}
+VER = team().get("verification") or {}
+LD = os.path.join(TD, VER.get("laneDir", "work/lanes")); STORE = f"{LD}/lanes.json"
+MAXL, CAP, ALARM = int(VER.get("maxLanes", 4)), int(VER.get("laneCap", 8)), float(VER.get("diskAlarmGiB", 20))
+PROTECTED = os.path.realpath(f"{HOME}/Omniloy")
+def die(m, c=1): print(m, file=sys.stderr); sys.exit(c)
+def port(path): return 41000 + (zlib.crc32(os.path.realpath(path).encode()) % 2000)
+def git(*a, cwd=None):
+    r = subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True); return r.returncode, r.stdout.strip(), r.stderr.strip()
+class Store:
+    def __init__(self, write=False): self.write = write
+    def __enter__(self):
+        os.makedirs(LD, exist_ok=True); self.lock = open(STORE + ".lock", "w"); fcntl.flock(self.lock, fcntl.LOCK_EX)
+        try: self.d = json.load(open(STORE))
+        except FileNotFoundError: self.d = {"lanes": []}
+        return self.d
+    def __exit__(self, et, *_):
+        if et is None and self.write: tmp = STORE + ".tmp"; json.dump(self.d, open(tmp, "w"), indent=1); os.replace(tmp, STORE)
+        fcntl.flock(self.lock, fcntl.LOCK_UN)
+def under(p, root): p = os.path.realpath(p); return p == root or p.startswith(root + os.sep)
+def free_gib(p): st = os.statvfs(p); return st.f_bavail * st.f_frsize / 2**30
+
+def c_create(a):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", a.repo): die("--repo must be OWNER/NAME")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", a.slug): die("--slug must be a card key or a short slug (letters, digits, . _ -)")
+    if under(LD, PROTECTED): die(f"refused: {LD} is under {PROTECTED}; agent checkouts live in the team folder's work/, never in ~/Omniloy")
+    if a.n < 1: die("-n must be at least 1")
+    if a.n > MAXL and not a.force_n: die(f"refused: -n {a.n} is above maxLanes {MAXL}; add --force-n if the card really needs it (never above {CAP})")
+    with Store() as d: alive = len(d["lanes"])
+    if alive + a.n > CAP: die(f"refused: {alive} lane(s) alive + {a.n} would pass laneCap {CAP}; remove some first (team-lanes list)")
+    os.makedirs(LD, exist_ok=True)
+    g = free_gib(LD)
+    if g < ALARM: die(f"refused: {g:.1f} GiB free, under the {ALARM:g} GiB alarm; ask the infrastructure person to prune (team-evidence prune) first")
+    name = a.repo.split("/")[-1]; clone = os.path.join(TD, "work", name)
+    paths = [os.path.join(LD, f"{a.slug}-{i}") for i in range(1, a.n + 1)]
+    taken = [p for p in paths if os.path.exists(p)]
+    if taken: die(f"refused: lane(s) already exist: {', '.join(taken)}; use them, or team-lanes remove --slug {a.slug}")
+    if a.dry_run:
+        print(json.dumps({"ok": True, "dryRun": True, "clone": clone, "lanes": [{"path": p, "base": a.base, "port": port(p), "profileDir": f"{LD}/.profiles/{os.path.basename(p)}"} for p in paths]})); return
+    if not os.path.isdir(f"{clone}/.git"):
+        os.makedirs(os.path.dirname(clone), exist_ok=True)
+        cmd = ["git", "clone", "-q", a.source, clone] if a.source else ["gh", "repo", "clone", a.repo, clone, "--", "-q"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode: die(f"clone failed ({' '.join(cmd[:3])}): {r.stderr.strip()[:300]}", 2)
+    git("fetch", "-q", "origin", cwd=clone)
+    # keep the clone's own branch (usually main) at origin, so work/<repo> is not stale; never over local changes
+    c, st, _ = git("status", "--porcelain", "--untracked-files=no", cwd=clone)
+    if c == 0 and not st: git("merge", "--ff-only", "-q", "@{u}", cwd=clone)
+    sha = None
+    # origin/<base> first: a local branch in the clone is never moved and may be the commit of the first clone
+    for ref in (f"origin/{a.base}", a.base):
+        c, o, _ = git("rev-parse", "--verify", "-q", f"{ref}^{{commit}}", cwd=clone)
+        if c == 0: sha = o; break
+    if not sha: die(f"base {a.base} not found in {clone} (fetched origin); push it, or give a SHA", 2)
+    made = []
+    for p in paths:
+        c, o, e = git("worktree", "add", "-q", "--detach", p, sha, cwd=clone)
+        if c:
+            for q in made: git("worktree", "remove", "--force", q, cwd=clone)
+            die(f"git worktree add failed for {p}: {e}", 2)
+        prof = f"{LD}/.profiles/{os.path.basename(p)}"; os.makedirs(prof, exist_ok=True)
+        made.append(p)
+    lanes = [{"path": p, "slug": a.slug, "role": a.role, "repo": a.repo, "clone": clone, "base": a.base, "sha": sha, "port": port(p), "profileDir": f"{LD}/.profiles/{os.path.basename(p)}",
+              "created": datetime.datetime.now().isoformat(timespec="seconds")} for p in made]
+    with Store(True) as d: d["lanes"].extend(lanes)
+    out = {"ok": True, "lanes": [{k: l[k] for k in ("path", "base", "sha", "port", "profileDir")} for l in lanes]}
+    print(json.dumps(out) if a.json else "\n".join(f"{l['path']}  port {l['port']}  {l['sha'][:12]}" for l in lanes))
+def c_list(a):
+    with Store() as d: ls = d["lanes"]
+    if a.json: print(json.dumps({"lanes": ls})); return
+    if not ls: print("no lanes"); return
+    for l in ls: print(f"{l['slug']}\t{l['path']}\tport {l['port']}\t{l['repo']}@{l['sha'][:12]}")
+def c_remove(a):
+    with Store(True) as d:
+        mine = [l for l in d["lanes"] if l["slug"] == a.slug]
+        if not mine: die(f"no lanes made by team-lanes for {a.slug} (team-lanes list); nothing else is ever removed")
+        for l in mine:
+            if not under(l["path"], LD): die(f"refused: {l['path']} is outside {LD}")
+            if not a.force and os.path.isdir(l["path"]):
+                c, st, _ = git("status", "--porcelain", cwd=l["path"])
+                if c == 0 and st: die(f"refused: {l['path']} has uncommitted changes (role {l.get('role') or 'unknown'}); commit or push them, or pass --force to throw them away")
+            if a.dry_run: print("would remove", l["path"]); continue
+            c, o, e = git("worktree", "remove", "--force", l["path"], cwd=l["clone"])
+            if c and os.path.exists(l["path"]): die(f"git worktree remove failed for {l['path']}: {e}", 2)
+            shutil.rmtree(l["profileDir"], ignore_errors=True)
+            print("removed", l["path"])
+        if not a.dry_run:
+            d["lanes"] = [l for l in d["lanes"] if l["slug"] != a.slug]
+            for c in {l["clone"] for l in mine}: git("worktree", "prune", cwd=c)
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"): print(__doc__); sys.exit(0 if len(sys.argv) > 1 else 1)
+    ap = argparse.ArgumentParser(prog="team-lanes"); sp = ap.add_subparsers(dest="c")
+    p = sp.add_parser("create"); p.add_argument("--repo", required=True); p.add_argument("--base", required=True); p.add_argument("--slug", required=True)
+    p.add_argument("-n", type=int, default=1); p.add_argument("--role"); p.add_argument("--source"); p.add_argument("--force-n", action="store_true"); p.add_argument("--json", action="store_true"); p.add_argument("--dry-run", action="store_true")
+    p = sp.add_parser("list"); p.add_argument("--json", action="store_true")
+    p = sp.add_parser("remove"); p.add_argument("--slug", required=True); p.add_argument("--force", action="store_true"); p.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args()
+    {"create": c_create, "list": c_list, "remove": c_remove}[a.c](a)
+
+if __name__ == "__main__": main()

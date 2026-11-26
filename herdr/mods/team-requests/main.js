@@ -41,8 +41,8 @@ export default class TeamRequests extends View {
         if (!this.team || !this.teamAt || Date.now() - this.teamAt > 60000) {
           const dev = JSON.parse(await readTextFile(`${home()}/.omniloy-team/team.json`));
           let biz = null; try { biz = JSON.parse(await readTextFile(`${home()}/.omniloy-biz/team.json`)); } catch {}
-          const mar = { personas: [], leads: [] }; for (const d of []) { try { const x = JSON.parse(await readTextFile(`${home()}/${d}/team.json`)); mar.personas.push(...x.personas); mar.leads.push(x.lead); } catch {} }
-          const temps = []; for (const d of [".omniloy-team", ".omniloy-biz"]) { try { temps.push(...JSON.parse(await readTextFile(`${home()}/${d}/temps.json`))); } catch {} }
+          const mar = { personas: [], leads: [] }; for (const d of [".omniloy-misc"]) { try { const x = JSON.parse(await readTextFile(`${home()}/${d}/team.json`)); mar.personas.push(...x.personas); mar.leads.push(x.lead); } catch {} }
+          const temps = []; for (const d of [".omniloy-team", ".omniloy-biz", ".omniloy-misc"]) { try { temps.push(...JSON.parse(await readTextFile(`${home()}/${d}/temps.json`))); } catch {} }
           mar.personas.push(...temps);
           this.team = { ...dev, personas: [...dev.personas, ...(biz?.personas ?? []), ...(mar?.personas ?? [])], leads: [dev.lead ?? "lucia", biz?.lead, ...mar.leads].filter(Boolean) };
           this.teamAt = Date.now();

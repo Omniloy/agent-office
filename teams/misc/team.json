@@ -1,0 +1,233 @@
+{
+  "name": "Miscelaneous Team",
+  "lead": "ines",
+  "space": "Miscelaneous Team",
+  "tabPrefix": "misc-",
+  "localBoard": {
+    "prefix": "MSC",
+    "name": "Miscelaneous local board",
+    "evidenceGate": true
+  },
+  "projects": [
+    {
+      "id": "misc",
+      "name": "Miscelaneous",
+      "repos": []
+    }
+  ],
+  "verification": {
+    "registry": "verify/registry.json",
+    "evidenceDir": "evidence",
+    "maintainEvery": "24h",
+    "maxLanes": 4,
+    "laneCap": 8,
+    "laneDir": "work/lanes",
+    "retentionDays": 14,
+    "diskAlarmGiB": 20,
+    "kitAfterProbeCards": 3,
+    "tools": {
+      "bombadil": {
+        "version": "0.8.0",
+        "path": "~/.local/bin/bombadil"
+      },
+      "tla2tools": {
+        "version": "1.7.4",
+        "path": "~/.local/share/tla/tla2tools-1.7.4.jar",
+        "sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+      },
+      "java": "/usr/bin/java",
+      "playwright": "~/node_modules/playwright"
+    },
+    "secondVendor": "codex"
+  },
+  "reports": {
+    "intake": [
+      "board:label=report",
+      "github:label=bug"
+    ],
+    "budgetsMin": {
+      "repro": 60,
+      "fix": 90,
+      "objectionWindow": 45
+    }
+  },
+  "personas": [
+    {
+      "slug": "ines-product",
+      "name": "Inés Carrasco",
+      "role": "Product",
+      "label": "agent-ines",
+      "color": "#0d9488",
+      "runtime": "claude",
+      "herdrName": "ines",
+      "tabName": "Inés · Product",
+      "kickoff": "Read PROTOCOL.md, team.json and your memory file. Run your board sweep: team-card mine ines; team-board board; team-routine ls --team misc. Give a short status and change nothing until __OWNER__ gives a task."
+    },
+    {
+      "slug": "gonzalo-dev",
+      "name": "Gonzalo Peña",
+      "role": "Development",
+      "label": "agent-gonzalo",
+      "color": "#1d4ed8",
+      "runtime": "claude",
+      "herdrName": "gonzalo",
+      "tabName": "Gonzalo · Dev",
+      "kickoff": "Read PROTOCOL.md, team.json and your memory file. Run your board sweep: team-card mine gonzalo; team-board board. Give a short status and change nothing until __OWNER__ gives a task."
+    },
+    {
+      "slug": "lorena-qa",
+      "name": "Lorena Quintana",
+      "role": "Verification",
+      "label": "agent-lorena",
+      "color": "#15803d",
+      "runtime": "claude",
+      "herdrName": "lorena",
+      "tabName": "Lorena · QA",
+      "kickoff": "Read PROTOCOL.md, team.json and your memory file. Run your board sweep: team-card mine lorena; team-board board; team-verify status. Give a short status and change nothing until __OWNER__ gives a task."
+    },
+    {
+      "slug": "alvaro-infra",
+      "name": "Álvaro Méndez",
+      "role": "Infrastructure",
+      "label": "agent-alvaro",
+      "color": "#c2410c",
+      "runtime": "claude",
+      "herdrName": "alvaro",
+      "tabName": "Álvaro · Infra",
+      "kickoff": "Read PROTOCOL.md, team.json and your memory file. Run your board sweep: team-card mine alvaro; team-board board; team-routine ls --team misc; team-evidence df. Give a short status and change nothing until __OWNER__ gives a task."
+    }
+  ],
+  "accounts": [
+    {
+      "id": "claude",
+      "name": "Claude",
+      "kind": "claude",
+      "configDir": "~/.claude"
+    },
+    {
+      "id": "claude-personal",
+      "name": "Claude (personal)",
+      "kind": "claude",
+      "configDir": "~/.claude-personal"
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "kind": "codex",
+      "home": "~/.codex"
+    }
+  ],
+  "runtimes": {
+    "claude": {
+      "argv": [
+        "claude",
+        "--model",
+        "claude-opus-5-5",
+        "--chrome",
+        "--agent",
+        "{slug}"
+      ],
+      "notes": "Claude Code with Claude in Chrome (Lorena verifies in the browser). Drop \"--chrome\" if the extension is not installed."
+    },
+    "claude-personal": {
+      "argv": [
+        "claude-personal",
+        "--model",
+        "claude-opus-5-5",
+        "--chrome",
+        "--agent",
+        "{slug}"
+      ],
+      "notes": "Claude Code on a second (personal) account, CLAUDE_CONFIG_DIR=~/.claude-personal. Set a persona's runtime to this to use it."
+    },
+    "codex": {
+      "argv": [
+        "codex",
+        "--no-daemon",
+        "-C",
+        "{teamDir}"
+      ],
+      "promptFromFile": true,
+      "notes": "Not a persona runtime on this floor: Codex is the second-vendor seat through `codex exec -s read-only`."
+    }
+  },
+  "traceStages": [
+    {
+      "id": "planned",
+      "name": "Planned",
+      "statuses": [
+        "Backlog",
+        "Later",
+        "Next"
+      ],
+      "progress": 0,
+      "env": "Not started"
+    },
+    {
+      "id": "discovery",
+      "name": "Discovery",
+      "statuses": [
+        "Discovery"
+      ],
+      "progress": 10,
+      "env": "Not started"
+    },
+    {
+      "id": "ready",
+      "name": "Ready for dev",
+      "statuses": [
+        "Ready For Development",
+        "Ready for Development"
+      ],
+      "progress": 20,
+      "env": "Not started"
+    },
+    {
+      "id": "dev",
+      "name": "In development",
+      "statuses": [
+        "In Progress"
+      ],
+      "progress": 40,
+      "env": "Dev"
+    },
+    {
+      "id": "verification",
+      "name": "In verification",
+      "statuses": [
+        "Verification"
+      ],
+      "progress": 60,
+      "env": "Dev"
+    },
+    {
+      "id": "validation",
+      "name": "In validation",
+      "statuses": [
+        "Validation"
+      ],
+      "progress": 80,
+      "env": "Staging"
+    },
+    {
+      "id": "release",
+      "name": "Ready for release",
+      "statuses": [
+        "Ready For Release",
+        "Ready for release"
+      ],
+      "progress": 90,
+      "env": "Staging"
+    },
+    {
+      "id": "prod",
+      "name": "Released",
+      "statuses": [
+        "Done",
+        "Released"
+      ],
+      "progress": 100,
+      "env": "Production"
+    }
+  ]
+}

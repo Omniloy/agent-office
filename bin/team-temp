@@ -16,7 +16,7 @@ model and tools as <who>, appears in the team's Herdr space and 3D office, and i
 Only the team's lead can hire or release. At most `maxTemps` (team.json, default 2) at once per team."""
 import json, os, sys, subprocess, datetime, time, fcntl
 HOME = os.path.expanduser("~"); HC = f"{HOME}/.local/bin/hc"
-DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz"]
+DIRS = [f"{HOME}/.omniloy-team", f"{HOME}/.omniloy-biz", f"{HOME}/.omniloy-misc"]
 def sh(*a): return subprocess.run(a, capture_output=True, text=True)
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 def teams():
@@ -139,7 +139,7 @@ elif cmd == "hire":
     labels = ["--label", f"herdr.tab={prefix}{name}", "--label", f'team.persona={base["slug"]}', "--label", "team.temp=1"]
     if sp: labels = ["--label", f'herdr.space={sp[0]["id"]}'] + labels
     os.makedirs(f"{d}/work/temps", exist_ok=True)
-    res = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", d, *labels, "--", *argv)
+    res = sh(HC, "run", "--bg", "--keep", "--no-parent", "--name", name, "--cwd", d, *labels, "--", "env", f"TEAM_DIR={d}", *argv)
     if res.returncode != 0: sys.exit("could not start the temp: " + res.stderr.strip()[:300])
     cur.append(x); save(d, cur)
     time.sleep(2); sh("herdr-app", "do", "tab.rename", json.dumps({"id": f"{prefix}{name}", "name": f"{first} {n} · temp"}))

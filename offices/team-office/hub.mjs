@@ -8,7 +8,7 @@
 //               subscription is kept in ~/.omniloy-team/push/subs.json, and a new item is sent once (whichever
 //               office sees it first claims it). The text is encrypted for the phone; Apple/Google only relay it.
 import fs from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -22,9 +22,12 @@ const HOME = os.homedir(), SHARED = path.join(HOME, '.omniloy-team'), PUSH = pat
 const DEFAULT_OFFICES = [
   { name: 'Dev', port: 4317, dir: '.omniloy-team' },
   { name: 'Business', port: 4318, dir: '.omniloy-biz' },
+  { name: 'Miscelaneous', port: 4322, dir: '.omniloy-misc' },
 ];
 // A computer with other floors says so in ~/.omniloy-team/floors.json: [{ "name", "port", "dir" }]
-export const OFFICES = (() => { try { const l = JSON.parse(readFileSync(path.join(SHARED, 'floors.json'), 'utf8')); return Array.isArray(l) && l.length ? l : DEFAULT_OFFICES; } catch { return DEFAULT_OFFICES; } })();
+// An optional floor (Miscelaneous) is listed only where its team folder exists, so no menu leads to a dead port.
+const PRESENT = (() => { const l = DEFAULT_OFFICES.filter((o) => existsSync(path.join(HOME, o.dir, 'team.json'))); return l.length ? l : DEFAULT_OFFICES.slice(0, 1); })();
+export const OFFICES = (() => { try { const l = JSON.parse(readFileSync(path.join(SHARED, 'floors.json'), 'utf8')); return Array.isArray(l) && l.length ? l : PRESENT; } catch { return PRESENT; } })();
 const readJson = async (f, dflt) => { try { return JSON.parse(await fs.readFile(f, 'utf8')); } catch { return dflt; } };
 const writeJson = async (f, v) => { await fs.mkdir(path.dirname(f), { recursive: true, mode: 0o700 }); const t = `${f}.${process.pid}.tmp`; await fs.writeFile(t, JSON.stringify(v), { mode: 0o600 }); await fs.rename(t, f); };
 const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
